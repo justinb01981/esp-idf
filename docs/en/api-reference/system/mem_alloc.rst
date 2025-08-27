@@ -1,6 +1,8 @@
 Heap Memory Allocation
 ======================
 
+{IDF_TARGET_SIMD_PREFERRED_DATA_ALIGNMENT: default="16", esp32s3="16", esp32p4="16"}
+
 :link_to_translation:`zh_CN:[中文]`
 
 Stack and Heap
@@ -105,9 +107,10 @@ DMA-Capable Memory
 
 Use the ``MALLOC_CAP_DMA`` flag to allocate memory which is suitable for use with hardware DMA engines (for example SPI and I2S). This capability flag excludes any external PSRAM.
 
-.. only SOC_SPIRAM_SUPPORTED and not esp32::
+.. only:: SOC_SPIRAM_SUPPORTED and not esp32
 
-    The EDMA hardware feature allows DMA buffers to be placed in external PSRAM, but there may be additional alignment constraints. Consult the {IDF_TARGET_NAME} Technical Reference Manual for details. To allocate a DMA-capable external memory buffer, use the ``MALLOC_CAP_SPIRAM`` capabilities flag together with :cpp:func:`heap_caps_aligned_alloc` with the necessary alignment specified.
+    The EDMA hardware feature allows DMA buffers to be placed in external PSRAM, but there may be additional alignment constraints. Consult the {IDF_TARGET_NAME} Technical Reference Manual for details. To allocate a DMA-capable external memory buffer, use the ``MALLOC_CAP_SPIRAM | MALLOC_CAP_DMA`` capabilities flags; the heap allocator will take care of alignment requirements imposed by the cache and DMA subsystems. If a peripheral has additional alignment requirements, you can use :cpp:func:`heap_caps_aligned_alloc` with the necessary alignment specified.
+
 
 .. _32-bit accessible memory:
 
@@ -132,6 +135,13 @@ Memory allocated with ``MALLOC_CAP_32BIT`` can **only** be accessed via 32-bit r
     .. only:: esp32
 
         On ESP32 only external SPI RAM under 4 MiB in size can be allocated this way. To use the region above the 4 MiB limit, you can use the :doc:`himem API </api-reference/system/himem>`.
+
+.. only:: SOC_SIMD_INSTRUCTION_SUPPORTED
+
+    SIMD-Instruction-Capable Memory
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    ``MALLOC_CAP_SIMD`` flag can be used to allocate memory which is accessible by SIMD (Single Instruction Multiple Data) instructions. The use of this flag also aligns the memory to a SIMD preferred data alignment size ({IDF_TARGET_SIMD_PREFERRED_DATA_ALIGNMENT}-byte) for a better performance.
 
 Thread Safety
 -------------

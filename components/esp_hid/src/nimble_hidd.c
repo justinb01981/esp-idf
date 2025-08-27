@@ -132,7 +132,7 @@ static int create_hid_db(int device_index)
     return rc;
 }
 
-static int ble_hid_create_info_db()
+static int ble_hid_create_info_db(void)
 {
     int rc;
 
@@ -382,8 +382,10 @@ static int nimble_hidd_dev_input_set(void *devp, size_t index, size_t id, uint8_
     assert(p_rpt != NULL);
     om = ble_hs_mbuf_from_flat((void*)data, length);
     assert(om != NULL);
+
     /* NOTE : om is freed by stack */
-    rc = ble_att_svr_write_local(p_rpt->handle, om);
+    rc = ble_gatts_notify_custom(s_dev->conn_id, p_rpt->handle, om);
+
     if (rc != 0) {
         ESP_LOGE(TAG, "Write Input Report Failed: %d", rc);
         return ESP_FAIL;
@@ -658,7 +660,7 @@ esp_err_t esp_ble_hidd_dev_init(esp_hidd_dev_t *dev_p, const esp_hid_device_conf
         .queue_size = 5,
         .task_name = "ble_hidd_events",
         .task_priority = uxTaskPriorityGet(NULL),
-        .task_stack_size = /*2048*/ 4096,
+        .task_stack_size = 4096,
         .task_core_id = tskNO_AFFINITY
     };
     rc = esp_event_loop_create(&event_task_args, &s_dev->event_loop_handle);

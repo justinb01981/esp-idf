@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2015-2022 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2015-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
 */
@@ -13,6 +13,7 @@
 #include "esp_sleep.h"
 #include "esp_flash.h"
 #include "driver/rtc_io.h"
+#include "driver/gpio.h"
 #include "driver/uart.h"
 #include "argtable3/argtable3.h"
 #include "freertos/FreeRTOS.h"
@@ -30,8 +31,12 @@ static void register_free(void);
 static void register_heap(void);
 static void register_version(void);
 static void register_restart(void);
+#if SOC_DEEP_SLEEP_SUPPORTED
 static void register_deep_sleep(void);
+#endif
+#if SOC_LIGHT_SLEEP_SUPPORTED
 static void register_light_sleep(void);
+#endif
 #if WITH_TASKS_INFO
 static void register_tasks(void);
 #endif
@@ -42,8 +47,12 @@ void register_system(void)
     register_heap();
     register_version();
     register_restart();
+#if SOC_DEEP_SLEEP_SUPPORTED
     register_deep_sleep();
+#endif
+#if SOC_LIGHT_SLEEP_SUPPORTED
     register_light_sleep();
+#endif
 #if WITH_TASKS_INFO
     register_tasks();
 #endif
@@ -61,7 +70,7 @@ static int get_version(int argc, char **argv)
     }
     printf("IDF Version:%s\r\n", esp_get_idf_version());
     printf("Chip info:\r\n");
-    printf("\tmodel:%s\r\n", info.model == CHIP_ESP32 ? "ESP32" : "Unknow");
+    printf("\tmodel:%s\r\n", info.model == CHIP_ESP32 ? "ESP32" : "Unknown");
     printf("\tcores:%d\r\n", info.cores);
     printf("\tfeature:%s%s%s%s%" PRIu32 "%s\r\n",
            info.features & CHIP_FEATURE_WIFI_BGN ? "/802.11bgn" : "",
@@ -122,7 +131,7 @@ static void register_free(void)
     ESP_ERROR_CHECK( esp_console_cmd_register(&cmd) );
 }
 
-/* 'heap' command prints minumum heap size */
+/* 'heap' command prints minimum heap size */
 static int heap_size(int argc, char **argv)
 {
     uint32_t heap_size = heap_caps_get_minimum_free_size(MALLOC_CAP_DEFAULT);
@@ -177,6 +186,7 @@ static void register_tasks(void)
 
 #endif // WITH_TASKS_INFO
 
+#if SOC_DEEP_SLEEP_SUPPORTED
 /** 'deep_sleep' command puts the chip into deep sleep mode */
 
 static struct {
@@ -250,7 +260,9 @@ static void register_deep_sleep(void)
     };
     ESP_ERROR_CHECK( esp_console_cmd_register(&cmd) );
 }
+#endif // SOC_DEEP_SLEEP_SUPPORTED
 
+#if SOC_LIGHT_SLEEP_SUPPORTED
 /** 'light_sleep' command puts the chip into light sleep mode */
 
 static struct {
@@ -301,23 +313,22 @@ static int light_sleep(int argc, char **argv)
     fflush(stdout);
     uart_wait_tx_idle_polling(CONFIG_ESP_CONSOLE_UART_NUM);
     esp_light_sleep_start();
-    esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
-    const char *cause_str;
-    switch (cause) {
-    case ESP_SLEEP_WAKEUP_GPIO:
-        cause_str = "GPIO";
-        break;
-    case ESP_SLEEP_WAKEUP_UART:
-        cause_str = "UART";
-        break;
-    case ESP_SLEEP_WAKEUP_TIMER:
-        cause_str = "timer";
-        break;
-    default:
-        cause_str = "unknown";
-        printf("%d\n", cause);
+
+    uint32_t causes = esp_sleep_get_wakeup_causes();
+    if (causes & BIT(ESP_SLEEP_WAKEUP_UNDEFINED)) {
+        ESP_LOGI(TAG, "Woke up from: unknown");
+        printf("%lx\n", causes);
+        return 0;
     }
-    ESP_LOGI(TAG, "Woke up from: %s", cause_str);
+    if (causes & BIT(ESP_SLEEP_WAKEUP_GPIO)) {
+        ESP_LOGI(TAG, "Woke up from: GPIO");
+    }
+    if (causes & BIT(ESP_SLEEP_WAKEUP_UART)) {
+        ESP_LOGI(TAG, "Woke up from: UART");
+    }
+    if (causes & BIT(ESP_SLEEP_WAKEUP_TIMER)) {
+        ESP_LOGI(TAG, "Woke up from: timer");
+    }
     return 0;
 }
 
@@ -345,3 +356,4 @@ static void register_light_sleep(void)
     };
     ESP_ERROR_CHECK( esp_console_cmd_register(&cmd) );
 }
+#endif // SOC_LIGHT_SLEEP_SUPPORTED

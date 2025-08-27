@@ -30,7 +30,11 @@ static void run_all_tests(void)
 #endif /* !CONFIG_SOC_SHA_SUPPORT_PARALLEL_ENG*/
 #endif
 
-#if CONFIG_IDF_ENV_FPGA
+#if CONFIG_SOC_KEY_MANAGER_SUPPORTED
+    RUN_TEST_GROUP(key_manager);
+#endif
+
+#if CONFIG_CRYPTO_TEST_APP_ENABLE_FPGA_TESTS
 
 #if CONFIG_SOC_HMAC_SUPPORTED && CONFIG_CRYPTO_TEST_APP_ENABLE_HMAC_TESTS
     RUN_TEST_GROUP(hmac);
@@ -44,7 +48,11 @@ static void run_all_tests(void)
     RUN_TEST_GROUP(ecdsa)
 #endif
 
-#endif /* CONFIG_IDF_ENV_FPGA */
+#if CONFIG_SOC_FLASH_ENCRYPTION_XTS_AES && CONFIG_CRYPTO_TEST_APP_ENABLE_XTS_AES_TESTS
+    RUN_TEST_GROUP(xts_aes)
+#endif
+
+#endif /* CONFIG_CRYPTO_TEST_APP_ENABLE_FPGA_TESTS */
 }
 
 static void test_task(void *pvParameters)

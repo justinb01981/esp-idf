@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2022-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2022-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -13,10 +13,14 @@
 #include "soc/soc_caps.h"
 #include "freertos/FreeRTOS.h"
 #include "esp_private/esp_modem_clock.h"
+#include "esp_private/esp_sleep_internal.h"
 #include "esp_private/esp_pmu.h"
+#include "esp_private/critical_section.h"
 #include "esp_sleep.h"
 #include "hal/efuse_hal.h"
 #include "hal/clk_tree_ll.h"
+#include "hal/regi2c_ctrl_ll.h"
+#include "esp_private/regi2c_ctrl.h"
 
 // Please define the frequently called modules in the low bit,
 // which will improve the execution efficiency
@@ -107,7 +111,7 @@ static void IRAM_ATTR modem_clock_coex_configure(modem_clock_context_t *ctx, boo
 
 static void IRAM_ATTR modem_clock_modem_adc_common_fe_configure(modem_clock_context_t *ctx, bool enable)
 {
-    modem_clock_hal_enable_modem_adc_common_fe_clock(ctx->hal, enable);
+    modem_clock_hal_enable_modem_common_fe_clock(ctx->hal, enable);
 }
 
 static void IRAM_ATTR modem_clock_modem_private_fe_configure(modem_clock_context_t *ctx, bool enable)
@@ -117,7 +121,11 @@ static void IRAM_ATTR modem_clock_modem_private_fe_configure(modem_clock_context
 
 static void IRAM_ATTR modem_clock_i2c_master_configure(modem_clock_context_t *ctx, bool enable)
 {
-    modem_lpcon_ll_enable_i2c_master_clock(ctx->hal->lpcon_dev, enable);
+    if (enable) {
+        ANALOG_CLOCK_ENABLE();
+    } else {
+        ANALOG_CLOCK_DISABLE();
+    }
 }
 
 static void IRAM_ATTR modem_clock_etm_configure(modem_clock_context_t *ctx, bool enable)
@@ -134,7 +142,7 @@ static void IRAM_ATTR modem_clock_data_dump_configure(modem_clock_context_t *ctx
 modem_clock_context_t * __attribute__((weak)) IRAM_ATTR MODEM_CLOCK_instance(void)
 {
     /* It should be explicitly defined in the internal RAM */
-    static DRAM_ATTR modem_clock_hal_context_t modem_clock_hal = { .syscon_dev = &MODEM_SYSCON, .lpcon_dev = &MODEM_LPCON };
+    static DRAM_ATTR modem_clock_hal_context_t modem_clock_hal = { .syscon_dev = NULL, .lpcon_dev = NULL };
     static DRAM_ATTR modem_clock_context_t modem_clock_context = {
         .hal = &modem_clock_hal, .lock = portMUX_INITIALIZER_UNLOCKED,
         .dev = {
@@ -160,6 +168,13 @@ modem_clock_context_t * __attribute__((weak)) IRAM_ATTR MODEM_CLOCK_instance(voi
         },
         .lpclk_src = { [0 ... PERIPH_MODEM_MODULE_NUM - 1] = MODEM_CLOCK_LPCLK_SRC_INVALID }
     };
+    if (modem_clock_hal.syscon_dev == NULL || modem_clock_hal.lpcon_dev == NULL) {
+        modem_clock_hal.syscon_dev = &MODEM_SYSCON;
+        modem_clock_hal.lpcon_dev = &MODEM_LPCON;
+#if SOC_CLOCK_TREE_MANAGEMENT_SUPPORTED
+        ESP_ERROR_CHECK(esp_clk_tree_enable_src(SOC_MOD_CLK_MODEM_APB, true));
+#endif
+    }
     return &modem_clock_context;
 }
 
@@ -173,10 +188,10 @@ esp_err_t modem_clock_domain_clk_gate_enable(modem_clock_domain_t domain, pmu_hp
         return ESP_ERR_INVALID_ARG;
     }
 
-    portENTER_CRITICAL_SAFE(&MODEM_CLOCK_instance()->lock);
+    esp_os_enter_critical_safe(&MODEM_CLOCK_instance()->lock);
     uint32_t code = modem_clock_hal_get_clock_domain_icg_bitmap(MODEM_CLOCK_instance()->hal, domain);
     modem_clock_hal_set_clock_domain_icg_bitmap(MODEM_CLOCK_instance()->hal, domain, (code & ~BIT(mode)));
-    portEXIT_CRITICAL_SAFE(&MODEM_CLOCK_instance()->lock);
+    esp_os_exit_critical_safe(&MODEM_CLOCK_instance()->lock);
     return ESP_OK;
 }
 
@@ -189,34 +204,30 @@ esp_err_t modem_clock_domain_clk_gate_disable(modem_clock_domain_t domain, pmu_h
         return ESP_ERR_INVALID_ARG;
     }
 
-    portENTER_CRITICAL_SAFE(&MODEM_CLOCK_instance()->lock);
+    esp_os_enter_critical_safe(&MODEM_CLOCK_instance()->lock);
     uint32_t code = modem_clock_hal_get_clock_domain_icg_bitmap(MODEM_CLOCK_instance()->hal, domain);
     modem_clock_hal_set_clock_domain_icg_bitmap(MODEM_CLOCK_instance()->hal, domain, (code | BIT(mode)));
-    portEXIT_CRITICAL_SAFE(&MODEM_CLOCK_instance()->lock);
+    esp_os_exit_critical_safe(&MODEM_CLOCK_instance()->lock);
     return ESP_OK;
 }
 #endif // #if SOC_BLE_USE_WIFI_PWR_CLK_WORKAROUND
 
 static void IRAM_ATTR modem_clock_device_enable(modem_clock_context_t *ctx, uint32_t dev_map)
 {
-    int16_t refs = 0;
-    portENTER_CRITICAL_SAFE(&ctx->lock);
+    esp_os_enter_critical_safe(&ctx->lock);
     for (int i = 0; dev_map; dev_map >>= 1, i++) {
         if (dev_map & BIT(0)) {
-            refs = ctx->dev[i].refs++;
-            if (refs == 0) {
-                (*ctx->dev[i].configure)(ctx, true);
-            }
+            ctx->dev[i].refs++;
+            (*ctx->dev[i].configure)(ctx, true);
         }
     }
-    portEXIT_CRITICAL_SAFE(&ctx->lock);
-    assert(refs >= 0);
+    esp_os_exit_critical_safe(&ctx->lock);
 }
 
 static void IRAM_ATTR modem_clock_device_disable(modem_clock_context_t *ctx, uint32_t dev_map)
 {
     int16_t refs = 0;
-    portENTER_CRITICAL_SAFE(&ctx->lock);
+    esp_os_enter_critical_safe(&ctx->lock);
     for (int i = 0; dev_map; dev_map >>= 1, i++) {
         if (dev_map & BIT(0)) {
             refs = --ctx->dev[i].refs;
@@ -225,14 +236,14 @@ static void IRAM_ATTR modem_clock_device_disable(modem_clock_context_t *ctx, uin
             }
         }
     }
-    portEXIT_CRITICAL_SAFE(&ctx->lock);
+    esp_os_exit_critical_safe(&ctx->lock);
     assert(refs >= 0);
 }
 
 void IRAM_ATTR modem_clock_module_mac_reset(periph_module_t module)
 {
-    modem_clock_context_t *ctx = MODEM_CLOCK_instance();
-    portENTER_CRITICAL_SAFE(&ctx->lock);
+    __attribute__((unused)) modem_clock_context_t *ctx = MODEM_CLOCK_instance();
+    esp_os_enter_critical_safe(&ctx->lock);
     switch (module)
     {
 #if SOC_WIFI_SUPPORTED
@@ -251,12 +262,13 @@ void IRAM_ATTR modem_clock_module_mac_reset(periph_module_t module)
 #if SOC_IEEE802154_SUPPORTED
         case PERIPH_IEEE802154_MODULE:
             modem_syscon_ll_reset_zbmac(ctx->hal->syscon_dev);
+            modem_syscon_ll_reset_zbmac_apb(ctx->hal->syscon_dev);
             break;
 #endif
         default:
             assert(0);
     }
-    portEXIT_CRITICAL_SAFE(&ctx->lock);
+    esp_os_exit_critical_safe(&ctx->lock);
 }
 
 #define WIFI_CLOCK_DEPS         (BIT(MODEM_CLOCK_WIFI_MAC) | BIT(MODEM_CLOCK_WIFI_BB) | BIT(MODEM_CLOCK_COEXIST))
@@ -320,12 +332,12 @@ static const DRAM_ATTR uint32_t initial_gating_mode[MODEM_CLOCK_DOMAIN_MAX] = {
 #if !CONFIG_IDF_TARGET_ESP32H2  //TODO: PM-92
 static IRAM_ATTR void modem_clock_module_icg_map_init_all(void)
 {
-    portENTER_CRITICAL_SAFE(&MODEM_CLOCK_instance()->lock);
+    esp_os_enter_critical_safe(&MODEM_CLOCK_instance()->lock);
     for (int domain = 0; domain < MODEM_CLOCK_DOMAIN_MAX; domain++) {
         uint32_t code = modem_clock_hal_get_clock_domain_icg_bitmap(MODEM_CLOCK_instance()->hal, domain);
         modem_clock_hal_set_clock_domain_icg_bitmap(MODEM_CLOCK_instance()->hal, domain, initial_gating_mode[domain] | code);
     }
-    portEXIT_CRITICAL_SAFE(&MODEM_CLOCK_instance()->lock);
+    esp_os_exit_critical_safe(&MODEM_CLOCK_instance()->lock);
 }
 #endif
 
@@ -346,10 +358,21 @@ void IRAM_ATTR modem_clock_module_disable(periph_module_t module)
     modem_clock_device_disable(MODEM_CLOCK_instance(), deps);
 }
 
+void modem_clock_deselect_all_module_lp_clock_source(void)
+{
+#if SOC_WIFI_SUPPORTED
+    modem_clock_hal_deselect_all_wifi_lpclk_source(MODEM_CLOCK_instance()->hal);
+#endif
+#if SOC_BT_SUPPORTED
+    modem_clock_hal_deselect_all_ble_rtc_timer_lpclk_source(MODEM_CLOCK_instance()->hal);
+#endif
+    modem_clock_hal_deselect_all_coex_lpclk_source(MODEM_CLOCK_instance()->hal);
+}
+
 void modem_clock_select_lp_clock_source(periph_module_t module, modem_clock_lpclk_src_t src, uint32_t divider)
 {
     assert(IS_MODEM_MODULE(module));
-    portENTER_CRITICAL_SAFE(&MODEM_CLOCK_instance()->lock);
+    esp_os_enter_critical_safe(&MODEM_CLOCK_instance()->lock);
     switch (module)
     {
 #if SOC_WIFI_SUPPORTED
@@ -382,18 +405,18 @@ void modem_clock_select_lp_clock_source(periph_module_t module, modem_clock_lpcl
         modem_clock_hal_enable_ble_rtc_timer_clock(MODEM_CLOCK_instance()->hal, true);
 #if CONFIG_IDF_TARGET_ESP32H2
         if (!rc_clk_en) {
-            extern void esp_ble_rtc_ticks_delay(uint32_t ticks);
-            esp_ble_rtc_ticks_delay(2);
+            extern void r_esp_ble_rtc_ticks_delay(uint32_t ticks);
+            r_esp_ble_rtc_ticks_delay(2);
             clk_ll_rc32k_disable();
         }
 #endif // CONFIG_IDF_TARGET_ESP32H2
 #if SOC_BLE_USE_WIFI_PWR_CLK_WORKAROUND
         if (efuse_hal_chip_revision() != 0) {
             if (src == MODEM_CLOCK_LPCLK_SRC_MAIN_XTAL) {
-                pmu_sleep_enable_hp_sleep_sysclk(true);
+                esp_sleep_clock_config(ESP_SLEEP_CLOCK_BT_USE_WIFI_PWR_CLK, ESP_SLEEP_CLOCK_OPTION_UNGATE);
+                modem_clock_hal_enable_wifipwr_clock(MODEM_CLOCK_instance()->hal, true);
+                modem_clock_domain_clk_gate_disable(MODEM_CLOCK_DOMAIN_WIFIPWR, PMU_HP_ICG_MODEM_CODE_SLEEP);
             }
-            modem_clock_hal_enable_wifipwr_clock(MODEM_CLOCK_instance()->hal, true);
-            modem_clock_domain_clk_gate_disable(MODEM_CLOCK_DOMAIN_WIFIPWR, PMU_HP_ICG_MODEM_CODE_SLEEP);
         }
 #endif
         break;
@@ -409,33 +432,43 @@ void modem_clock_select_lp_clock_source(periph_module_t module, modem_clock_lpcl
     default:
         break;
     }
+#if SOC_LIGHT_SLEEP_SUPPORTED
     modem_clock_lpclk_src_t last_src = MODEM_CLOCK_instance()->lpclk_src[module - PERIPH_MODEM_MODULE_MIN];
+#endif
     MODEM_CLOCK_instance()->lpclk_src[module - PERIPH_MODEM_MODULE_MIN] = src;
-    portEXIT_CRITICAL_SAFE(&MODEM_CLOCK_instance()->lock);
+    esp_os_exit_critical_safe(&MODEM_CLOCK_instance()->lock);
 
+#if SOC_LIGHT_SLEEP_SUPPORTED
     /* The power domain of the low-power clock source required by the modem
      * module remains powered on during sleep */
-    esp_sleep_pd_domain_t pd_domain = (esp_sleep_pd_domain_t) ( \
-              (last_src == MODEM_CLOCK_LPCLK_SRC_RC_FAST)  ? ESP_PD_DOMAIN_RC_FAST  \
-            : (last_src == MODEM_CLOCK_LPCLK_SRC_MAIN_XTAL) ? ESP_PD_DOMAIN_XTAL    \
-            : (last_src == MODEM_CLOCK_LPCLK_SRC_RC32K)     ? ESP_PD_DOMAIN_RC32K   \
-            : (last_src == MODEM_CLOCK_LPCLK_SRC_XTAL32K)   ? ESP_PD_DOMAIN_XTAL32K \
-            : ESP_PD_DOMAIN_MAX);
-    esp_sleep_pd_domain_t pu_domain = (esp_sleep_pd_domain_t) ( \
-              (src == MODEM_CLOCK_LPCLK_SRC_RC_FAST)  ? ESP_PD_DOMAIN_RC_FAST  \
-            : (src == MODEM_CLOCK_LPCLK_SRC_MAIN_XTAL) ? ESP_PD_DOMAIN_XTAL    \
-            : (src == MODEM_CLOCK_LPCLK_SRC_RC32K)     ? ESP_PD_DOMAIN_RC32K   \
-            : (src == MODEM_CLOCK_LPCLK_SRC_XTAL32K)   ? ESP_PD_DOMAIN_XTAL32K \
-            : ESP_PD_DOMAIN_MAX);
+    esp_sleep_pd_domain_t pd_domain = (esp_sleep_pd_domain_t) (
+              (last_src == MODEM_CLOCK_LPCLK_SRC_RC_FAST)  ? ESP_PD_DOMAIN_RC_FAST  :
+              (last_src == MODEM_CLOCK_LPCLK_SRC_MAIN_XTAL) ? ESP_PD_DOMAIN_XTAL    :
+#if !CONFIG_ESP_CLK_RC32K_NOT_TO_USE
+              (last_src == MODEM_CLOCK_LPCLK_SRC_RC32K)     ? ESP_PD_DOMAIN_RC32K   :
+#endif
+              (last_src == MODEM_CLOCK_LPCLK_SRC_XTAL32K)   ? ESP_PD_DOMAIN_XTAL32K :
+              ESP_PD_DOMAIN_MAX);
+    esp_sleep_pd_domain_t pu_domain = (esp_sleep_pd_domain_t) (
+              (src == MODEM_CLOCK_LPCLK_SRC_RC_FAST)  ? ESP_PD_DOMAIN_RC_FAST  :
+              (src == MODEM_CLOCK_LPCLK_SRC_MAIN_XTAL) ? ESP_PD_DOMAIN_XTAL    :
+#if !CONFIG_ESP_CLK_RC32K_NOT_TO_USE
+              (src == MODEM_CLOCK_LPCLK_SRC_RC32K)     ? ESP_PD_DOMAIN_RC32K   :
+#endif
+              (src == MODEM_CLOCK_LPCLK_SRC_XTAL32K)   ? ESP_PD_DOMAIN_XTAL32K :
+              ESP_PD_DOMAIN_MAX);
     esp_sleep_pd_config(pd_domain, ESP_PD_OPTION_OFF);
     esp_sleep_pd_config(pu_domain, ESP_PD_OPTION_ON);
+#endif
 }
 
 void modem_clock_deselect_lp_clock_source(periph_module_t module)
 {
     assert(IS_MODEM_MODULE(module));
-    portENTER_CRITICAL_SAFE(&MODEM_CLOCK_instance()->lock);
+    esp_os_enter_critical_safe(&MODEM_CLOCK_instance()->lock);
+#if SOC_LIGHT_SLEEP_SUPPORTED
     modem_clock_lpclk_src_t last_src = MODEM_CLOCK_instance()->lpclk_src[module - PERIPH_MODEM_MODULE_MIN];
+#endif
     MODEM_CLOCK_instance()->lpclk_src[module - PERIPH_MODEM_MODULE_MIN] = MODEM_CLOCK_LPCLK_SRC_INVALID;
     switch (module)
     {
@@ -450,13 +483,13 @@ void modem_clock_deselect_lp_clock_source(periph_module_t module)
     case PERIPH_BT_MODULE:
         modem_clock_hal_deselect_all_ble_rtc_timer_lpclk_source(MODEM_CLOCK_instance()->hal);
         modem_clock_hal_enable_ble_rtc_timer_clock(MODEM_CLOCK_instance()->hal, false);
-#if SOC_BLE_USE_WIFI_PWR_CLK_WORKAROUND
+#if SOC_BLE_USE_WIFI_PWR_CLK_WORKAROUND && SOC_LIGHT_SLEEP_SUPPORTED  // TODO: [ESP32C5] IDF-8643
         if (efuse_hal_chip_revision() != 0) {
             if (last_src == MODEM_CLOCK_LPCLK_SRC_MAIN_XTAL) {
-                pmu_sleep_enable_hp_sleep_sysclk(false);
+                esp_sleep_clock_config(ESP_SLEEP_CLOCK_BT_USE_WIFI_PWR_CLK, ESP_SLEEP_CLOCK_OPTION_GATE);
+                modem_clock_hal_enable_wifipwr_clock(MODEM_CLOCK_instance()->hal, false);
+                modem_clock_domain_clk_gate_enable(MODEM_CLOCK_DOMAIN_WIFIPWR, PMU_HP_ICG_MODEM_CODE_SLEEP);
             }
-            modem_clock_hal_enable_wifipwr_clock(MODEM_CLOCK_instance()->hal, false);
-            modem_clock_domain_clk_gate_enable(MODEM_CLOCK_DOMAIN_WIFIPWR, PMU_HP_ICG_MODEM_CODE_SLEEP);
         }
 #endif
         break;
@@ -468,13 +501,17 @@ void modem_clock_deselect_lp_clock_source(periph_module_t module)
     default:
         break;
     }
-    portEXIT_CRITICAL_SAFE(&MODEM_CLOCK_instance()->lock);
+    esp_os_exit_critical_safe(&MODEM_CLOCK_instance()->lock);
 
-    esp_sleep_pd_domain_t pd_domain = (esp_sleep_pd_domain_t) ( \
-              (last_src == MODEM_CLOCK_LPCLK_SRC_RC_FAST)  ? ESP_PD_DOMAIN_RC_FAST  \
-            : (last_src == MODEM_CLOCK_LPCLK_SRC_MAIN_XTAL) ? ESP_PD_DOMAIN_XTAL    \
-            : (last_src == MODEM_CLOCK_LPCLK_SRC_RC32K)     ? ESP_PD_DOMAIN_RC32K   \
-            : (last_src == MODEM_CLOCK_LPCLK_SRC_XTAL32K)   ? ESP_PD_DOMAIN_XTAL32K \
-            : ESP_PD_DOMAIN_MAX);
+#if SOC_LIGHT_SLEEP_SUPPORTED
+    esp_sleep_pd_domain_t pd_domain = (esp_sleep_pd_domain_t) (
+              (last_src == MODEM_CLOCK_LPCLK_SRC_RC_FAST)  ? ESP_PD_DOMAIN_RC_FAST  :
+              (last_src == MODEM_CLOCK_LPCLK_SRC_MAIN_XTAL) ? ESP_PD_DOMAIN_XTAL    :
+#if !CONFIG_ESP_CLK_RC32K_NOT_TO_USE
+              (last_src == MODEM_CLOCK_LPCLK_SRC_RC32K)     ? ESP_PD_DOMAIN_RC32K   :
+#endif
+              (last_src == MODEM_CLOCK_LPCLK_SRC_XTAL32K)   ? ESP_PD_DOMAIN_XTAL32K :
+              ESP_PD_DOMAIN_MAX);
     esp_sleep_pd_config(pd_domain, ESP_PD_OPTION_OFF);
+#endif
 }

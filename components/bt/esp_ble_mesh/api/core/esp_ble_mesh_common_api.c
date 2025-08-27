@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2017-2021 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2017-2024 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -96,7 +96,7 @@ esp_err_t esp_ble_mesh_deinit(esp_ble_mesh_deinit_param_t *param)
     }
 
     /* Take the Semaphore, wait BLE Mesh de-initialization to finish. */
-    xSemaphoreTake(semaphore, portMAX_DELAY);
+    __ASSERT(xSemaphoreTake(semaphore, 3000 / portTICK_PERIOD_MS) == pdTRUE, "BLE Mesh deinit take semaphore failed");
     /* Don't forget to delete the semaphore at the end. */
     vSemaphoreDelete(semaphore);
 

@@ -1,18 +1,22 @@
 idf_build_get_property(target IDF_TARGET)
+idf_build_get_property(non_os_build NON_OS_BUILD)
+
 if(${target} STREQUAL "linux")
     idf_component_register(SRCS "linux/spi_flash_linux.c"
+                          "linux/cache_utils.c"
+                          "linux/flash_mmap.c"
                            INCLUDE_DIRS include
                            PRIV_INCLUDE_DIRS include/spi_flash)
     return()
 endif()
 
-if(BOOTLOADER_BUILD OR CONFIG_APP_BUILD_TYPE_PURE_RAM_APP)
+if(non_os_build OR CONFIG_APP_BUILD_TYPE_PURE_RAM_APP)
     set(srcs "spi_flash_wrap.c")
     set(priv_requires bootloader_support soc)
 else()
     set(srcs "flash_brownout_hook.c")
 
-    if(CONFIG_SOC_SPI_MEM_SUPPORT_OPI_MODE)
+    if(CONFIG_SOC_SPI_MEM_SUPPORT_FLASH_OPI_MODE)
         list(APPEND srcs "${target}/spi_flash_oct_flash_init.c")
     endif()
 
@@ -48,9 +52,11 @@ else()
         "spi_flash_os_func_noos.c")
 
     list(APPEND srcs ${cache_srcs})
-    set(priv_requires bootloader_support app_update soc esp_mm
-                      esp_driver_gpio
-    )
+    set(priv_requires bootloader_support soc esp_mm)
+
+    if(${target} STREQUAL "esp32s2")
+        list(APPEND priv_requires esp_security)
+    endif()
 endif()
 
 idf_component_register(SRCS "${srcs}"
@@ -68,7 +74,7 @@ if(CMAKE_C_COMPILER_ID MATCHES "GNU")
         " -fno-inline-small-functions -fno-inline-functions-called-once")
 endif()
 
-if(NOT BOOTLOADER_BUILD AND NOT CONFIG_APP_BUILD_TYPE_PURE_RAM_APP)
+if(NOT non_os_build AND NOT CONFIG_APP_BUILD_TYPE_PURE_RAM_APP)
     if(CONFIG_SPIRAM)
         # [refactor-todo]: requires "esp_psram" for few MMU usages in `flash_mmap.c`
         # will be replaced with MMU requirements

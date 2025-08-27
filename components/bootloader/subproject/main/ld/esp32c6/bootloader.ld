@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2021-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2021-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -24,7 +24,7 @@ bootloader_usable_dram_end = 0x4087c610;
 bootloader_stack_overhead = 0x2000; /* For safety margin between bootloader data section and startup stacks */
 bootloader_dram_seg_len = 0x5000;
 bootloader_iram_loader_seg_len = 0x7000;
-bootloader_iram_seg_len = 0x2500;
+bootloader_iram_seg_len = 0x2D00;
 
 /* Start of the lower region is determined by region size and the end of the higher region */
 bootloader_dram_seg_end = bootloader_usable_dram_end - bootloader_stack_overhead;
@@ -71,6 +71,7 @@ SECTIONS
     *libbootloader_support.a:bootloader_random*.*(.literal.bootloader_random_enable .text.bootloader_random_enable)
     *libbootloader_support.a:bootloader_efuse.*(.literal .text .literal.* .text.*)
     *libbootloader_support.a:bootloader_utility.*(.literal .text .literal.* .text.*)
+    *libbootloader_support.a:bootloader_utility_tee.*(.literal .text .literal.* .text.*)
     *libbootloader_support.a:bootloader_sha.*(.literal .text .literal.* .text.*)
     *libbootloader_support.a:bootloader_console_loader.*(.literal .text .literal.* .text.*)
     *libbootloader_support.a:bootloader_panic.*(.literal .text .literal.* .text.*)
@@ -92,6 +93,7 @@ SECTIONS
     *libesp_hw_support.a:rtc_time.*(.literal .text .literal.* .text.*)
     *libesp_hw_support.a:regi2c_ctrl.*(.literal .text .literal.* .text.*)
     *libefuse.a:*.*(.literal .text .literal.* .text.*)
+    *libriscv.a:rv_utils.*(.literal .text .literal.* .text.*)
     *(.fini.literal)
     *(.fini)
     *(.gnu.version)
@@ -270,6 +272,16 @@ SECTIONS
    */
   /DISCARD/ : { *(.rela.*) }
 
+  /**
+   * This section is not included in the binary image; it is only present in the ELF file.
+   * It is used to keep certain symbols in the ELF file.
+   */
+  .noload 0 (INFO) :
+  {
+    _noload_keep_in_elf_start = ABSOLUTE(.);
+    KEEP(*(.noload_keep_in_elf .noload_keep_in_elf.*))
+    _noload_keep_in_elf_end = ABSOLUTE(.);
+  }
 }
 
 

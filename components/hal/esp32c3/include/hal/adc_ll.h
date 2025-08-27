@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2015-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2015-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -15,6 +15,7 @@
 #include "soc/rtc_cntl_struct.h"
 #include "soc/rtc_cntl_reg.h"
 #include "soc/clk_tree_defs.h"
+#include "soc/system_struct.h"
 #include "hal/misc.h"
 #include "hal/assert.h"
 #include "hal/adc_types.h"
@@ -36,6 +37,8 @@ extern "C" {
                                      APB_SARADC_THRES1_LOW_INT_ST_M)
 #define ADC_LL_GET_HIGH_THRES_MASK(monitor_id)    ((monitor_id == 0) ? APB_SARADC_THRES0_HIGH_INT_ST_M : APB_SARADC_THRES1_HIGH_INT_ST_M)
 #define ADC_LL_GET_LOW_THRES_MASK(monitor_id)     ((monitor_id == 0) ? APB_SARADC_THRES0_LOW_INT_ST_M : APB_SARADC_THRES1_LOW_INT_ST_M)
+
+#define ADC_LL_NEED_APB_PERIPH_CLAIM(ADC_UNIT)      (1)
 
 /*---------------------------------------------------------------
                     Oneshot
@@ -560,6 +563,35 @@ static inline uint32_t adc_ll_pwdet_get_cct(void)
 /*---------------------------------------------------------------
                     Common setting
 ---------------------------------------------------------------*/
+
+/**
+ * @brief Enable the ADC clock
+ * @param enable true to enable, false to disable
+ */
+static inline void adc_ll_enable_bus_clock(bool enable)
+{
+    SYSTEM.perip_clk_en0.reg_apb_saradc_clk_en = enable;
+}
+// SYSTEM.perip_clk_en0 is a shared register, so this function must be used in an atomic way
+#define adc_ll_enable_bus_clock(...) do { \
+        (void)__DECLARE_RCC_ATOMIC_ENV; \
+        adc_ll_enable_bus_clock(__VA_ARGS__); \
+    } while(0)
+
+/**
+ * @brief Reset ADC module
+ */
+static inline void adc_ll_reset_register(void)
+{
+    SYSTEM.perip_rst_en0.reg_apb_saradc_rst = 1;
+    SYSTEM.perip_rst_en0.reg_apb_saradc_rst = 0;
+}
+//  SYSTEM.perip_rst_en0 is a shared register, so this function must be used in an atomic way
+#define adc_ll_reset_register(...) do { \
+        (void)__DECLARE_RCC_ATOMIC_ENV; \
+        adc_ll_reset_register(__VA_ARGS__); \
+    } while(0)
+
 /**
  * Set ADC module power management.
  *

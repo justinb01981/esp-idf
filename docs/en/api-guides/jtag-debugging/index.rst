@@ -117,13 +117,17 @@ Setup of OpenOCD
 
 .. highlight:: bash
 
-If you have already set up ESP-IDF with CMake build system according to the :doc:`Getting Started Guide <../../get-started/index>`, then OpenOCD is already installed. After :ref:`setting up the environment <get-started-set-up-env>` in your terminal, you should be able to run OpenOCD. Check this by executing the following command::
+If you have already set up ESP-IDF with CMake build system according to the :doc:`Getting Started Guide <../../get-started/index>`, then OpenOCD is already installed. After :ref:`setting up the environment <get-started-set-up-env>` in your terminal, you should be able to run OpenOCD. Check this by executing the following command:
+
+.. code-block:: none
 
     openocd --version
 
 .. highlight:: none
 
-The output should be as follows (although the version may be more recent than listed here)::
+The output should be as follows (although the version may be more recent than listed here):
+
+.. code-block:: none
 
     Open On-Chip Debugger v0.12.0-esp32-20240318 (2024-03-18-18:25)
     Licensed under GNU GPL v2
@@ -174,13 +178,13 @@ Once target is configured and connected to computer, you are ready to launch Ope
 
 .. highlight:: bash
 
-Open a terminal and set it up for using the ESP-IDF as described in the :ref:`setting up the environment <get-started-set-up-env>` section of the Getting Started Guide. Then run OpenOCD (this command works on Windows, Linux, and macOS):
+Open a terminal and set it up for using the ESP-IDF as described in the :ref:`setting up the environment <get-started-set-up-env>` section of the Getting Started Guide. To run OpenOCD for a specific board, you must pass the board-specific configuration. The default configuration for the built project can be found in the ``debug_arguments_openocd`` field of the ``build/project_description.json`` file. There is an example to run OpenOCD (this command works on Windows, Linux, and macOS):
 
 .. include:: {IDF_TARGET_PATH_NAME}.inc
    :start-after: run-openocd
    :end-before: ---
 
-{IDF_TARGET_FTDI_CONFIG:default="Not Updated!", esp32s3="board/esp32s3-ftdi.cfg", esp32c3="board/esp32c3-ftdi.cfg", esp32c6="board/esp32c6-ftdi.cfg", esp32h2="board/esp32h2-ftdi.cfg"}
+{IDF_TARGET_FTDI_CONFIG:default="Not Updated!", esp32s3="board/esp32s3-ftdi.cfg", esp32c3="board/esp32c3-ftdi.cfg", esp32c6="board/esp32c6-ftdi.cfg", esp32h2="board/esp32h2-ftdi.cfg", esp32p4="board/esp32p4-ftdi.cfg", esp32c5="board/esp32c5-ftdi.cfg", esp32c61="board/esp32c61-ftdi.cfg"}
 
 .. note::
 
@@ -226,6 +230,8 @@ OpenOCD flashing command ``program_esp`` has the following format:
  - ``exit`` - Optional. Finally exit OpenOCD.
  - ``compress`` - Optional. Compress image file before programming.
  - ``encrypt`` - Optional. Encrypt binary before writing to flash. Same functionality with ``idf.py encrypted-flash``
+ - ``no_clock_boost`` - Optional. Disable setting target clock frequency to its maximum possible value before programming. Clock boost is enabled by default.
+ - ``restore_clock`` - Optional. Restore clock frequency to its initial value after programming. Disabled by default.
 
 You are now ready to start application debugging. Follow the steps described in the section below.
 
@@ -237,11 +243,11 @@ Launching Debugger
 
 The toolchain for {IDF_TARGET_NAME} features GNU Debugger, in short GDB. It is available with other toolchain programs under filename: {IDF_TARGET_TOOLCHAIN_PREFIX}-gdb. GDB can be called and operated directly from command line in a terminal. Another option is to call it from within IDE (like Eclipse, Visual Studio Code, etc.) and operate indirectly with help of GUI instead of typing commands in a terminal.
 
-The options of using debugger are discussed under links below.
+The options of using debugger are discussed under links below:
 
 * :ref:`jtag-debugging-using-debugger-eclipse`
 * :ref:`jtag-debugging-using-debugger-command-line`
-* `Configuration for Visual Studio Code Debug <https://github.com/espressif/vscode-esp-idf-extension/blob/master/docs/DEBUGGING.md>`__
+* `Configuration for Visual Studio Code Debug <https://docs.espressif.com/projects/vscode-esp-idf-extension/en/latest/debugproject.html>`__
 
 It is recommended to first check if debugger works from :ref:`jtag-debugging-using-debugger-command-line` and then move to using :ref:`jtag-debugging-using-debugger-eclipse`.
 
@@ -274,7 +280,7 @@ Before proceeding to examples, set up your {IDF_TARGET_NAME} target and load it 
 .. _jtag-debugging-building-openocd:
 
 Building OpenOCD from Sources
----------------------------------
+-----------------------------
 
 Please refer to separate documents listed below, that describe build process.
 
@@ -316,7 +322,7 @@ and Windows:
 .. _jtag-debugging-tips-and-quirks:
 
 Tips and Quirks
-------------------
+---------------
 
 This section provides collection of links to all tips and quirks referred to from various parts of this guide.
 
@@ -327,7 +333,7 @@ This section provides collection of links to all tips and quirks referred to fro
 
 
 Related Documents
----------------------
+-----------------
 
 .. toctree::
     :hidden:

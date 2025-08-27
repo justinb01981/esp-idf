@@ -6,4 +6,9 @@
 .. toctree::
     :maxdepth: 1
 
+    gcc
     system
+    bluetooth-classic
+    storage
+    wifi
+    protocols

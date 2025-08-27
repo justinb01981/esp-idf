@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2015-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2015-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -21,6 +21,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "soc/soc_memory_layout.h"
+#include "esp_private/esp_cache_private.h"
 
 /// Max number of transactions in flight (used in start_command_write_blocks)
 #define SDSPI_TRANSACTION_COUNT 4
@@ -57,6 +58,7 @@ typedef struct {
     uint8_t* block_buf;
     /// semaphore of gpio interrupt
     SemaphoreHandle_t   semphr_int;
+    uint16_t duty_cycle_pos;  ///< Duty cycle of positive clock, in 1/256th increments (128 = 50%/50% duty). Setting this to 0 (=not setting it) is equivalent to setting this to 128.
 } slot_info_t;
 
 // Reserved for old API to be back-compatible
@@ -215,6 +217,7 @@ static esp_err_t configure_spi_dev(slot_info_t *slot, int clock_speed_hz)
         // rather than a single SPI transaction.
         .spics_io_num = GPIO_NUM_NC,
         .queue_size = SDSPI_TRANSACTION_COUNT,
+        .duty_cycle_pos = slot->duty_cycle_pos,
     };
     return spi_bus_add_device(slot->host_id, &devcfg, &slot->spi_handle);
 }
@@ -337,6 +340,7 @@ esp_err_t sdspi_host_init_device(const sdspi_device_config_t* slot_config, sdspi
     *slot = (slot_info_t) {
         .host_id = slot_config->host_id,
         .gpio_cs = slot_config->gpio_cs,
+        .duty_cycle_pos = slot_config->duty_cycle_pos,
     };
 
     // Attach the SD card to the SPI bus
@@ -372,7 +376,7 @@ esp_err_t sdspi_host_init_device(const sdspi_device_config_t* slot_config, sdspi
         .intr_type = GPIO_INTR_DISABLE,
         .mode = GPIO_MODE_INPUT,
         .pin_bit_mask = 0,
-        .pull_up_en = true
+        .pull_up_en = GPIO_PULLUP_ENABLE
     };
     if (slot_config->gpio_cd != SDSPI_SLOT_NO_CD) {
         io_conf.pin_bit_mask |= (1ULL << slot_config->gpio_cd);
@@ -386,8 +390,8 @@ esp_err_t sdspi_host_init_device(const sdspi_device_config_t* slot_config, sdspi
         slot->gpio_wp = slot_config->gpio_wp;
         slot->gpio_wp_polarity = slot_config->gpio_wp_polarity;
         if (slot->gpio_wp_polarity) {
-            io_conf.pull_down_en = true;
-            io_conf.pull_up_en = false;
+            io_conf.pull_down_en = GPIO_PULLDOWN_ENABLE;
+            io_conf.pull_up_en = GPIO_PULLUP_DISABLE;
         }
     } else {
         slot->gpio_wp = GPIO_UNUSED;
@@ -406,7 +410,7 @@ esp_err_t sdspi_host_init_device(const sdspi_device_config_t* slot_config, sdspi
         io_conf = (gpio_config_t) {
             .intr_type = GPIO_INTR_LOW_LEVEL,
             .mode = GPIO_MODE_INPUT,
-            .pull_up_en = true,
+            .pull_up_en = GPIO_PULLUP_ENABLE,
             .pin_bit_mask = (1ULL << slot_config->gpio_int),
         };
         ret = gpio_config(&io_conf);
@@ -999,10 +1003,17 @@ esp_err_t sdspi_host_io_int_wait(sdspi_dev_handle_t handle, TickType_t timeout_t
     return ESP_OK;
 }
 
-esp_err_t sdspi_host_get_dma_info(int slot, esp_dma_mem_info_t *dma_mem_info)
+bool sdspi_host_check_buffer_alignment(int slot, const void *buf, size_t size)
 {
+    //for future-proof
     (void)slot;
-    dma_mem_info->extra_heap_caps = MALLOC_CAP_DMA;
-    dma_mem_info->dma_alignment_bytes = 4;
-    return ESP_OK;
+
+    if (!buf || !size) {
+        return ESP_FAIL;
+    }
+
+    //spi master driver will deal with the buffer alignment
+    bool is_aligned = ((intptr_t)buf % 4 == 0) && (size % 4 == 0);
+
+    return is_aligned;
 }

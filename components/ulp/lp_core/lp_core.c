@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2023-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2023-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -9,6 +9,7 @@
 #include "soc/soc_caps.h"
 #include "esp_log.h"
 #include "esp_assert.h"
+#include "esp_cpu.h"
 #include "soc/pmu_reg.h"
 #include "hal/misc.h"
 #include "esp_private/periph_ctrl.h"
@@ -34,7 +35,7 @@ extern uint32_t _rtc_ulp_memory_start;
 
 const static char* TAG = "ulp-lp-core";
 
-#define WAKEUP_SOURCE_MAX_NUMBER 5
+#define WAKEUP_SOURCE_MAX_NUMBER 6
 
 #define RESET_HANDLER_ADDR (intptr_t)(&_rtc_ulp_memory_start + 0x80 / 4) // Placed after the 0x80 byte long vector table
 
@@ -45,6 +46,9 @@ static uint32_t wakeup_src_sw_to_hw_flag_lookup[WAKEUP_SOURCE_MAX_NUMBER] = {
     LP_CORE_LL_WAKEUP_SOURCE_LP_IO,
     LP_CORE_LL_WAKEUP_SOURCE_ETM,
     LP_CORE_LL_WAKEUP_SOURCE_LP_TIMER,
+#if SOC_LP_VAD_SUPPORTED
+    LP_CORE_LL_WAKEUP_SOURCE_LP_VAD,
+#endif
 };
 
 /* Convert the wake-up sources defined in ulp_lp_core.h to the actual HW wake-up source values */
@@ -87,20 +91,29 @@ esp_err_t ulp_lp_core_run(ulp_lp_core_cfg_t* cfg)
 #endif //ESP_ROM_HAS_LP_ROM
 
     LP_CORE_RCC_ATOMIC() {
+#if CONFIG_ULP_NORESET_UNDER_DEBUG
+        /* lp_core module reset causes loss of configured HW breakpoints and dcsr.ebreak* */
+        if (!esp_cpu_dbgr_is_attached()) {
+            lp_core_ll_reset_register();
+        }
+#else
         lp_core_ll_reset_register();
+#endif
         lp_core_ll_enable_bus_clock(true);
     }
 
-#if CONFIG_IDF_TARGET_ESP32C6
+#if SOC_RTC_MEM_SUPPORT_SPEED_MODE_SWITCH
     /* Disable fast LP mem access to allow LP core to access LP memory during sleep */
     lp_core_ll_fast_lp_mem_enable(false);
-#endif //CONFIG_IDF_TARGET_ESP32C6
+#endif
 
     /* Enable stall at sleep request*/
     lp_core_ll_stall_at_sleep_request(true);
 
     /* Enable reset CPU when going to sleep */
-    lp_core_ll_rst_at_sleep_enable(true);
+    /* Avoid resetting chip in sleep mode when debugger is attached,
+       otherwise configured HW breakpoints and dcsr.ebreak* bits will be missed */
+    lp_core_ll_rst_at_sleep_enable(!(CONFIG_ULP_NORESET_UNDER_DEBUG && esp_cpu_dbgr_is_attached()));
 
     /* Set wake-up sources */
     lp_core_ll_set_wakeup_source(lp_core_get_wakeup_source_hw_flags(cfg->wakeup_source));
@@ -112,6 +125,12 @@ esp_err_t ulp_lp_core_run(ulp_lp_core_cfg_t* cfg)
         lp_core_ll_hp_wake_lp();
     }
 
+#if SOC_ULP_LP_UART_SUPPORTED
+    if (cfg->wakeup_source & ULP_LP_CORE_WAKEUP_SOURCE_LP_UART) {
+        lp_core_ll_enable_lp_uart_wakeup(true);
+    }
+#endif
+
 #if SOC_LP_TIMER_SUPPORTED
     ulp_lp_core_memory_shared_cfg_t* shared_mem = ulp_lp_core_memory_shared_cfg_get();
 
@@ -120,16 +139,12 @@ esp_err_t ulp_lp_core_run(ulp_lp_core_cfg_t* cfg)
             ESP_LOGI(TAG, "LP timer specified as wakeup source, but no sleep duration set. ULP will only wake-up once unless it calls ulp_lp_core_lp_timer_set_wakeup_time()");
         }
         shared_mem->sleep_duration_us = cfg->lp_timer_sleep_duration_us;
+        shared_mem->sleep_duration_ticks = ulp_lp_core_lp_timer_calculate_sleep_ticks(cfg->lp_timer_sleep_duration_us);
 
         /* Set first wakeup alarm */
         ulp_lp_core_lp_timer_set_wakeup_time(cfg->lp_timer_sleep_duration_us);
     }
 #endif
-
-    if (cfg->wakeup_source & (ULP_LP_CORE_WAKEUP_SOURCE_LP_UART | ULP_LP_CORE_WAKEUP_SOURCE_LP_IO | ULP_LP_CORE_WAKEUP_SOURCE_ETM)) {
-        ESP_LOGE(TAG, "Wake-up source not yet supported");
-        return ESP_ERR_INVALID_ARG;
-    }
 
     return ESP_OK;
 }
@@ -160,6 +175,15 @@ esp_err_t ulp_lp_core_load_binary(const uint8_t* program_binary, size_t program_
 
 void ulp_lp_core_stop(void)
 {
+    if (esp_cpu_dbgr_is_attached()) {
+        /* upon SW reset debugger puts LP core into the infinite loop at reset vector,
+           so configure it to stall when going to sleep */
+        lp_core_ll_stall_at_sleep_request(true);
+        /* Avoid resetting chip in sleep mode when debugger is attached,
+        otherwise configured HW breakpoints and dcsr.ebreak* bits will be missed */
+        lp_core_ll_rst_at_sleep_enable(!CONFIG_ULP_NORESET_UNDER_DEBUG);
+        lp_core_ll_debug_module_enable(true);
+    }
     /* Disable wake-up source and put lp core to sleep */
     lp_core_ll_set_wakeup_source(0);
     lp_core_ll_request_sleep();

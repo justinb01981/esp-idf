@@ -50,6 +50,7 @@ MCPWM 外设是一个多功能 PWM 生成器，集成多个子模块，在电力
     - :ref:`mcpwm-capture` - 介绍如何使用 MCPWM 捕获模块测量信号脉宽。
     :SOC_MCPWM_SUPPORT_ETM: - :ref:`mcpwm-etm-event-and-task` - MCPWM 提供了哪些事件和任务可以连接到 ETM 通道上。
     - :ref:`mcpwm-power-management` - 介绍不同的时钟源对功耗的影响。
+    - :ref:`mcpwm-resolution-config` - 介绍 MCPWM 子模块的分辨率配置规则。
     - :ref:`mcpwm-iram-safe` - 介绍如何协调 RMT 中断与禁用缓存。
     - :ref:`mcpwm-thread-safety` - 列出了由驱动程序认证为线程安全的 API。
     - :ref:`mcpwm-kconfig-options` - 列出了针对驱动的数个 Kconfig 支持选项。
@@ -78,6 +79,10 @@ MCPWM 定时器
 分配成功后，:cpp:func:`mcpwm_new_timer` 将返回一个指向已分配定时器的指针。否则，函数将返回错误代码。具体来说，当 MCPWM 组中没有空闲定时器时，将返回 :c:macro:`ESP_ERR_NOT_FOUND` 错误。[1]_
 
 反之，调用 :cpp:func:`mcpwm_del_timer` 函数将释放已分配的定时器。
+
+.. note::
+
+    同时分配多个 MCPWM 定时器时，MCPWM 组的分频系数将以第一个定时器的分辨率来计算，驱动会从低到高寻找合适的分频系数。若分配多个定时器时出现分频系数冲突，请调整分配定时器的顺序，按照目标分辨率的大小按序申请定时器（从大到小或者从小到大）。更多相关内容请参阅 :ref:`mcpwm-resolution-config`。
 
 MCPWM 操作器
 ~~~~~~~~~~~~~~~
@@ -111,7 +116,7 @@ MCPWM 比较器
 
 反之，调用 :cpp:func:`mcpwm_del_comparator` 函数将释放已分配的比较器。
 
-.. only:: SOC_MCPWM_SUPPORT_EVENT_COMPARATOR
+.. only:: SOC_MCPWM_SUPPORT_EVENT_COMPARATOR and SOC_MCPWM_SUPPORT_ETM
 
     MCPWM 中还有另外一种比较器 —— “事件比较器”，它不能直接控制 PWM 的输出，只能用来产生 EMT 子系统中使用到的事件。事件比较器能够设置的阈值也是可配的。调用 :cpp:func:`mcpwm_new_event_comparator` 函数可以申请一个事件比较器，该函数返回的句柄类型和 :cpp:func:`mcpwm_new_comparator` 函数一样，但是需要的配置结构体是不同的。事件比较器的配置位于 :cpp:type:`mcpwm_event_comparator_config_t`。更多相关内容请参阅 :ref:`mcpwm-etm-event-and-task`。
 
@@ -122,8 +127,6 @@ MCPWM 生成器
 
 - :cpp:member:`mcpwm_generator_config_t::gen_gpio_num` 设置生成器使用的 GPIO 编号。
 - :cpp:member:`mcpwm_generator_config_t::invert_pwm` 设置是否反相 PWM 信号。
-- :cpp:member:`mcpwm_generator_config_t::io_loop_back` 设置是否启用回环模式。该模式仅用于调试，使用 GPIO 交换矩阵外设同时启用 GPIO 输入和输出。
-- :cpp:member:`mcpwm_generator_config_t::io_od_mode` 设置是否启用漏极开路输出。
 - :cpp:member:`mcpwm_generator_config_t::pull_up` 和 :cpp:member:`mcpwm_generator_config_t::pull_down` 用来设置是否启用内部上下拉电阻。
 
 分配成功后，:cpp:func:`mcpwm_new_generator` 将返回一个指向已分配生成器的指针。否则，函数将返回错误代码。具体来说，当 MCPWM 操作器中没有空闲生成器时，将返回 :c:macro:`ESP_ERR_NOT_FOUND` 错误。[1]_
@@ -142,7 +145,6 @@ MCPWM 故障分为两种类型：来自 GPIO 的故障信号和软件故障。
 - :cpp:member:`mcpwm_gpio_fault_config_t::gpio_num` 设置故障所使用的 GPIO 编号。
 - :cpp:member:`mcpwm_gpio_fault_config_t::active_level` 设置故障信号的有效电平。
 - :cpp:member:`mcpwm_gpio_fault_config_t::pull_up` 和 :cpp:member:`mcpwm_gpio_fault_config_t::pull_down` 设置是否在内部拉高和/或拉低 GPIO。
-- :cpp:member:`mcpwm_gpio_fault_config_t::io_loop_back` 设置是否启用回环模式。该模式仅用于调试，使用 GPIO 交换矩阵外设同时启用 GPIO 输入和输出。
 
 分配成功后，:cpp:func:`mcpwm_new_gpio_fault` 将返回一个指向已分配故障的指针。否则，函数将返回错误代码。具体来说，当指定 MCPWM 组中没有空闲 GPIO 故障时，将返回 :c:macro:`ESP_ERR_NOT_FOUND` 错误。[1]_
 
@@ -163,7 +165,6 @@ MCPWM 同步源
 - :cpp:member:`mcpwm_gpio_sync_src_config_t::gpio_num` 设置同步源使用的 GPIO 编号。
 - :cpp:member:`mcpwm_gpio_sync_src_config_t::active_neg` 设置同步信号在下降沿是否有效。
 - :cpp:member:`mcpwm_gpio_sync_src_config_t::pull_up` 和 :cpp:member:`mcpwm_gpio_sync_src_config_t::pull_down` 设置是否在内部拉高和/或拉低 GPIO。
-- :cpp:member:`mcpwm_gpio_sync_src_config_t::io_loop_back` 设置是否启用回环模式。该模式仅用于调试，使用 GPIO 交换矩阵外设同时启用 GPIO 输入和输出。
 
 分配成功后，:cpp:func:`mcpwm_new_gpio_sync_src` 将返回一个指向已分配同步源的指针。否则，函数将返回错误代码。具体来说，当 MCPWM 组中没有空闲 GPIO 时钟源时，将返回 :c:macro:`ESP_ERR_NOT_FOUND` 错误。[1]_
 
@@ -197,6 +198,12 @@ MCPWM 组有一个专用定时器，用于捕获特定事件发生时的时间�
 
         在 {IDF_TARGET_NAME} 中，:cpp:member:`mcpwm_capture_timer_config_t::resolution_hz` 参数无效，捕获定时器的分辨率始终等于 :cpp:enumerator:`MCPWM_CAPTURE_CLK_SRC_APB`。
 
+.. only:: SOC_MCPWM_CAPTURE_CLK_FROM_GROUP
+
+    .. note::
+
+        定时器和捕获定时器共享 MCPWM 组时钟源。MCPWM 组的分频系数将以第一个分配的(捕获)定时器的分辨率来计算，驱动会从低到高寻找合适的分频系数。若分配多个(捕获)定时器时出现分频系数冲突，请调整分配定时器的顺序，按照目标分辨率的大小按序申请(捕获)定时器（从大到小或者从小到大）。更多相关内容请参阅 :ref:`mcpwm-resolution-config`。
+
 分配成功后，:cpp:func:`mcpwm_new_capture_timer` 将返回一个指向已分配捕获定时器的指针。否则，函数将返回错误代码。具体来说，当 MCPWM 组中没有空闲捕获定时器时，将返回 :c:macro:`ESP_ERR_NOT_FOUND` 错误。[1]_
 
 接下来，可以调用 :cpp:func:`mcpwm_new_capture_channel` 函数，以一个捕获定时器句柄和配置结构体 :cpp:type:`mcpwm_capture_channel_config_t` 为参数，分配一个捕获通道。结构体定义为：
@@ -204,11 +211,9 @@ MCPWM 组有一个专用定时器，用于捕获特定事件发生时的时间�
 - :cpp:member:`mcpwm_capture_channel_config_t::intr_priority` 设置中断的优先级。如果设置为 ``0``，则会分配一个默认优先级的中断，否则会使用指定的优先级。
 - :cpp:member:`mcpwm_capture_channel_config_t::gpio_num` 设置捕获通道使用的 GPIO 编号。
 - :cpp:member:`mcpwm_capture_channel_config_t::prescale` 设置输入信号的预分频器。
-- :cpp:member:`mcpwm_capture_channel_config_t::extra_flags::pos_edge` 和 :cpp:member:`mcpwm_capture_channel_config_t::extra_flags::neg_edge` 设置是否在输入信号的上升沿和/或下降沿捕获时间戳。
-- :cpp:member:`mcpwm_capture_channel_config_t::extra_flags::pull_up` 和 :cpp:member:`mcpwm_capture_channel_config_t::extra_flags::pull_down` 设置是否在内部拉高和/或拉低 GPIO。
-- :cpp:member:`mcpwm_capture_channel_config_t::extra_flags::invert_cap_signal` 设置是否取反捕获信号。
-- :cpp:member:`mcpwm_capture_channel_config_t::extra_flags::io_loop_back` 设置是否启用回环模式。该模式仅用于调试，使用 GPIO 交换矩阵外设同时启用 GPIO 输入和输出。
-- :cpp:member:`mcpwm_capture_channel_config_t::extra_flags::keep_io_conf_at_exit` 设置是否在删除通道时保留 GPIO 的相关配置。
+- :cpp:member:`mcpwm_capture_channel_config_t::extra_capture_channel_flags::pos_edge` 和 :cpp:member:`mcpwm_capture_channel_config_t::extra_capture_channel_flags::neg_edge` 设置是否在输入信号的上升沿和/或下降沿捕获时间戳。
+- :cpp:member:`mcpwm_capture_channel_config_t::extra_capture_channel_flags::pull_up` 和 :cpp:member:`mcpwm_capture_channel_config_t::extra_capture_channel_flags::pull_down` 设置是否在内部拉高和/或拉低 GPIO。
+- :cpp:member:`mcpwm_capture_channel_config_t::extra_capture_channel_flags::invert_cap_signal` 设置是否取反捕获信号。
 
 分配成功后，:cpp:func:`mcpwm_new_capture_channel` 将返回一个指向已分配捕获通道的指针。否则，函数将返回错误代码。具体来说，当捕获定时器中没有空闲捕获通道时，将返回 :c:macro:`ESP_ERR_NOT_FOUND` 错误。
 
@@ -529,7 +534,7 @@ MCPWM 比较器可以在定时器计数器等于比较值时发送通知。若�
         // NOTE: 下面的操作是无效的，不能将同一种 delay 应用于不同的 generator 上
         mcpwm_generator_set_dead_time(mcpwm_gen_b, mcpwm_gen_b, &dt_config);
 
-    然而，你可以为生成器 A 设置 ``posedge delay``，为生成器 B 设置 ``negedge delay``。另外，也可以为生成器 A 同时设置 ``posedge delay`` 和 ``negedge delay``，而让生成器 B 绕过死区模块。
+    然而，你可以为生成器 A 设置 ``posedge delay``，为生成器 B 设置 ``negedge delay``。另外，也可以为生成器 B 同时设置 ``posedge delay`` 和 ``negedge delay``，而让生成器 A 绕过死区模块。注意，如果对生成器 A 同时设置 ``negedge delay`` 和 ``posedge delay``，生成器 B 将无法正常工作。其中，生成器 A 为通过操作器句柄申请的第一个生成器，生成器 B 为通过操作器句柄申请的第二个生成器。
 
 .. note::
 
@@ -764,8 +769,8 @@ MCPWM 操作器具有载波子模块，可以根据需要（例如隔离式数�
 调用 :cpp:func:`mcpwm_operator_apply_carrier`，并提供配置结构体 :cpp:type:`mcpwm_carrier_config_t`，配置载波子模块：
 
 - :cpp:member:`mcpwm_carrier_config_t::clk_src` 设置载波的时钟源。
-- :cpp:member:`mcpwm_carrier_config_t::frequency_hz` 表示载波频率，单位为赫兹。内部驱动将根据时钟源和载波频率设置合适的分频器。
-- :cpp:member:`mcpwm_carrier_config_t::duty_cycle` 表示载波的占空比。需注意，支持的占空比选项并不连续，驱动程序将根据配置查找最接近的占空比。
+- :cpp:member:`mcpwm_carrier_config_t::frequency_hz` 表示载波频率，单位为赫兹。内部驱动将根据时钟源和载波频率设置合适的分频器。有关频率限制的相关内容请参阅 :ref:`mcpwm-resolution-config`。
+- :cpp:member:`mcpwm_carrier_config_t::duty_cycle` 表示载波的占空比。需注意，占空比仅支持的7种，分别为 0.125、0.25、0.375、0.5、0.625、0.75、0.875。
 - :cpp:member:`mcpwm_carrier_config_t::first_pulse_duration_us` 表示第一个脉冲的脉宽，单位为微秒。该脉冲的分辨率由 :cpp:member:`mcpwm_carrier_config_t::frequency_hz` 中的配置决定。第一个脉冲的脉宽不能为零，且至少为一个载波周期。脉宽越长，电感传导越快。
 - :cpp:member:`mcpwm_carrier_config_t::invert_before_modulate` 和 :cpp:member:`mcpwm_carrier_config_t::invert_after_modulate` 设置是否在调制前和调制后取反载波输出。
 
@@ -885,7 +890,6 @@ MCPWM 定时器接收到同步信号后，定时器将强制进入一个预定�
         mcpwm_gpio_sync_src_config_t gpio_sync_config = {
             .group_id = 0,              // GPIO 故障应与以上定时器位于同一组中
             .gpio_num = EXAMPLE_SYNC_GPIO,
-            .flags.pull_down = true,
             .flags.active_neg = false,  // 默认情况下，一个上升沿脉冲可以触发一个同步事件
         };
         ESP_ERROR_CHECK(mcpwm_new_gpio_sync_src(&gpio_sync_config, &gpio_sync_source));
@@ -956,6 +960,11 @@ MCPWM 捕获通道支持在信号上检测到有效边沿时发送通知。须�
 
 某些场景下，可能存在需要软件触发“虚假”捕获事件的需求。此时，可以调用 :cpp:func:`mcpwm_capture_channel_trigger_soft_catch` 实现。需注意，此类“虚假”捕获事件仍然会触发中断，并从而调用捕获事件回调函数。
 
+获得上一次锁存的捕获值
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+如果不想在捕获事件回调函数中处理捕获值，而是想在其他地方处理，可以调用 :cpp:func:`mcpwm_capture_get_latched_value` 获得上一次锁存的捕获值。
+
 .. only:: SOC_MCPWM_SUPPORT_ETM
 
     .. _mcpwm-etm-event-and-task:
@@ -978,10 +987,27 @@ MCPWM 捕获通道支持在信号上检测到有效边沿时发送通知。须�
 
 启用电源管理（即开启 :ref:`CONFIG_PM_ENABLE`）时，系统会在进入 Light-sleep 前调整 PLL 和 APB 频率。该操作有可能会改变 MCPWM 定时器的计数步长，导致计时偏差。
 
-不过，驱动程序可以获取 :cpp:enumerator:`ESP_PM_APB_FREQ_MAX` 类型的电源管理锁，防止系统改变 APB 频率。每当驱动创建以 :cpp:enumerator:`MCPWM_TIMER_CLK_SRC_PLL160M` 作为时钟源的 MCPWM 定时器实例时，都会在通过 :cpp:func:`mcpwm_timer_enable` 启用定时器时获取电源管理锁。反之，调用 :cpp:func:`mcpwm_timer_disable` 时，驱动程序释放锁。
+不过，驱动程序可以获取 :cpp:enumerator:`ESP_PM_NO_LIGHT_SLEEP` 类型的电源管理锁，防止系统进入 Light-sleep。每当驱动创建以 PLL 作为时钟源的 MCPWM 定时器实例时，都会在通过 :cpp:func:`mcpwm_timer_enable` 启用定时器时获取电源管理锁。反之，调用 :cpp:func:`mcpwm_timer_disable` 时，驱动程序释放锁。
 
-同理，每当驱动创建一个以 :cpp:enumerator:`MCPWM_CAPTURE_CLK_SRC_APB` 作为时钟源的 MCPWM 捕获定时器实例时，都会在通过 :cpp:func:`mcpwm_capture_timer_enable` 启用定时器时获取电源管理锁，并在调用 :cpp:func:`mcpwm_capture_timer_disable` 时释放锁。
+同理，每当驱动创建 MCPWM 捕获定时器实例时，都会在通过 :cpp:func:`mcpwm_capture_timer_enable` 启用定时器时获取电源管理锁，并在调用 :cpp:func:`mcpwm_capture_timer_disable` 时释放锁。
 
+.. only:: SOC_MCPWM_SUPPORT_SLEEP_RETENTION
+
+    {IDF_TARGET_NAME} 支持在进入 **Light-sleep** 之前保留 MCPWM 寄存器中的内容，并在唤醒后恢复。也就是说程序不需要在 **Light-sleep** 唤醒后重新配置 MCPWM。
+
+    该特性可以通过置位配置中的 :cpp:member:`mcpwm_timer_config_t::allow_pd` 或 :cpp:member:`mcpwm_capture_timer_config_t::allow_pd` 标志位启用。启用后驱动允许系统在 Light-sleep 时对 MCPWM 掉电，同时保存 MCPWM 的寄存器内容。它可以帮助降低 Light-sleep 时的功耗，但需要花费一些额外的存储来保存寄存器的配置。
+
+.. _mcpwm-resolution-config:
+
+分辨率配置
+^^^^^^^^^^^^^
+
+MCPWM 组拥有时钟分频器，并且部分子模块会有自己的时钟分频器，子模块最终的时钟频率取决于组时钟分频器和自身的分频器（如果有）。而组时钟分频器会影响所有子模块。当配置 MCPWM 子模块的时钟频率（或者叫分辨率）时，驱动会按照以下规则设置分频器：
+
+1. 如果子模块的时钟频率可以被时钟源整除，优先保证子模块的频率准确。
+2. 如果无法被时钟源整除，则尽可能保证组时钟的频率最高，将子模块频率调整到最接近的能够被时钟源整除的频率。
+
+当多个 MCPWM 子模块共存时，需要考虑是否存在时钟分频器冲突。当出现组时钟分频器冲突，可以尝试调整子模块分配顺序。组分频器和子模块分频器范围详情请参见 [`TRM <{IDF_TARGET_TRM_EN_URL}#mcpwm>`__]。
 
 .. _mcpwm-iram-safe:
 
@@ -990,7 +1016,7 @@ IRAM 安全
 
 默认情况下，禁用 cache 时，写入/擦除 flash 等原因将导致 MCPWM 中断延迟，事件回调函数也将延迟执行。在实时应用程序中，应避免此类情况。
 
-因此，可以启用 Kconfig 选项 :ref:`CONFIG_MCPWM_ISR_IRAM_SAFE`，该选项：
+因此，可以启用 Kconfig 选项 :ref:`CONFIG_MCPWM_ISR_CACHE_SAFE`，该选项：
 
 * 支持在禁用 cache 时启用所需中断
 * 支持将 ISR 使用的所有函数存放在 IRAM 中 [2]_
@@ -1024,21 +1050,22 @@ IRAM 安全
 Kconfig 选项
 ^^^^^^^^^^^^^^^
 
-- :ref:`CONFIG_MCPWM_ISR_IRAM_SAFE` 控制默认 ISR 处理程序能否在禁用 cache 的情况下工作。更多信息请参见 :ref:`mcpwm-iram-safe`。
+- :ref:`CONFIG_MCPWM_ISR_CACHE_SAFE` 控制默认 ISR 处理程序能否在禁用 cache 的情况下工作。更多信息请参见 :ref:`mcpwm-iram-safe`。
 - :ref:`CONFIG_MCPWM_CTRL_FUNC_IN_IRAM` 控制 MCPWM 控制函数的存放位置（IRAM 或 flash）。更多信息请参见 :ref:`mcpwm-iram-safe`。
 - :ref:`CONFIG_MCPWM_ENABLE_DEBUG_LOG` 用于启用调试日志输出。启用此选项将增加固件的二进制文件大小。
 
 应用示例
 --------------------
 
-* 通过 PID 算法控制有刷直流电机速度：:example:`peripherals/mcpwm/mcpwm_bdc_speed_control`
-* 控制带霍尔传感器反馈的无刷直流电机：:example:`peripherals/mcpwm/mcpwm_bldc_hall_control`
-* 使用超声波传感器 (HC-SR04) 测量距离：:example:`peripherals/mcpwm/mcpwm_capture_hc_sr04`
-* 控制伺服电机角度：:example:`peripherals/mcpwm/mcpwm_servo_control`
-* 定时器之间的 MCPWM 同步：:example:`peripherals/mcpwm/mcpwm_sync`
+* :example:`peripherals/mcpwm/mcpwm_bdc_speed_control` 演示了如何使用两个特定 PWM 信号驱动有刷直流电机，通过光电编码器测量电机速度，并通过 PID 算法保持稳定的电机速度。
+* :example:`peripherals/mcpwm/mcpwm_bldc_hall_control` 演示了如何使用 MCPWM 外设，通过六步换向方案控制无刷直流电机，根据霍尔传感器的读数调整电机的旋转方向和速度。
+* :example:`peripherals/mcpwm/mcpwm_capture_hc_sr04` 演示了如何使用 MCPWM 外设的捕获模块，解码超声波传感器 (HC-SR04) 的脉冲宽度信号。HC-SR04 传感器可根据脉冲的宽度测量距离。
+* :example:`peripherals/mcpwm/mcpwm_foc_svpwm_open_loop` 演示了如何使用 MCPWM 外设生成三对 PWM 信号，用于磁场定向控制 (FOC)，从而驱动无刷直流电机或永磁同步电机，或驱动三相功率逆变器（使用开环 FOC 算法）。
+* :example:`peripherals/mcpwm/mcpwm_servo_control` 演示了如何使用 MCPWM 驱动程序发送 PWM 信号来控制 RC 伺服电机，它可以在 -60° 到 60° 间来回旋转。
+* :example:`peripherals/mcpwm/mcpwm_sync` 演示了如何使用 MCPWM 定时器生成三个 PWM 同步信号，可以通过 GPIO、Timer TEZ 或软件来同步定时器。
 
 
-API Reference
+API 参考
 -------------
 
 .. include-build-file:: inc/mcpwm_timer.inc

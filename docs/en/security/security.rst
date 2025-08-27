@@ -1,13 +1,23 @@
-Security
-========
+Security Overview
+=================
 
-{IDF_TARGET_CIPHER_SCHEME:default="RSA", esp32h2="RSA or ECDSA", esp32p4="RSA or ECDSA"}
+{IDF_TARGET_CIPHER_SCHEME:default="RSA", esp32h2="RSA or ECDSA", esp32p4="RSA or ECDSA", esp32c5="RSA or ECDSA", esp32c61="ECDSA", esp32h21="RSA or ECDSA"}
 
-{IDF_TARGET_SIG_PERI:default="DS", esp32h2="DS or ECDSA", esp32p4="DS or ECDSA"}
+{IDF_TARGET_SIG_PERI:default="DS", esp32h2="DS or ECDSA", esp32p4="DS or ECDSA", esp32c5="DS or ECDSA"}
 
 :link_to_translation:`zh_CN:[中文]`
 
 This guide provides an overview of the overall security features available in various Espressif solutions. It is highly recommended to consider this guide while designing the products with the Espressif platform and the ESP-IDF software stack from the **security** perspective.
+
+.. note::
+
+    In this guide, most used commands are in the form of ``idf.py secure-<command>``, which is a wrapper around corresponding ``espsecure.py <command>``. The ``idf.py`` based commands provides more user-friendly experience, although may lack some of the advanced functionality of their ``espsecure.py`` based counterparts.
+
+.. only:: TARGET_SUPPORT_QEMU
+
+   .. important::
+
+      It is possible to try out the security features for {IDF_TARGET_NAME} target SoC under :doc:`../api-guides/tools/qemu` virtually. Once the security workflow is established, you can then proceed to the real hardware.
 
 Goals
 -----
@@ -45,7 +55,7 @@ Secure Boot Best Practices
 
 * Generate the signing key on a system with a quality source of entropy.
 * Always keep the signing key private. A leak of this key will compromise the Secure Boot system.
-* Do not allow any third party to observe any aspects of the key generation or signing process using ``espsecure.py``. Both processes are vulnerable to timing or other side-channel attacks.
+* Do not allow any third party to observe any aspects of the key generation or signing process using ``idf.py secure-`` or ``espsecure.py`` commands. Both processes are vulnerable to timing or other side-channel attacks.
 * Ensure that all security eFuses have been correctly programmed, including disabling of the debug interfaces, non-required boot mediums (e.g., UART DL mode), etc.
 
 
@@ -98,24 +108,59 @@ Flash Encryption Best Practices
 
     {IDF_TARGET_NAME} supports the **Memory Protection** scheme, either through architecture or special peripheral like PMS, which provides an ability to enforce and monitor permission attributes to memory and, in some cases, peripherals. ESP-IDF application startup code configures the permissions attributes like Read/Write access on data memories and Read/Execute access on instruction memories using the relevant peripheral. If there is any attempt made that breaks these permission attributes, e.g., a write operation to instruction memory region, then a violation interrupt is raised, and it results in system panic.
 
-    This feature depends on the config option :ref:`CONFIG_ESP_SYSTEM_MEMPROT_FEATURE` and it is kept enabled by default. Please note that the API for this feature is **private** and used exclusively by ESP-IDF code only.
+    This feature depends on the config option :ref:`CONFIG_ESP_SYSTEM_MEMPROT` and it is kept enabled by default. Please note that the API for this feature is **private** and used exclusively by ESP-IDF code only.
 
     .. note::
 
         This feature can help to prevent the possibility of remote code injection due to the existing vulnerabilities in the software.
 
-.. only:: SOC_CRYPTO_DPA_PROTECTION_SUPPORTED
+.. only:: SOC_CRYPTO_DPA_PROTECTION_SUPPORTED or SOC_AES_SUPPORT_PSEUDO_ROUND_FUNCTION
 
-    DPA (Differential Power Analysis) Protection
-    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    Protection Against Side-Channel Attacks
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-    {IDF_TARGET_NAME} has support for protection mechanisms against the Differential Power Analysis related security attacks. DPA protection dynamically adjusts the clock frequency of the crypto peripherals, thereby blurring the power consumption trajectory during its operation. Based on the configured DPA security level, the clock variation range changes. Please refer to the TRM for more details on this topic.
+    .. only:: SOC_CRYPTO_DPA_PROTECTION_SUPPORTED
 
-    :ref:`CONFIG_ESP_CRYPTO_DPA_PROTECTION_LEVEL` can help to select the DPA level. Higher level means better security, but it can also have an associated performance impact. By default, the lowest DPA level is kept enabled but it can be modified based on the security requirement.
+        DPA (Differential Power Analysis) Protection
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-    .. note::
+        {IDF_TARGET_NAME} has support for protection mechanisms against the Differential Power Analysis related security attacks. DPA protection dynamically adjusts the clock frequency of the crypto peripherals, thereby blurring the power consumption trajectory during its operation. Based on the configured DPA security level, the clock variation range changes. Please refer to the *{IDF_TARGET_NAME} Technical Reference Manual* [`PDF <{IDF_TARGET_TRM_EN_URL}>`__]. for more details on this topic.
 
-        Please note that hardware :doc:`RNG <../api-reference/system/random>` must be enabled for DPA protection to work correctly.
+        :ref:`CONFIG_ESP_CRYPTO_DPA_PROTECTION_LEVEL` can help to select the DPA level. Higher level means better security, but it can also have an associated performance impact. By default, the lowest DPA level is kept enabled but it can be modified based on the security requirement.
+
+        .. note::
+
+            Please note that hardware :doc:`RNG <../api-reference/system/random>` must be enabled for DPA protection to work correctly.
+
+    .. only:: SOC_AES_SUPPORT_PSEUDO_ROUND_FUNCTION
+
+        AES Peripheral's Pseudo-Round Function
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+        {IDF_TARGET_NAME} incorporates a pseudo-round function in the AES peripheral, thus enabling the peripheral to randomly insert pseudo-rounds before and after the original operation rounds and also generate a pseudo key to perform these dummy operations.
+        These operations do not alter the original result, but they increase the complexity to perform side channel analysis attacks by randomizing the power profile.
+
+        :ref:`CONFIG_MBEDTLS_AES_USE_PSEUDO_ROUND_FUNC_STRENGTH` can be used to select the strength of the pseudo-round function. Increasing the strength improves the security provided, but would slow down the encrryption/decryption operations.
+
+
+        .. list-table:: Performance impact on AES operations per strength level
+            :widths: 10 10
+            :header-rows: 1
+            :align: center
+
+            * - **Strength**
+              - **Performance Impact** [#]_
+            * - Low
+              - 20.9 %
+            * - Medium
+              - 47.6 %
+            * - High
+              - 72.4 %
+
+        .. [#] The above performance numbers have been calculated using the AES performance test of the mbedtls test application :component_file:`test_aes_perf.c <mbedtls/test_apps/main/test_aes_perf.c>`.
+
+        Considering the above performance impact, ESP-IDF by-default does not enable the pseudo-round function to avoid any performance-related degrade. But it is recommended to enable the pseudo-round function for better security.
+
 
 Debug Interfaces
 ~~~~~~~~~~~~~~~~
@@ -241,7 +286,7 @@ Anti-Rollback Protection
 
 Anti-rollback protection feature ensures that device only executes the application that meets the security version criteria as stored in its eFuse. So even though the application is trusted and signed by legitimate key, it may contain some revoked security feature or credential. Hence, device must reject any such application.
 
-ESP-IDF allows this feature for the application only and it is managed through 2nd stage bootloader. The security version is stored in the device eFuse and it is compared against the application image header during both bootup and over-the-air updates.
+ESP-IDF allows this feature for the application only and it is managed through 2nd stage bootloader. The security version is stored in the device eFuse and it is compared against the application image header during both boot-up and over-the-air updates.
 
 Please see more information to enable this feature in the :ref:`anti-rollback` guide.
 

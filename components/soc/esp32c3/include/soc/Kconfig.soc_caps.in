@@ -19,6 +19,10 @@ config SOC_GDMA_SUPPORTED
     bool
     default y
 
+config SOC_UHCI_SUPPORTED
+    bool
+    default y
+
 config SOC_AHB_GDMA_SUPPORTED
     bool
     default y
@@ -311,6 +315,10 @@ config SOC_SHARED_IDCACHE_SUPPORTED
     bool
     default y
 
+config SOC_CACHE_FREEZE_SUPPORTED
+    bool
+    default y
+
 config SOC_CACHE_MEMORY_IBANK_SIZE
     hex
     default 0x4000
@@ -403,6 +411,10 @@ config SOC_GPIO_DEEP_SLEEP_WAKE_VALID_GPIO_MASK
     int
     default 0
 
+config SOC_GPIO_DEEP_SLEEP_WAKE_SUPPORTED_PIN_CNT
+    int
+    default 6
+
 config SOC_GPIO_VALID_DIGITAL_IO_PAD_MASK
     hex
     default 0x00000000003FFFC0
@@ -414,6 +426,10 @@ config SOC_GPIO_CLOCKOUT_BY_GPIO_MATRIX
 config SOC_GPIO_CLOCKOUT_CHANNEL_NUM
     int
     default 3
+
+config SOC_GPIO_SUPPORT_HOLD_IO_IN_DSLP
+    bool
+    default y
 
 config SOC_DEDIC_GPIO_OUT_CHANNELS_NUM
     int
@@ -503,9 +519,21 @@ config SOC_I2S_SUPPORTS_PDM_TX
     bool
     default y
 
+config SOC_I2S_SUPPORTS_PCM2PDM
+    bool
+    default y
+
+config SOC_I2S_SUPPORTS_PDM_RX
+    bool
+    default y
+
 config SOC_I2S_PDM_MAX_TX_LINES
     int
     default 2
+
+config SOC_I2S_PDM_MAX_RX_LINES
+    int
+    default 1
 
 config SOC_I2S_SUPPORTS_TDM
     bool
@@ -518,6 +546,10 @@ config SOC_LEDC_SUPPORT_APB_CLOCK
 config SOC_LEDC_SUPPORT_XTAL_CLOCK
     bool
     default y
+
+config SOC_LEDC_TIMER_NUM
+    int
+    default 4
 
 config SOC_LEDC_CHANNEL_NUM
     int
@@ -587,7 +619,7 @@ config SOC_RMT_SUPPORT_RX_DEMODULATION
     bool
     default y
 
-config SOC_RMT_SUPPORT_TX_ASYNC_STOP
+config SOC_RMT_SUPPORT_ASYNC_STOP
     bool
     default y
 
@@ -672,18 +704,6 @@ config SOC_SHA_SUPPORT_SHA224
     default y
 
 config SOC_SHA_SUPPORT_SHA256
-    bool
-    default y
-
-config SOC_SDM_GROUPS
-    int
-    default 1
-
-config SOC_SDM_CHANNELS_PER_GROUP
-    int
-    default 4
-
-config SOC_SDM_CLK_SUPPORT_APB
     bool
     default y
 
@@ -831,35 +851,23 @@ config SOC_SYSTIMER_ALARM_MISS_COMPENSATE
     bool
     default y
 
-config SOC_TIMER_GROUPS
+config SOC_LP_TIMER_BIT_WIDTH_LO
     int
-    default 2
+    default 32
 
-config SOC_TIMER_GROUP_TIMERS_PER_GROUP
+config SOC_LP_TIMER_BIT_WIDTH_HI
     int
-    default 1
-
-config SOC_TIMER_GROUP_COUNTER_BIT_WIDTH
-    int
-    default 54
-
-config SOC_TIMER_GROUP_SUPPORT_XTAL
-    bool
-    default y
-
-config SOC_TIMER_GROUP_SUPPORT_APB
-    bool
-    default y
-
-config SOC_TIMER_GROUP_TOTAL_TIMERS
-    int
-    default 2
+    default 16
 
 config SOC_MWDT_SUPPORT_XTAL
     bool
     default y
 
 config SOC_TWAI_CONTROLLER_NUM
+    int
+    default 1
+
+config SOC_TWAI_MASK_FILTER_NUM
     int
     default 1
 
@@ -979,6 +987,14 @@ config SOC_UART_SUPPORT_FSM_TX_WAIT_SEND
     bool
     default y
 
+config SOC_UART_WAKEUP_SUPPORT_ACTIVE_THRESH_MODE
+    bool
+    default y
+
+config SOC_UHCI_NUM
+    int
+    default 1
+
 config SOC_COEX_HW_PTI
     bool
     default y
@@ -1043,6 +1059,10 @@ config SOC_PM_MODEM_RETENTION_BY_BACKUPDMA
     bool
     default y
 
+config SOC_PM_MODEM_PD_BY_SW
+    bool
+    default y
+
 config SOC_CLK_RC_FAST_D256_SUPPORTED
     bool
     default y
@@ -1056,6 +1076,10 @@ config SOC_CLK_RC_FAST_SUPPORT_CALIBRATION
     default y
 
 config SOC_CLK_XTAL32K_SUPPORTED
+    bool
+    default y
+
+config SOC_CLK_LP_FAST_SUPPORT_XTAL_D2
     bool
     default y
 

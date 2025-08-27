@@ -73,7 +73,7 @@ To enable PSRAM, please enable the :ref:`CONFIG_SPIRAM` under ``Component config
 
 .. note::
 
-    If a board with Octal flash resets before the second-stage bootloader, please refer to :ref:`Error Handling Chapter <flash-psram-error>`.
+    If a board with Octal flash resets before the second stage bootloader, please refer to :ref:`Error Handling Chapter <flash-psram-error>`.
 
 
 .. _flash-psram-combination:
@@ -98,6 +98,10 @@ All Supported Modes and Speeds
     If your chip powers on at a certain temperature, then after the temperature increases or decreases over 20 celsius degree, the accesses to/from PSRAM/flash will crash randomly. Flash access crash will lead to program crash.
 
     Note 20 celsius degree is not a totally correct number. This value may changes among chips.
+
+.. note::
+
+    The PSRAM requires a phase point calibration algorithm when operating at 120M. The phase point setting is related to the temperature at startup. When the temperature increases / decreases significantly during the operation of the chip, the PSRAM may experience read/write errors. To solve this problem, you can enable dynamic adjustment of the PSRAM phase point based on the temperature value with :ref:`CONFIG_SPIRAM_TIMING_TUNING_POINT_VIA_TEMPERATURE_SENSOR`. This creates a task that measures the temperature every :ref:`CONFIG_SPIRAM_TIMING_MEASURE_TEMPERATURE_INTERVAL_SECOND` seconds and adjusts the PSRAM phase point accordingly.
 
 F8R8 Hardware
 ^^^^^^^^^^^^^
@@ -224,7 +228,7 @@ F4R4 Hardware
 Error Handling
 --------------
 
-1. If a board with Octal flash resets before the second-stage bootloader:
+1. If a board with Octal flash resets before the second stage bootloader:
 
     .. code-block:: c
 
@@ -237,9 +241,9 @@ Error Handling
         load:0x3fcd0108,len:0x171c
         ets_loader.c 78
 
-   this may mean that the necessary efuses are not correctly burnt. Please check the eFuse bits of the chip using command ``espefuse.py summary``.
+   this may mean that the necessary eFuses are not correctly burnt. Please check the eFuse bits of the chip using ``idf.py efuse-summary``.
 
-   The ROM bootloader relies on an eFuse bit ``FLASH_TYPE`` to reset the flash into the default mode (SPI mode). If this bit is not burnt and the flash is working in OPI mode, ROM bootloader may not be able to read from the flash and load the following images.
+   The first stage (ROM) bootloader relies on an eFuse bit ``FLASH_TYPE`` to reset the flash into the default mode (SPI mode). If this bit is not burnt and the flash is working in OPI mode, the first stage (ROM) bootloader may not be able to read from the flash and load the following images.
 
 2. If you enabled :ref:`CONFIG_ESPTOOLPY_OCT_FLASH`, and there's an error log saying:
 
@@ -255,9 +259,9 @@ Error Handling
 
 Here is a method to burn the eFuse bit:
 
-.. code-block:: python
+.. code-block:: shell
 
-    python3 ./espefuse.py -p /dev/<serial_device> --do-not-confirm burn_efuse FLASH_TYPE 1
+    idf.py -p PORT efuse-burn --do-not-confirm FLASH_TYPE 1
 
 .. note::
 

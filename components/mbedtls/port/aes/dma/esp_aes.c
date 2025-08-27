@@ -31,9 +31,8 @@
 #include "esp_log.h"
 #include "esp_crypto_lock.h"
 #include "hal/aes_hal.h"
-#include "hal/aes_ll.h"
 #include "esp_aes_internal.h"
-#include "esp_private/esp_crypto_lock_internal.h"
+#include "esp_crypto_periph_clk.h"
 
 #if SOC_AES_GDMA
 #define AES_LOCK() esp_crypto_sha_aes_lock_acquire()
@@ -50,29 +49,13 @@ void esp_aes_acquire_hardware( void )
 {
     /* Released by esp_aes_release_hardware()*/
     AES_LOCK();
-
-    AES_RCC_ATOMIC() {
-        aes_ll_enable_bus_clock(true);
-#if SOC_AES_CRYPTO_DMA
-        crypto_dma_ll_enable_bus_clock(true);
-#endif
-        aes_ll_reset_register();
-#if SOC_AES_CRYPTO_DMA
-        crypto_dma_ll_reset_register();
-#endif
-    }
+    esp_crypto_aes_enable_periph_clk(true);
 }
 
 /* Function to disable AES and Crypto DMA clocks and release locks */
 void esp_aes_release_hardware( void )
 {
-    AES_RCC_ATOMIC() {
-        aes_ll_enable_bus_clock(false);
-#if SOC_AES_CRYPTO_DMA
-        crypto_dma_ll_enable_bus_clock(false);
-#endif
-    }
-
+    esp_crypto_aes_enable_periph_clk(false);
     AES_RELEASE();
 }
 
@@ -475,6 +458,7 @@ int esp_aes_crypt_ofb(esp_aes_context *ctx,
     return 0;
 }
 
+#ifdef CONFIG_MBEDTLS_CIPHER_MODE_CTR
 /*
  * AES-CTR buffer encryption/decryption
  */
@@ -546,3 +530,4 @@ int esp_aes_crypt_ctr(esp_aes_context *ctx,
 
     return 0;
 }
+#endif /* CONFIG_MBEDTLS_CIPHER_MODE_CTR */

@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2015-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2015-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -16,6 +16,7 @@
 #include "hal/mmu_ll.h"
 #include "hal/mmu_hal.h"
 #include "hal/cache_hal.h"
+#include "soc/soc_caps.h"
 #if ESP_ROM_NEEDS_SET_CACHE_MMU_SIZE
 #include "soc/mmu.h"
 #endif
@@ -25,7 +26,9 @@
 #include "esp_rom_spiflash.h"
 #if CONFIG_SPIRAM
 #include "esp_private/esp_psram_extram.h"
+#if SOC_SPIRAM_XIP_SUPPORTED
 #include "esp_private/mmu_psram_flash.h"
+#endif
 #endif
 
 #if CONFIG_IDF_TARGET_ESP32
@@ -36,16 +39,16 @@
 #include "spi_flash_mmap.h"
 
 #if CONFIG_SPIRAM_FETCH_INSTRUCTIONS
-extern int _instruction_reserved_start;
-extern int _instruction_reserved_end;
+extern char _instruction_reserved_start;
+extern char _instruction_reserved_end;
 #endif
 
 #if CONFIG_SPIRAM_RODATA
-extern int _rodata_reserved_start;
-extern int _rodata_reserved_end;
+extern char _rodata_reserved_start;
+extern char _rodata_reserved_end;
 #endif
 
-#if !CONFIG_SPI_FLASH_ROM_IMPL
+#if !ESP_ROM_HAS_SPI_FLASH_MMAP || !CONFIG_SPI_FLASH_ROM_IMPL
 
 
 typedef struct mmap_block_t {
@@ -270,38 +273,6 @@ uint32_t spi_flash_mmap_get_free_pages(spi_flash_mmap_memory_t memory)
     return len / CONFIG_MMU_PAGE_SIZE;
 }
 
-const void * spi_flash_phys2cache(size_t phys_offs, spi_flash_mmap_memory_t memory)
-{
-    esp_err_t ret = ESP_FAIL;
-    void *ptr = NULL;
-    mmu_target_t target = MMU_TARGET_FLASH0;
-
-    __attribute__((unused)) uint32_t phys_page = phys_offs / CONFIG_MMU_PAGE_SIZE;
-#if !SOC_MMU_PER_EXT_MEM_TARGET
-#if CONFIG_SPIRAM_FETCH_INSTRUCTIONS
-    if (phys_page >= instruction_flash_start_page_get() && phys_page <= instruction_flash_end_page_get()) {
-        target = MMU_TARGET_PSRAM0;
-        phys_offs -= instruction_flash2spiram_offset() * CONFIG_MMU_PAGE_SIZE;
-    }
-#endif
-
-#if CONFIG_SPIRAM_RODATA
-    if (phys_page >= rodata_flash_start_page_get() && phys_page <= rodata_flash_start_page_get()) {
-        target = MMU_TARGET_PSRAM0;
-        phys_offs -= rodata_flash2spiram_offset() * CONFIG_MMU_PAGE_SIZE;
-    }
-#endif
-#endif  //#if !SOC_MMU_PER_EXT_MEM_TARGET
-
-    mmu_vaddr_t type = (memory == SPI_FLASH_MMAP_DATA) ? MMU_VADDR_DATA : MMU_VADDR_INSTRUCTION;
-    ret = esp_mmu_paddr_to_vaddr(phys_offs, target, type, &ptr);
-    if (ret == ESP_ERR_NOT_FOUND) {
-        return NULL;
-    }
-    assert(ret == ESP_OK);
-    return (const void *)ptr;
-}
-
 static bool IRAM_ATTR is_page_mapped_in_cache(uint32_t phys_addr, const void **out_ptr)
 {
     *out_ptr = NULL;
@@ -353,11 +324,15 @@ IRAM_ATTR bool spi_flash_check_and_flush_cache(size_t start_addr, size_t length)
     }
     return ret;
 }
-#endif //!CONFIG_SPI_FLASH_ROM_IMPL
+#endif // !ESP_ROM_HAS_SPI_FLASH_MMAP || !CONFIG_SPI_FLASH_ROM_IMPL
 
-#if !CONFIG_SPI_FLASH_ROM_IMPL || CONFIG_SPIRAM_FETCH_INSTRUCTIONS || CONFIG_SPIRAM_RODATA
-//The ROM implementation returns physical address of the PSRAM when the .text or .rodata is in the PSRAM.
-//Always patch it when SPIRAM_FETCH_INSTRUCTIONS or SPIRAM_RODATA is set.
+#if !ESP_ROM_HAS_SPI_FLASH_MMAP || !CONFIG_SPI_FLASH_ROM_IMPL || CONFIG_SPIRAM_FETCH_INSTRUCTIONS || CONFIG_SPIRAM_RODATA
+/* ROM and patch information
+ * Latest: Add the mapping from psram physical address to flash when CONFIG_SPIRAM_FETCH_INSTRUCTIONS or CONFIG_SPIRAM_RODATA enabled
+ * V1 (Latest): added to ROM
+ */
+// The ROM implementation returns physical address of the PSRAM when the .text or .rodata is in the PSRAM.
+// Patched when XIP from PSRAM (partially) enabled.
 size_t spi_flash_cache2phys(const void *cached)
 {
     if (cached == NULL) {
@@ -383,7 +358,7 @@ size_t spi_flash_cache2phys(const void *cached)
 
     int offset = 0;
 
-#if !SOC_MMU_PER_EXT_MEM_TARGET //TODO: IDF-9049
+#if !CONFIG_SPIRAM_FLASH_LOAD_TO_PSRAM
 #if CONFIG_SPIRAM_RODATA
     if ((uint32_t)cached >= (uint32_t)&_rodata_reserved_start && (uint32_t)cached <= (uint32_t)&_rodata_reserved_end) {
         offset = rodata_flash2spiram_offset();
@@ -394,8 +369,46 @@ size_t spi_flash_cache2phys(const void *cached)
         offset = instruction_flash2spiram_offset();
     }
 #endif
-#endif  //#if !SOC_MMU_PER_EXT_MEM_TARGET
+#endif  //#if !CONFIG_SPIRAM_FLASH_LOAD_TO_PSRAM
 
     return paddr + offset * CONFIG_MMU_PAGE_SIZE;
 }
+
+/* ROM and patch information
+ * Latest: Add the mapping from flash physical address to psram when CONFIG_SPIRAM_FETCH_INSTRUCTIONS or CONFIG_SPIRAM_RODATA enabled
+ * V1 (Latest): added to ROM
+ */
+// The ROM implementation takes physical address of the PSRAM when the .text or .rodata is in the PSRAM.
+// Patched when XIP from PSRAM (partially) enabled.
+const void * spi_flash_phys2cache(size_t phys_offs, spi_flash_mmap_memory_t memory)
+{
+    esp_err_t ret = ESP_FAIL;
+    void *ptr = NULL;
+    mmu_target_t target = MMU_TARGET_FLASH0;
+
+    __attribute__((unused)) uint32_t phys_page = phys_offs / CONFIG_MMU_PAGE_SIZE;
+#if !CONFIG_SPIRAM_FLASH_LOAD_TO_PSRAM
+#if CONFIG_SPIRAM_FETCH_INSTRUCTIONS
+    if (phys_page >= instruction_flash_start_page_get() && phys_page <= instruction_flash_end_page_get()) {
+        target = MMU_TARGET_PSRAM0;
+        phys_offs -= instruction_flash2spiram_offset() * CONFIG_MMU_PAGE_SIZE;
+    }
 #endif
+
+#if CONFIG_SPIRAM_RODATA
+    if (phys_page >= rodata_flash_start_page_get() && phys_page <= rodata_flash_start_page_get()) {
+        target = MMU_TARGET_PSRAM0;
+        phys_offs -= rodata_flash2spiram_offset() * CONFIG_MMU_PAGE_SIZE;
+    }
+#endif
+#endif  //#if !CONFIG_SPIRAM_FLASH_LOAD_TO_PSRAM
+
+    mmu_vaddr_t type = (memory == SPI_FLASH_MMAP_DATA) ? MMU_VADDR_DATA : MMU_VADDR_INSTRUCTION;
+    ret = esp_mmu_paddr_to_vaddr(phys_offs, target, type, &ptr);
+    if (ret == ESP_ERR_NOT_FOUND) {
+        return NULL;
+    }
+    assert(ret == ESP_OK);
+    return (const void *)ptr;
+}
+#endif //!ESP_ROM_HAS_SPI_FLASH_MMAP || !CONFIG_SPI_FLASH_ROM_IMPL || CONFIG_SPIRAM_FETCH_INSTRUCTIONS || CONFIG_SPIRAM_RODATA

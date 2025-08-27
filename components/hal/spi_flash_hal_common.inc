@@ -17,7 +17,8 @@
 #include "hal/spi_flash_hal.h"
 #include "hal/assert.h"
 #include "soc/soc_caps.h"
-#include "sdkconfig.h"
+#include "soc/chip_revision.h"
+#include "hal/efuse_hal.h"
 
 #define ADDRESS_MASK_24BIT 0xFFFFFF
 #define COMPUTE_DUMMY_CYCLELEN(host, base)    ((base) + ((spi_flash_hal_context_t*)host)->extra_dummy)
@@ -101,6 +102,7 @@ esp_err_t spi_flash_hal_configure_host_io_mode(
         return ESP_ERR_NOT_SUPPORTED;
     }
 
+#ifndef GPSPI_BUILD
 #if SOC_SPI_PERIPH_SUPPORT_CONTROL_DUMMY_OUT
     // The CONTROL_DUMMY_OUTPUT feature is used to control M7-M0 bits.
     spi_flash_ll_set_dummy_out(dev, (conf_required? 1: 0), 1);
@@ -123,10 +125,39 @@ esp_err_t spi_flash_hal_configure_host_io_mode(
      * - DIO is similar.
      */
     if (conf_required) {
+#if !SOC_SPI_MEM_SUPPORT_WB_MODE_INDEPENDENT_CONTROL
         int line_width = (io_mode == SPI_FLASH_DIO? 2: 4);
         dummy_cyclelen_base -= SPI_FLASH_LL_CONTINUOUS_MODE_BIT_NUMS / line_width;
         addr_bitlen += SPI_FLASH_LL_CONTINUOUS_MODE_BIT_NUMS;
+#endif
         spi_flash_ll_set_extra_address(dev, 0);
+    // TODO: [IDF-13582]
+    // Currently, REE and TEE use different sets of APIs for flash operations -
+    // REE uses the IDF SPI flash driver while TEE call the ROM APIs. This inconsistency
+    // leads to compatibility issues on ESP32-C5.
+    // One specific issue arises when esp_flash_read() is used in REE, which internally
+    // calls spi_flash_ll_wb_mode_enable(). This function enables the WB mode bit in
+    // the flash write operation. However, the ROM API does not support this
+    // feature, resulting in failures when TEE attempts to access flash after this call.
+#if SOC_SPI_MEM_SUPPORT_WB_MODE_INDEPENDENT_CONTROL && !CONFIG_SECURE_ENABLE_TEE
+        spi_flash_ll_wb_mode_enable(dev, true);
+#endif
+    }
+#endif
+#else
+    gpspi_flash_ll_set_dummy_out(dev, (conf_required? 1: 0), 1);
+#endif
+
+#if SOC_IS(ESP32P4)
+    // TODO: This is temporarily for ESP32P4-ECO0, please remove it when eco0 is not widly used. IDF-10019
+    unsigned chip_version = efuse_hal_chip_revision();
+    if (unlikely(!ESP_CHIP_REV_ABOVE(chip_version, 1))) {
+        if (conf_required) {
+            int line_width = (io_mode == SPI_FLASH_DIO? 2: 4);
+            dummy_cyclelen_base -= SPI_FLASH_LL_CONTINUOUS_MODE_BIT_NUMS / line_width;
+            addr_bitlen += SPI_FLASH_LL_CONTINUOUS_MODE_BIT_NUMS;
+            spi_flash_ll_set_extra_address(dev, 0);
+        }
     }
 #endif
 
@@ -142,6 +173,12 @@ esp_err_t spi_flash_hal_configure_host_io_mode(
     spi_flash_ll_set_miso_bitlen(dev, 0);
     spi_flash_ll_set_mosi_bitlen(dev, 0);
     spi_flash_ll_set_read_mode(dev, io_mode);
+#if SOC_SPI_MEM_SUPPORT_TIMING_TUNING
+    spi_flash_hal_context_t* ctx = (spi_flash_hal_context_t*)host;
+    if (ctx->fdummy_rin) {
+        spimem_flash_ll_set_fdummy_rin((spi_mem_dev_t*)dev, ctx->fdummy_rin);
+    }
+#endif
     return ESP_OK;
 }
 
@@ -179,6 +216,10 @@ esp_err_t spi_flash_hal_common_command(spi_flash_host_inst_t *host, spi_flash_tr
     if (trans->miso_len > 0) {
         spi_flash_ll_get_buffer_data(dev, trans->miso_data, trans->miso_len);
     }
+    // TODO: [IDF-13582]
+#if SOC_SPI_MEM_SUPPORT_WB_MODE_INDEPENDENT_CONTROL && !CONFIG_SECURE_ENABLE_TEE
+    spi_flash_ll_wb_mode_enable(dev, false);
+#endif
     return ESP_OK;
 }
 

@@ -10,7 +10,7 @@
 #include "esp_image_format.h"
 #include "flash_qio_mode.h"
 #include "esp_rom_gpio.h"
-#include "esp_rom_uart.h"
+#include "esp_rom_serial_output.h"
 #include "esp_rom_sys.h"
 #include "esp_rom_spiflash.h"
 #include "soc/gpio_sig_map.h"
@@ -39,10 +39,11 @@
 #include "esp_efuse.h"
 #include "hal/mmu_hal.h"
 #include "hal/cache_hal.h"
-#include "hal/clk_tree_ll.h"
 #include "soc/lp_wdt_reg.h"
 #include "hal/efuse_hal.h"
 #include "hal/lpwdt_ll.h"
+#include "hal/regi2c_ctrl_ll.h"
+#include "hal/brownout_ll.h"
 
 static const char *TAG = "boot.esp32c61";
 
@@ -85,36 +86,22 @@ static void bootloader_super_wdt_auto_feed(void)
 
 static inline void bootloader_hardware_init(void)
 {
-    // In 80MHz flash mode, ROM sets the mspi module clk divider to 2, fix it here
-#if CONFIG_ESPTOOLPY_FLASHFREQ_80M && !CONFIG_APP_BUILD_TYPE_RAM
-    clk_ll_mspi_fast_set_hs_divider(6);
-    esp_rom_spiflash_config_clk(1, 0);
-    esp_rom_spiflash_config_clk(1, 1);
-    esp_rom_spiflash_fix_dummylen(0, 1);
-    esp_rom_spiflash_fix_dummylen(1, 1);
-#endif
-
-//TODO: [ESP32C61] IDF-9276
-#if CONFIG_APP_BUILD_TYPE_PURE_RAM_APP
-    ESP_EARLY_LOGW(TAG, "ESP32C61 attention: analog i2c master clock enable skipped!!!");
-#else
-    ESP_LOGW(TAG, "ESP32C61 attention: analog i2c master clock enable skipped!!!");
-#endif
+    _regi2c_ctrl_ll_master_enable_clock(true); // keep ana i2c mst clock always enabled in bootloader
+    regi2c_ctrl_ll_master_configure_clock();
 }
 
 static inline void bootloader_ana_reset_config(void)
 {
-    //Enable super WDT reset.
-    bootloader_ana_super_wdt_reset_config(true);
-    //Enable BOD reset
-    bootloader_ana_bod_reset_config(true);
+    //Enable BOD reset (mode1)
+    brownout_ll_ana_reset_enable(true);
+    bootloader_power_glitch_reset_config(true);
 }
 
 esp_err_t bootloader_init(void)
 {
     esp_err_t ret = ESP_OK;
     bootloader_hardware_init();
-    // bootloader_ana_reset_config();   //TODO: [ESP32C61] IDF-9260
+    bootloader_ana_reset_config();
     bootloader_super_wdt_auto_feed();
 
 // In RAM_APP, memory will be initialized in `call_start_cpu0`
@@ -130,7 +117,7 @@ esp_err_t bootloader_init(void)
 
     // init eFuse virtual mode (read eFuses to RAM)
 #ifdef CONFIG_EFUSE_VIRTUAL
-    ESP_LOGW(TAG, "eFuse virtual mode is enabled. If Secure boot or Flash encryption is enabled then it does not provide any security. FOR TESTING ONLY!");
+    ESP_EARLY_LOGW(TAG, "eFuse virtual mode is enabled. If Secure boot or Flash encryption is enabled then it does not provide any security. FOR TESTING ONLY!");
 #ifndef CONFIG_EFUSE_VIRTUAL_KEEP_IN_FLASH
     esp_efuse_init_virtual_mode_in_ram();
 #endif

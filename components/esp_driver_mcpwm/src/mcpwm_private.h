@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2022-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2022-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -7,37 +7,56 @@
 #pragma once
 
 #include <stdint.h>
+#include <stdlib.h>
+#include <stdarg.h>
+#include <sys/cdefs.h>
+#include <sys/lock.h>
 #include "sdkconfig.h"
+#if CONFIG_MCPWM_ENABLE_DEBUG_LOG
+// The local log level must be defined before including esp_log.h
+// Set the maximum log level for this source file
+#define LOG_LOCAL_LEVEL ESP_LOG_DEBUG
+#endif
+#include "soc/soc_caps.h"
 #include "freertos/FreeRTOS.h"
 #include "esp_err.h"
+#include "esp_log.h"
+#include "esp_check.h"
 #include "esp_intr_alloc.h"
 #include "esp_heap_caps.h"
 #include "esp_pm.h"
-#include "soc/soc_caps.h"
+#include "soc/mcpwm_periph.h"
 #include "hal/mcpwm_hal.h"
+#include "hal/mcpwm_ll.h"
 #include "hal/mcpwm_types.h"
 #include "driver/mcpwm_types.h"
+#include "esp_private/sleep_retention.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-#if CONFIG_MCPWM_ISR_IRAM_SAFE || CONFIG_MCPWM_CTRL_FUNC_IN_IRAM
+#if CONFIG_MCPWM_OBJ_CACHE_SAFE
 #define MCPWM_MEM_ALLOC_CAPS      (MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)
 #else
 #define MCPWM_MEM_ALLOC_CAPS      MALLOC_CAP_DEFAULT
 #endif
 
-#if CONFIG_MCPWM_ISR_IRAM_SAFE
+#if CONFIG_MCPWM_ISR_CACHE_SAFE
 #define MCPWM_INTR_ALLOC_FLAG     (ESP_INTR_FLAG_SHARED | ESP_INTR_FLAG_INTRDISABLED | ESP_INTR_FLAG_IRAM)
 #else
 #define MCPWM_INTR_ALLOC_FLAG     (ESP_INTR_FLAG_SHARED | ESP_INTR_FLAG_INTRDISABLED)
 #endif
 
+// Use retention link only when the target supports sleep retention is enabled
+#define MCPWM_USE_RETENTION_LINK  (SOC_MCPWM_SUPPORT_SLEEP_RETENTION && CONFIG_PM_POWER_DOWN_PERIPHERAL_IN_LIGHT_SLEEP)
+
 #define MCPWM_ALLOW_INTR_PRIORITY_MASK ESP_INTR_FLAG_LOWMED
 
-#define MCPWM_GROUP_CLOCK_DEFAULT_PRESCALE 2
-#define MCPWM_PM_LOCK_NAME_LEN_MAX 16
+#define MCPWM_GROUP_CLOCK_DEFAULT_PRESCALE 1
+
+///!< Logging settings
+#define TAG "mcpwm"
 
 typedef struct mcpwm_group_t mcpwm_group_t;
 typedef struct mcpwm_timer_t mcpwm_timer_t;
@@ -63,16 +82,15 @@ struct mcpwm_group_t {
     portMUX_TYPE spinlock;   // group level spinlock
     uint32_t prescale;       // group prescale
     uint32_t resolution_hz;  // MCPWM group clock resolution: clock_src_hz / clock_prescale = resolution_hz
+#if CONFIG_PM_ENABLE
     esp_pm_lock_handle_t pm_lock; // power management lock
+#endif
     soc_module_clk_t clk_src; // peripheral source clock
     mcpwm_cap_timer_t *cap_timer; // mcpwm capture timers
     mcpwm_timer_t *timers[SOC_MCPWM_TIMERS_PER_GROUP]; // mcpwm timer array
     mcpwm_oper_t *operators[SOC_MCPWM_OPERATORS_PER_GROUP]; // mcpwm operator array
     mcpwm_gpio_fault_t *gpio_faults[SOC_MCPWM_GPIO_FAULTS_PER_GROUP]; // mcpwm fault detectors array
     mcpwm_gpio_sync_src_t *gpio_sync_srcs[SOC_MCPWM_GPIO_SYNCHROS_PER_GROUP];  // mcpwm gpio sync array
-#if CONFIG_PM_ENABLE
-    char pm_lock_name[MCPWM_PM_LOCK_NAME_LEN_MAX]; // pm lock name
-#endif
 };
 
 typedef enum {
@@ -237,7 +255,9 @@ struct mcpwm_cap_timer_t {
     portMUX_TYPE spinlock;  // spin lock, to prevent concurrently accessing capture timer level resources, including registers
     uint32_t resolution_hz; // resolution of capture timer
     mcpwm_cap_timer_fsm_t fsm;    // driver FSM
+#if CONFIG_PM_ENABLE
     esp_pm_lock_handle_t pm_lock; // power management lock
+#endif
     mcpwm_cap_channel_t *cap_channels[SOC_MCPWM_CAPTURE_CHANNELS_PER_TIMER]; // capture channel array
 };
 
@@ -250,9 +270,6 @@ struct mcpwm_cap_channel_t {
     intr_handle_t intr;               // Interrupt handle
     mcpwm_capture_event_cb_t on_cap;  // Callback function which would be invoked in capture interrupt routine
     void *user_data;                  // user data which would be passed to the capture callback
-    struct {
-        uint32_t reset_io_at_exit: 1; // Whether to reset the GPIO configuration when capture channel is deleted
-    } flags;
 };
 
 mcpwm_group_t *mcpwm_acquire_group_handle(int group_id);
@@ -261,6 +278,10 @@ esp_err_t mcpwm_check_intr_priority(mcpwm_group_t *group, int intr_priority);
 int mcpwm_get_intr_priority_flag(mcpwm_group_t *group);
 esp_err_t mcpwm_select_periph_clock(mcpwm_group_t *group, soc_module_clk_t clk_src);
 esp_err_t mcpwm_set_prescale(mcpwm_group_t *group, uint32_t expect_module_resolution_hz, uint32_t module_prescale_max, uint32_t *ret_module_prescale);
+
+#if MCPWM_USE_RETENTION_LINK
+void mcpwm_create_retention_module(mcpwm_group_t *group);
+#endif
 
 #ifdef __cplusplus
 }

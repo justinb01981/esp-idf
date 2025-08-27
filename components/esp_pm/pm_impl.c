@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2016-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2016-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -8,8 +8,10 @@
 #include <stdbool.h>
 #include <string.h>
 #include <stdint.h>
+#include <sys/lock.h>
 #include <sys/param.h>
 
+#include "sdkconfig.h"
 #include "esp_attr.h"
 #include "esp_err.h"
 #include "esp_pm.h"
@@ -18,12 +20,16 @@
 #include "esp_clk_tree.h"
 #include "soc/soc_caps.h"
 
+#include "esp_private/esp_sleep_internal.h"
 #include "esp_private/crosscore_int.h"
 #include "esp_private/periph_ctrl.h"
 
 #include "soc/rtc.h"
+#include "hal/clk_tree_ll.h"
 #include "hal/uart_ll.h"
 #include "hal/uart_types.h"
+#include "hal/mspi_ll.h"
+
 #include "driver/gpio.h"
 
 #include "freertos/FreeRTOS.h"
@@ -33,22 +39,19 @@
 #include "xtensa/core-macros.h"
 #endif
 
-#if SOC_SPI_MEM_SUPPORT_TIMING_TUNING
-#include "esp_private/mspi_timing_tuning.h"
-#endif
-
 #include "esp_private/pm_impl.h"
 #include "esp_private/pm_trace.h"
 #include "esp_private/esp_timer_private.h"
 #include "esp_private/esp_clk.h"
+#include "esp_private/esp_clk_tree_common.h"
 #include "esp_private/sleep_cpu.h"
 #include "esp_private/sleep_gpio.h"
 #include "esp_private/sleep_modem.h"
 #include "esp_private/uart_share_hw_ctrl.h"
+#include "esp_private/esp_clk_utils.h"
 #include "esp_sleep.h"
 #include "esp_memory_utils.h"
 
-#include "sdkconfig.h"
 
 #if SOC_PERIPH_CLK_CTRL_SHARED
 #define HP_UART_SRC_CLK_ATOMIC()       PERIPH_RCC_ATOMIC()
@@ -99,7 +102,11 @@
 #define REF_CLK_DIV_MIN 2
 #elif CONFIG_IDF_TARGET_ESP32H2
 #define REF_CLK_DIV_MIN 2
+#elif CONFIG_IDF_TARGET_ESP32H21
+#define REF_CLK_DIV_MIN 2
 #elif CONFIG_IDF_TARGET_ESP32P4
+#define REF_CLK_DIV_MIN 2
+#elif CONFIG_IDF_TARGET_ESP32H4
 #define REF_CLK_DIV_MIN 2
 #endif
 
@@ -108,6 +115,9 @@
 #endif
 
 static portMUX_TYPE s_switch_lock = portMUX_INITIALIZER_UNLOCKED;
+static portMUX_TYPE s_cpu_freq_switch_lock[CONFIG_FREERTOS_NUMBER_OF_CORES] = {
+    [0 ... (CONFIG_FREERTOS_NUMBER_OF_CORES - 1)] = portMUX_INITIALIZER_UNLOCKED
+};
 /* The following state variables are protected using s_switch_lock: */
 /* Current sleep mode; When switching, contains old mode until switch is complete */
 static pm_mode_t s_mode = PM_MODE_CPU_MAX;
@@ -367,19 +377,19 @@ static void IRAM_ATTR esp_pm_execute_exit_sleep_callbacks(int64_t sleep_time_us)
 }
 #endif
 
-static esp_err_t esp_pm_sleep_configure(const void *vconfig)
+static esp_err_t esp_pm_sleep_configure(const esp_pm_config_t *config)
 {
     esp_err_t err = ESP_OK;
-    const esp_pm_config_t* config = (const esp_pm_config_t*) vconfig;
 
-#if ESP_SLEEP_POWER_DOWN_CPU
+#if ESP_SLEEP_POWER_DOWN_CPU && CONFIG_SOC_LIGHT_SLEEP_SUPPORTED
     err = sleep_cpu_configure(config->light_sleep_enable);
     if (err != ESP_OK) {
         return err;
     }
 #endif
-
+#if CONFIG_SOC_LIGHT_SLEEP_SUPPORTED
     err = sleep_modem_configure(config->max_freq_mhz, config->min_freq_mhz, config->light_sleep_enable);
+#endif
     return err;
 }
 
@@ -466,6 +476,17 @@ esp_err_t esp_pm_configure(const void* vconfig)
     res = rtc_clk_cpu_freq_mhz_to_config(min_freq_mhz, &s_cpu_freq_by_mode[PM_MODE_APB_MIN]);
     assert(res);
     s_cpu_freq_by_mode[PM_MODE_LIGHT_SLEEP] = s_cpu_freq_by_mode[PM_MODE_APB_MIN];
+
+    if (config->light_sleep_enable) {
+        // Enable the wakeup source here because the `esp_sleep_disable_wakeup_source` in the `else`
+        // branch must be called if corresponding wakeup source is already enabled.
+        esp_sleep_enable_timer_wakeup(0);
+        esp_sleep_overhead_out_time_refresh();
+    } else if (s_light_sleep_en) {
+        // Since auto light-sleep will enable the timer wakeup source, to avoid affecting subsequent possible
+        // deepsleep requests, disable the timer wakeup source here.
+        esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_TIMER);
+    }
     s_light_sleep_en = config->light_sleep_enable;
     s_config_changed = true;
     portEXIT_CRITICAL(&s_switch_lock);
@@ -551,13 +572,6 @@ void IRAM_ATTR esp_pm_impl_switch_mode(pm_mode_t mode,
  */
 static void IRAM_ATTR on_freq_update(uint32_t old_ticks_per_us, uint32_t ticks_per_us)
 {
-    uint32_t old_apb_ticks_per_us = MIN(old_ticks_per_us, 80);
-    uint32_t apb_ticks_per_us = MIN(ticks_per_us, 80);
-    /* Update APB frequency value used by the timer */
-    if (old_apb_ticks_per_us != apb_ticks_per_us) {
-        esp_timer_private_update_apb_freq(apb_ticks_per_us);
-    }
-
 #ifdef CONFIG_FREERTOS_SYSTICK_USES_CCOUNT
 #ifdef XT_RTOS_TIMER_INT
     /* Calculate new tick divisor */
@@ -615,6 +629,7 @@ static void IRAM_ATTR do_switch(pm_mode_t new_mode)
         }
 #ifdef CONFIG_FREERTOS_SYSTICK_USES_CCOUNT
         if (s_need_update_ccompare[core_id]) {
+            update_ccompare();
             s_need_update_ccompare[core_id] = false;
         }
 #endif
@@ -627,6 +642,7 @@ static void IRAM_ATTR do_switch(pm_mode_t new_mode)
     s_is_switching = true;
     bool config_changed = s_config_changed;
     s_config_changed = false;
+    portENTER_CRITICAL_ISR(&s_cpu_freq_switch_lock[core_id]);
     portEXIT_CRITICAL_ISR(&s_switch_lock);
 
     rtc_cpu_freq_config_t new_config = s_cpu_freq_by_mode[new_mode];
@@ -648,16 +664,15 @@ static void IRAM_ATTR do_switch(pm_mode_t new_mode)
         if (switch_down) {
             on_freq_update(old_ticks_per_us, new_ticks_per_us);
         }
-#if SOC_SPI_MEM_SUPPORT_TIMING_TUNING
-    if (new_config.source == SOC_CPU_CLK_SRC_PLL) {
+#if !CONFIG_APP_BUILD_TYPE_PURE_RAM_APP
+        esp_clk_utils_mspi_speed_mode_sync_before_cpu_freq_switching(new_config.source_freq_mhz, new_config.freq_mhz);
+#endif
+        extern portMUX_TYPE s_time_update_lock;
+        portENTER_CRITICAL_SAFE(&s_time_update_lock);
         rtc_clk_cpu_freq_set_config_fast(&new_config);
-        mspi_timing_change_speed_mode_cache_safe(false);
-    } else {
-        mspi_timing_change_speed_mode_cache_safe(true);
-        rtc_clk_cpu_freq_set_config_fast(&new_config);
-    }
-#else
-    rtc_clk_cpu_freq_set_config_fast(&new_config);
+        portEXIT_CRITICAL_SAFE(&s_time_update_lock);
+#if !CONFIG_APP_BUILD_TYPE_PURE_RAM_APP
+        esp_clk_utils_mspi_speed_mode_sync_after_cpu_freq_switching(new_config.source_freq_mhz, new_config.freq_mhz);
 #endif
         if (!switch_down) {
             on_freq_update(old_ticks_per_us, new_ticks_per_us);
@@ -666,6 +681,7 @@ static void IRAM_ATTR do_switch(pm_mode_t new_mode)
     }
 
     portENTER_CRITICAL_ISR(&s_switch_lock);
+    portEXIT_CRITICAL_ISR(&s_cpu_freq_switch_lock[core_id]);
     s_mode = new_mode;
     s_is_switching = false;
     portEXIT_CRITICAL_ISR(&s_switch_lock);
@@ -785,7 +801,7 @@ static inline void IRAM_ATTR other_core_should_skip_light_sleep(int core_id)
 #endif
 }
 
-void IRAM_ATTR vApplicationSleep( TickType_t xExpectedIdleTime )
+void vApplicationSleep( TickType_t xExpectedIdleTime )
 {
     portENTER_CRITICAL(&s_switch_lock);
     int core_id = xPortGetCoreID();
@@ -804,10 +820,6 @@ void IRAM_ATTR vApplicationSleep( TickType_t xExpectedIdleTime )
 #endif
         if (sleep_time_us >= configEXPECTED_IDLE_TIME_BEFORE_SLEEP * portTICK_PERIOD_MS * 1000LL) {
             esp_sleep_enable_timer_wakeup(sleep_time_us - LIGHT_SLEEP_EARLY_WAKEUP_US);
-#if CONFIG_PM_TRACE && SOC_PM_SUPPORT_RTC_PERIPH_PD
-            /* to force tracing GPIOs to keep state */
-            esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_ON);
-#endif
             /* Enter sleep */
             ESP_PM_TRACE_ENTER(SLEEP, core_id);
             int64_t sleep_start = esp_timer_get_time();
@@ -916,12 +928,16 @@ void esp_pm_impl_init(void)
     while (!uart_ll_is_tx_idle(UART_LL_GET_HW(CONFIG_ESP_CONSOLE_UART_NUM))) {
         ;
     }
+
+    ESP_ERROR_CHECK(esp_clk_tree_enable_src((soc_module_clk_t)clk_source, true));
     /* When DFS is enabled, override system setting and use REFTICK as UART clock source */
     HP_UART_SRC_CLK_ATOMIC() {
         uart_ll_set_sclk(UART_LL_GET_HW(CONFIG_ESP_CONSOLE_UART_NUM), (soc_module_clk_t)clk_source);
     }
     uint32_t sclk_freq;
-    esp_err_t err = esp_clk_tree_src_get_freq_hz((soc_module_clk_t)clk_source, ESP_CLK_TREE_SRC_FREQ_PRECISION_CACHED, &sclk_freq);
+
+    // Return value unused if asserts are disabled
+    esp_err_t __attribute__((unused)) err = esp_clk_tree_src_get_freq_hz((soc_module_clk_t)clk_source, ESP_CLK_TREE_SRC_FREQ_PRECISION_CACHED, &sclk_freq);
     assert(err == ESP_OK);
     HP_UART_SRC_CLK_ATOMIC() {
         uart_ll_set_baudrate(UART_LL_GET_HW(CONFIG_ESP_CONSOLE_UART_NUM), CONFIG_ESP_CONSOLE_UART_BAUDRATE, sclk_freq);

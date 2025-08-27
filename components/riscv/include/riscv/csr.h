@@ -136,6 +136,24 @@ extern "C" {
     RV_CLEAR_CSR((CSR_PMPCFG0) + (ENTRY)/4, (0xFF) << (ENTRY%4)*8); \
     } while(0)
 
+/*Reset all permissions of a particular PMACFG entry*/
+#define PMA_ENTRY_CFG_RESET(ENTRY) do {\
+    RV_WRITE_CSR((CSR_PMACFG0) + (ENTRY) , 0); \
+    RV_WRITE_CSR((CSR_PMAADDR0) + (ENTRY) , 0); \
+    } while(0)
+
+/* Reset and set the configuration of a particular TOR PMACFG entry */
+#define PMA_RESET_AND_ENTRY_SET_TOR(ENTRY, ADDR, CFG) do {\
+    PMA_ENTRY_CFG_RESET(ENTRY); \
+    PMA_ENTRY_SET_TOR(ENTRY, ADDR, CFG); \
+    } while(0)
+
+/* Reset and set the configuration of a particular NAPOT PMACFG entry */
+#define PMA_RESET_AND_ENTRY_SET_NAPOT(ENTRY, ADDR, SIZE, CFG) do {\
+    PMA_ENTRY_CFG_RESET(ENTRY); \
+    PMA_ENTRY_SET_NAPOT(ENTRY, ADDR, SIZE, CFG); \
+    } while(0)
+
 /********************************************************
    Trigger Module register fields (Debug specification)
  ********************************************************/
@@ -168,6 +186,13 @@ extern "C" {
 #define STPC0       0xBF0
 #define STPC1       0xBF1
 #define STPC2       0xBF2
+
+/* Espressif's custom CSR for the current privilege mode */
+#if CONFIG_IDF_TARGET_ESP32C6 || CONFIG_IDF_TARGET_ESP32H2
+#define CSR_PRV_MODE   0xC10
+#elif CONFIG_IDF_TARGET_ESP32C5 || CONFIG_IDF_TARGET_ESP32C61 || CONFIG_IDF_TARGET_ESP32P4
+#define CSR_PRV_MODE   0x810
+#endif
 
 /* RISC-V CSR macros
  * Adapted from https://github.com/michaeljclark/riscv-probe/blob/master/libfemto/include/arch/riscv/machine.h

@@ -35,7 +35,7 @@
 工具安装目录
 ----------------------------
 
-``IDF_TOOLS_PATH`` 环境变量指定下载及安装工具的位置。若未设置该变量，Linux 和 macOS 系统的默认下载安装位置为 ``HOME/.espressif``，Windows 系统的默认下载安装位置为 ``%USER_PROFILE%\.espressif``。
+``IDF_TOOLS_PATH`` 环境变量指定下载及安装工具的位置。若未设置该变量，Linux 和 macOS 系统的默认下载安装位置为 ``$HOME/.espressif``，Windows 系统的默认下载安装位置为 ``%USER_PROFILE%\.espressif``。
 
 在 ``IDF_TOOLS_PATH`` 目录下，工具安装脚本会创建以下子目录和文件：
 
@@ -43,6 +43,8 @@
 - ``tools`` — 工具解压缩位置。工具会解压缩到子目录 ``tools/TOOL_NAME/VERSION/`` 中，该操作支持同时安装不同版本的工具。
 - ``idf-env.json`` — “目标 (target)”和“功能 (feature)”等用户安装选项均存储在此文件中。“目标”为选择需要安装和保持更新的工具的芯片目标；“功能”则决定应安装哪些 Python 软件包。有关用户安装选项的详情，请参阅下文。
 - ``python_env`` —  与工具无关；虚拟 Python 环境安装在其子目录中。注意，设置 ``IDF_PYTHON_ENV_PATH`` 环境变量可以将 Python 环境目录放置到其他位置。
+
+  - ``idf_version.txt`` — 位于 ``python_env`` 目录下每个特定 Python 环境的子目录中，记录了该 Python 环境所对应的 ESP-IDF 版本。版本信息的存储格式如 ``5.3`` ，表示 ESP-IDF 版本 ``v5.3``。
 - ``espidf.constraints.*.txt`` — 每个 ESP-IDF 版本都有的约束文件，包含 Python 包版本要求。
 
 GitHub 资源镜像
@@ -58,6 +60,7 @@ GitHub 资源镜像
 
 .. note:: 目前，乐鑫下载服务器不会镜像 GitHub 上的所有内容，只镜像部分发布版本的附件资源文件及源文件。
 
+.. _idf-tools-py:
 
 ``idf_tools.py`` 脚本
 ---------------------------------------
@@ -117,7 +120,7 @@ ESP-IDF 随附的 :idf_file:`tools/idf_tools.py` 脚本具备以下功能：
 
 * ``check``：检查每个工具是否在系统路径和 ``IDF_TOOLS_PATH`` 中可用。
 
-* ``install-python-env``：在 ``${IDF_TOOLS_PATH}/python_env`` 目录或直接在 ``IDF_PYTHON_ENV_PATH`` 环境变量设置的目录中创建 Python 虚拟环境，并在其中安装所需的 Python 软件包。
+* ``install-python-env``：在 ``${IDF_TOOLS_PATH}/python_env`` 目录或直接在 ``IDF_PYTHON_ENV_PATH`` 环境变量设置的目录中创建 Python 虚拟环境，并在其中安装所需的 Python 软件包。若虚拟环境已存在，系统将根据 ``espidf.constraints.*.txt`` 文件中的约束条件，将环境内的软件包更新至最新兼容版本。
 
   * 参数 ``--features`` 为可选项，用于指定要添加或删除的功能列表，功能之间用逗号分隔。
 
@@ -184,9 +187,21 @@ ESP-IDF 的根目录中提供了针对不同 shell 的用户安装脚本，包�
 
     在 Bash 中修改 shell 环境时，必须使用 ``. ./export.sh`` 命令加载 ``export.sh``，注意添加前面的点和空格。
 
-    ``export.sh`` 可以在除了 Bash 外的其他 shell（如 zsh）中使用。但在这种情况下，必须在运行脚本前设置 ``IDF_PATH`` 环境变量。在 Bash 中使用时，脚本会从当前目录猜测 ``IDF_PATH`` 的值。
+    ``export.sh`` 可以在多种 shell 中使用，例如 bash、sh、zsh、dash 等。在使用 bash 或 zsh 时，可以在任何路径中直接运行（例如 ``. ./<<some_path>>/export.sh``），这是因为它能够自动检测到 ``IDF_PATH``。若使用其它 shell, 则必须在 ESP-IDF 路径中运行 (``. ./export.sh``)，才能正确找到 ``IDF_PATH``。
 
-除了调用 ``idf_tools.py``，这些脚本还会列出已经添加到 ``PATH`` 的目录。
+activate.py
+~~~~~~~~~~~
+
+环境设置由底层的 ``tools/activate.py`` 脚本处理。该脚本用于执行所有必要的准备和检查，并生成一个临时文件，之后供导出脚本使用。
+
+``activate.py`` 也可以作为独立命令运行。执行该脚本时，会启动一个新的子 shell 并加载 ESP-IDF 环境。使用 ``exit`` 命令可以退出子 shell，并退回至最初执行该脚本的父 shell。
+
+此外，``activate.py`` 脚本的具体行为可以通过各种选项进行修改，例如使用 ``--shell`` 选项可以生成特定的 ESP-IDF shell。若想了解更多有关可用选项的详细信息，请使用 ``activate.py --help`` 命令。
+
+.. note::
+
+    在 Windows 系统中使用 ``activate.py`` 脚本时，应执行 ``python activate.py`` 命令。这可以确保脚本在当前终端窗口中运行，而不是启动一个立即关闭的新窗口。
+
 
 其他安装方法
 --------------------------
@@ -201,6 +216,8 @@ ESP-IDF 的根目录中提供了针对不同 shell 的用户安装脚本，包�
 -------------------
 
 推荐用户使用上述方法安装 ESP-IDF 工具，但也可以选择其他方式来构建 ESP-IDF 应用程序。自定义安装时，用户需将所有必要的工具都安装在某个位置，并在 ``PATH`` 中定义，以保证 ESP-IDF 构建系统可用。
+
+在进行自定义安装时，确保设置 ``ESP_IDF_VERSION`` 环境变量以反映当前的 ESP-IDF 版本，例如，使用 ``5.3`` 的格式表示 ESP-IDF 版本 ``v5.3``。该变量是某些组件进行特定的版本配置时所必需的，通常在标准安装过程中由 ``idf_tools.py export`` 脚本设置。
 
 .. _idf-tools-uninstall:
 

@@ -10,7 +10,6 @@
 #include <stdlib.h>
 #include "esp32c6/rom/ets_sys.h"
 #include "esp32c6/rom/rtc.h"
-#include "esp32c6/rom/uart.h"
 #include "soc/rtc.h"
 #include "esp_cpu.h"
 #include "regi2c_ctrl.h"
@@ -18,7 +17,7 @@
 #include "soc/regi2c_dig_reg.h"
 #include "esp_hw_log.h"
 #include "sdkconfig.h"
-#include "esp_rom_uart.h"
+#include "esp_rom_serial_output.h"
 #include "esp_private/esp_pmu.h"
 #include "hal/clk_tree_ll.h"
 #include "hal/pmu_ll.h"
@@ -83,8 +82,6 @@ void rtc_clk_init(rtc_clk_config_t cfg)
     SET_PERI_REG_BITS(PMU_HP_ACTIVE_HP_REGULATOR0_REG, PMU_HP_ACTIVE_HP_REGULATOR_DBIAS, hp_cali_dbias, PMU_HP_ACTIVE_HP_REGULATOR_DBIAS_S);
     SET_PERI_REG_BITS(PMU_HP_MODEM_HP_REGULATOR0_REG, PMU_HP_MODEM_HP_REGULATOR_DBIAS, hp_cali_dbias, PMU_HP_MODEM_HP_REGULATOR_DBIAS_S);
     SET_PERI_REG_BITS(PMU_HP_SLEEP_LP_REGULATOR0_REG, PMU_HP_SLEEP_LP_REGULATOR_DBIAS, lp_cali_dbias, PMU_HP_SLEEP_LP_REGULATOR_DBIAS_S);
-
-    clk_ll_rc_fast_tick_conf();
 
     soc_xtal_freq_t xtal_freq = cfg.xtal_freq;
     esp_rom_output_tx_wait_idle(0);

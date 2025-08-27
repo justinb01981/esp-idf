@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2020-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2020-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -44,9 +44,10 @@ extern "C" {
  * @brief CSR to set the interrupt jump table address is MTVT.
  */
 #define MTVT_CSR    0x307
+#define UTVT_CSR    0x007
 
 
-#if CONFIG_IDF_TARGET_ESP32P4 || CONFIG_IDF_TARGET_ESP32C5_BETA3_VERSION
+#if CONFIG_IDF_TARGET_ESP32P4 && CONFIG_ESP32P4_SELECTS_REV_LESS_V2
 
 /**
  * The ESP32-P4 and the beta version of the ESP32-C5 implement a non-standard version of the CLIC:
@@ -56,12 +57,14 @@ extern "C" {
 #define INTTHRESH_STANDARD  0
 #define MINTSTATUS_CSR      0x346
 
-#elif CONFIG_IDF_TARGET_ESP32C5 || CONFIG_IDF_TARGET_ESP32C61
+#elif CONFIG_IDF_TARGET_ESP32C5 || CONFIG_IDF_TARGET_ESP32C61 || CONFIG_IDF_TARGET_ESP32H4 || !CONFIG_ESP32P4_SELECTS_REV_LESS_V2
 
-/* The ESP32-C5 (MP) and C61 use the standard CLIC specification, for example, it defines the mintthresh CSR */
+/* The ESP32-C5 (MP), C61, H4 and P4 (since REV2) use the standard CLIC specification, for example, it defines the mintthresh CSR */
 #define INTTHRESH_STANDARD  1
 #define MINTSTATUS_CSR      0xFB1
+#define UINTSTATUS_CSR      0xCB1
 #define MINTTHRESH_CSR      0x347
+#define UINTTHRESH_CSR      0x047
 
 #else
     #error "Check the implementation of the CLIC on this target."
@@ -79,20 +82,32 @@ extern "C" {
 /* Align the level to the left, and put 1 in the lowest bits */
 #define NLBITS_TO_BYTE(level)   (((level) << NLBITS_SHIFT) | ((1 << NLBITS_SHIFT) - 1))
 
+/**
+ * @brief In the minstatus CSR, the `mil` field is present from bit 24 to bit 31 (included)
+ */
+#define MINTSTATUS_MIL_S        24
+#define MINTSTATUS_MIL_V        0xFF
+
 
 #if INTTHRESH_STANDARD
-/* Helper macro to translate absolute interrupt level to CLIC interrupt threshold bits in the mintthresh reg */
-#define CLIC_INT_THRESH(intlevel)       (NLBITS_TO_BYTE(intlevel))
+    /* Helper macro to translate absolute interrupt level to CLIC interrupt threshold bits in the mintthresh reg */
+    #define CLIC_INT_THRESH(intlevel)       (NLBITS_TO_BYTE(intlevel))
 
-/* Helper macro to translate a CLIC interrupt threshold bits to an absolute interrupt level */
-#define CLIC_THRESH_TO_INT(intlevel)    (BYTE_TO_NLBITS((intlevel)))
+    /* Helper macro to translate a CLIC interrupt threshold bits to an absolute interrupt level */
+    #define CLIC_THRESH_TO_INT(intlevel)    (BYTE_TO_NLBITS((intlevel)))
+
+    /* Helper macro to translate a CLIC status threshold bits to an absolute interrupt level */
+    #define CLIC_STATUS_TO_INT(status)      (BYTE_TO_NLBITS((status >> MINTSTATUS_MIL_S) & MINTSTATUS_MIL_V))
 #else
-/* For the non-standard intthresh implementation the threshold is stored in the upper 8 bits of CLIC_CPU_INT_THRESH reg */
-/* Helper macro to translate absolute interrupt level to CLIC interrupt threshold bits in the mintthresh reg */
-#define CLIC_INT_THRESH(intlevel)       (NLBITS_TO_BYTE(intlevel) << CLIC_CPU_INT_THRESH_S)
+    /* For the non-standard intthresh implementation the threshold is stored in the upper 8 bits of CLIC_CPU_INT_THRESH reg */
+    /* Helper macro to translate absolute interrupt level to CLIC interrupt threshold bits in the mintthresh reg */
+    #define CLIC_INT_THRESH(intlevel)       (NLBITS_TO_BYTE(intlevel) << CLIC_CPU_INT_THRESH_S)
 
-/* Helper macro to translate a CLIC interrupt threshold bits to an absolute interrupt level */
-#define CLIC_THRESH_TO_INT(intlevel)    (BYTE_TO_NLBITS((intlevel >> CLIC_CPU_INT_THRESH_S) & CLIC_CPU_INT_THRESH_V))
+    /* Helper macro to translate a CLIC interrupt threshold bits to an absolute interrupt level */
+    #define CLIC_THRESH_TO_INT(intlevel)    (BYTE_TO_NLBITS((intlevel >> CLIC_CPU_INT_THRESH_S) & CLIC_CPU_INT_THRESH_V))
+
+    /* Helper macro to translate a CLIC status threshold bits to an absolute interrupt level */
+    #define CLIC_STATUS_TO_INT(status)      (BYTE_TO_NLBITS((status >> MINTSTATUS_MIL_S) & MINTSTATUS_MIL_V))
 #endif //INTTHRESH_STANDARD
 
 /* Helper macro to set interrupt level RVHAL_EXCM_LEVEL. Used during critical sections */
@@ -102,7 +117,11 @@ extern "C" {
 #define RVHAL_INTR_ENABLE_THRESH_CLIC   (CLIC_INT_THRESH(RVHAL_INTR_ENABLE_THRESH))
 
 
-
+#if CONFIG_SECURE_ENABLE_TEE
+#define IS_PRV_M_MODE()  (RV_READ_CSR(CSR_PRV_MODE) == PRV_M)
+#else
+#define IS_PRV_M_MODE()  (1UL)
+#endif
 
 
 FORCE_INLINE_ATTR void assert_valid_rv_int_num(int rv_int_num)
@@ -120,7 +139,12 @@ FORCE_INLINE_ATTR void assert_valid_rv_int_num(int rv_int_num)
 FORCE_INLINE_ATTR uint32_t rv_utils_get_interrupt_threshold(void)
 {
 #if INTTHRESH_STANDARD
-    uint32_t threshold = RV_READ_CSR(MINTTHRESH_CSR);
+    uint32_t threshold;
+    if (IS_PRV_M_MODE()) {
+        threshold = RV_READ_CSR(MINTTHRESH_CSR);
+    } else {
+        threshold = RV_READ_CSR(UINTTHRESH_CSR);
+    }
 #else
     uint32_t threshold = REG_READ(CLIC_INT_THRESH_REG);
 #endif
@@ -137,11 +161,42 @@ FORCE_INLINE_ATTR void rv_utils_set_mtvt(uint32_t mtvt_val)
 }
 
 /**
+ * @brief Set the XTVT CSR value (based on the current privilege mode),
+ * used as a base address for the interrupt jump table
+ */
+FORCE_INLINE_ATTR void rv_utils_set_xtvt(uint32_t xtvt_val)
+{
+    if (IS_PRV_M_MODE()) {
+        RV_WRITE_CSR(MTVT_CSR, xtvt_val);
+    } else {
+        RV_WRITE_CSR(UTVT_CSR, xtvt_val);
+    }
+}
+
+#if SOC_CPU_SUPPORT_WFE
+/**
+ * @brief Set the MEXSTATUS_WFFEN value, used to enable/disable wait for event mode.
+ */
+FORCE_INLINE_ATTR void rv_utils_wfe_mode_enable(bool en)
+{
+    if (en) {
+        RV_SET_CSR(MEXSTATUS, MEXSTATUS_WFFEN);
+    } else {
+        RV_CLEAR_CSR(MEXSTATUS, MEXSTATUS_WFFEN);
+    }
+}
+#endif
+
+/**
  * @brief Get the current CPU raw interrupt level
  */
 FORCE_INLINE_ATTR uint32_t rv_utils_get_interrupt_level_regval(void)
 {
-    return RV_READ_CSR(MINTSTATUS_CSR);
+    if (IS_PRV_M_MODE()) {
+        return RV_READ_CSR(MINTSTATUS_CSR);
+    } else {
+        return RV_READ_CSR(UINTSTATUS_CSR);
+    }
 }
 
 /**
@@ -149,9 +204,14 @@ FORCE_INLINE_ATTR uint32_t rv_utils_get_interrupt_level_regval(void)
  */
 FORCE_INLINE_ATTR uint32_t rv_utils_get_interrupt_level(void)
 {
-    const uint32_t mintstatus = RV_READ_CSR(MINTSTATUS_CSR);
+    uint32_t xintstatus;
+    if (IS_PRV_M_MODE()) {
+        xintstatus = RV_READ_CSR(MINTSTATUS_CSR);
+    } else {
+        xintstatus = RV_READ_CSR(UINTSTATUS_CSR);
+    }
     /* Extract the level from this field */
-    return CLIC_THRESH_TO_INT(mintstatus);
+    return CLIC_STATUS_TO_INT(xintstatus);
 }
 
 /**
@@ -164,7 +224,11 @@ FORCE_INLINE_ATTR uint32_t rv_utils_get_interrupt_level(void)
 FORCE_INLINE_ATTR void rv_utils_restore_intlevel_regval(uint32_t restoreval)
 {
 #if INTTHRESH_STANDARD
-    RV_WRITE_CSR(MINTTHRESH_CSR, restoreval);
+    if (IS_PRV_M_MODE()) {
+        RV_WRITE_CSR(MINTTHRESH_CSR, restoreval);
+    } else {
+        RV_WRITE_CSR(UINTTHRESH_CSR, restoreval);
+    }
 #else
     REG_WRITE(CLIC_INT_THRESH_REG, restoreval);
     /**
@@ -198,7 +262,11 @@ FORCE_INLINE_ATTR void rv_utils_restore_intlevel(uint32_t restoreval)
 FORCE_INLINE_ATTR uint32_t rv_utils_set_intlevel_regval(uint32_t intlevel)
 {
 #if INTTHRESH_STANDARD
-    return RV_SWAP_CSR(MINTTHRESH_CSR, intlevel);
+    if (IS_PRV_M_MODE()) {
+        return RV_SWAP_CSR(MINTTHRESH_CSR, intlevel);
+    } else {
+        return RV_SWAP_CSR(UINTTHRESH_CSR, intlevel);
+    }
 #else // !INTTHRESH_STANDARD
     uint32_t old_mstatus = RV_CLEAR_CSR(mstatus, MSTATUS_MIE);
     uint32_t old_thresh = REG_READ(CLIC_INT_THRESH_REG);

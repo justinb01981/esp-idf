@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2019-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2019-2024 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -14,9 +14,7 @@
 #include "soc/rtc_io_channel.h"
 #endif
 
-#if SOC_ADC_RTC_CTRL_SUPPORTED
-#include "soc/sens_struct.h"
-#endif
+#include "soc/io_mux_reg.h"
 
 #ifdef __cplusplus
 extern "C"
@@ -65,7 +63,7 @@ extern const rtc_io_desc_t rtc_io_desc[SOC_RTCIO_PIN_COUNT];
  * This is an internal function of the driver, and is not usually useful
  * for external use.
  */
-extern const int rtc_io_num_map[SOC_GPIO_PIN_COUNT];
+extern const int8_t rtc_io_num_map[SOC_GPIO_PIN_COUNT];
 #endif //SOC_RTCIO_PIN_COUNT > 0
 
 #ifdef __cplusplus

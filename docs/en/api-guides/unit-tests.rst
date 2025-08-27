@@ -249,6 +249,13 @@ Similar to multi-device test cases, multi-stage test cases will also print sub-m
 
 First time you execute this case, input ``1`` to run first stage (trigger deepsleep). After DUT is rebooted and able to run test cases, select this case again and input ``2`` to run the second stage. The case only passes if the last stage passes and all previous stages trigger reset.
 
+Project Structure and Automated Workflows
+-----------------------------------------
+
+A good starting point on how to structure and test an application is the `Github ESP Test Template <https://github.com/espressif/gh-esp-test-template>`_ project. It shows how to set up and run tests both in simulation and on real hardware, using GitHub CI workflows.
+
+For more complex projects, tests would typically be split into several test-apps, testing each component separately. In these cases, you can use the tool `IDF Build Apps <https://github.com/espressif/idf-build-apps>`_ to automate finding and building all test-apps in your project.
+
 
 .. _cache-compensated-timer:
 
@@ -368,3 +375,8 @@ The unit test needs to inform the cmake build system to mock dependent component
 Both methods will override existing components in ESP-IDF with the component mock. The latter is particularly convenient if you use component mocks that are already supplied by IDF.
 
 Users can refer to the ``esp_event`` host-based unit test and its :component_file:`esp_event/host_test/esp_event_unit_test/CMakeLists.txt` as an example of a component mock.
+
+Application Examples
+--------------------
+
+:example:`system/unit_test` demonstrates how to use the Unity library to add unit tests to custom components in an {IDF_TARGET_NAME} development environment, showcasing features such as assertions, test registration, and the use of UNITY_BEGIN() and UNITY_END() macros.

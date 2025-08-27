@@ -35,16 +35,10 @@ static void scan_done_event_handler(void *arg, ETS_STATUS status)
         wpa_s->type &= ~(1 << WLAN_FC_STYPE_BEACON) & ~(1 << WLAN_FC_STYPE_PROBE_RESP);
         esp_wifi_register_mgmt_frame_internal(wpa_s->type, wpa_s->subtype);
     }
-#ifdef CONFIG_SUPPLICANT_TASK
-    if (esp_supplicant_post_evt(SIG_SUPPLICANT_SCAN_DONE, 0) != 0) {
-        wpa_printf(MSG_ERROR, "Posting of scan done failed!");
-    }
-#else
     esp_supplicant_handle_scan_done_evt();
-#endif /*CONFIG_SUPPLICANT_TASK*/
 }
 
-#if defined(CONFIG_IEEE80211KV)
+#if defined(CONFIG_WNM)
 static void handle_wnm_scan_done(struct wpa_supplicant *wpa_s)
 {
     struct wpa_bss *bss = wpa_bss_get_next_bss(wpa_s, wpa_s->current_bss);
@@ -77,11 +71,14 @@ void esp_supplicant_handle_scan_done_evt(void)
     struct wpa_supplicant *wpa_s = &g_wpa_supp;
 
     wpa_printf(MSG_INFO, "scan done received");
-#if defined(CONFIG_IEEE80211KV)
+#if defined(CONFIG_RRM)
     /* Check which module started this, call the respective function */
     if (wpa_s->scan_reason == REASON_RRM_BEACON_REPORT) {
         wpas_beacon_rep_scan_process(wpa_s, wpa_s->scan_start_tsf);
-    } else if (wpa_s->scan_reason == REASON_WNM_BSS_TRANS_REQ) {
+    }
+#endif
+#if defined(CONFIG_WNM)
+    if (wpa_s->scan_reason == REASON_WNM_BSS_TRANS_REQ) {
         handle_wnm_scan_done(wpa_s);
     }
 #endif
@@ -167,22 +164,31 @@ int esp_handle_beacon_probe(u8 type, u8 *frame, size_t len, u8 *sender,
 
     return 0;
 }
+
 #ifdef CONFIG_WNM
-void get_scan_channel_bitmap(struct wpa_supplicant *wpa_s, wifi_scan_config_t *params)
+static void get_scan_channel_bitmap(struct wpa_supplicant *wpa_s, wifi_scan_config_t *params)
 {
+    const int MAX_2GHZ_CHANNEL = 14;
+
     if (!wpa_s->wnm_num_neighbor_report) {
         wpa_printf(MSG_DEBUG, "No Neighbor Report to gather scan channel list");
         return;
     }
     params->channel_bitmap.ghz_2_channels = 0;
+    params->channel_bitmap.ghz_5_channels = 0;
 
     for (int i = 0; i < wpa_s->wnm_num_neighbor_report; i++) {
-        struct neighbor_report *nei;
-        nei = &wpa_s->wnm_neighbor_report_elements[i];
-        params->channel_bitmap.ghz_2_channels |= (1 << nei->channel_number);
+        struct neighbor_report *nei = &wpa_s->wnm_neighbor_report_elements[i];
+
+        if (nei->channel_number <= MAX_2GHZ_CHANNEL) {
+            params->channel_bitmap.ghz_2_channels |= CHANNEL_TO_BIT(nei->channel_number);
+        } else {
+            params->channel_bitmap.ghz_5_channels |= CHANNEL_TO_BIT(nei->channel_number);
+        }
     }
 }
 #endif /*CONFIG_WNM*/
+
 static int issue_scan(struct wpa_supplicant *wpa_s,
                       struct wpa_driver_scan_params *scan_params)
 {

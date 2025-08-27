@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2023-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2023-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Unlicense OR CC0-1.0
  */
@@ -11,18 +11,16 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_err.h"
-#include "soc/gpio_periph.h"
 #include "soc/clk_tree_defs.h"
 #include "soc/soc_caps.h"
-#include "hal/gpio_hal.h"
 #include "hal/uart_ll.h"
 #include "esp_private/periph_ctrl.h"
-#include "driver/gpio.h"
 #include "driver/i2c_master.h"
-#include "esp_rom_gpio.h"
+#include "driver/i2c_slave.h"
 #include "esp_log.h"
 #include "test_utils.h"
 #include "test_board.h"
+#include "driver/uart.h"
 
 static const char TAG[] = "test-i2c";
 
@@ -141,7 +139,89 @@ TEST_CASE("I2C device add & remove check", "[i2c]")
 
     i2c_master_bus_rm_device(dev_1);
     i2c_master_bus_rm_device(dev_2);
+
+    TEST_ESP_ERR(ESP_ERR_INVALID_STATE, i2c_del_master_bus(bus_handle));
     i2c_master_bus_rm_device(dev_3);
+    TEST_ESP_OK(i2c_del_master_bus(bus_handle));
+}
+
+TEST_CASE("I2C peripheral allocate all", "[i2c]")
+{
+    i2c_master_bus_handle_t bus_handle[SOC_HP_I2C_NUM];
+    for (int i = 0; i < SOC_HP_I2C_NUM; i++) {
+        i2c_master_bus_config_t i2c_mst_config_1 = {
+            .clk_source = I2C_CLK_SRC_DEFAULT,
+            .i2c_port = -1,
+            .scl_io_num = I2C_MASTER_SCL_IO,
+            .sda_io_num = I2C_MASTER_SDA_IO,
+            .flags.enable_internal_pullup = true,
+        };
+
+        TEST_ESP_OK(i2c_new_master_bus(&i2c_mst_config_1, &bus_handle[i]));
+    }
+    i2c_master_bus_config_t i2c_mst_config_1 = {
+        .clk_source = I2C_CLK_SRC_DEFAULT,
+        .i2c_port = -1,
+        .scl_io_num = I2C_MASTER_SCL_IO,
+        .sda_io_num = I2C_MASTER_SDA_IO,
+        .flags.enable_internal_pullup = true,
+    };
+    i2c_master_bus_handle_t bus_handle_2;
+
+    TEST_ESP_ERR(ESP_ERR_NOT_FOUND, i2c_new_master_bus(&i2c_mst_config_1, &bus_handle_2));
+
+    for (int i = 0; i < SOC_HP_I2C_NUM; i++) {
+        TEST_ESP_OK(i2c_del_master_bus(bus_handle[i]));
+    }
+
+    // Get another one
+
+    TEST_ESP_OK(i2c_new_master_bus(&i2c_mst_config_1, &bus_handle_2));
+    TEST_ESP_OK(i2c_del_master_bus(bus_handle_2));
+}
+
+TEST_CASE("I2C master clock frequency test", "[i2c]")
+{
+    uint8_t data_wr[500] = { 0 };
+
+    i2c_master_bus_config_t i2c_mst_config = {
+        .clk_source = I2C_CLK_SRC_DEFAULT,
+        .i2c_port = TEST_I2C_PORT,
+        .scl_io_num = I2C_MASTER_SCL_IO,
+        .sda_io_num = I2C_MASTER_SDA_IO,
+        .flags.enable_internal_pullup = true,
+        .trans_queue_depth = 30,
+    };
+    i2c_master_bus_handle_t bus_handle;
+
+    TEST_ESP_OK(i2c_new_master_bus(&i2c_mst_config, &bus_handle));
+
+    i2c_device_config_t dev_cfg = {
+        .dev_addr_length = I2C_ADDR_BIT_LEN_7,
+        .device_address = 0x58,
+        .scl_speed_hz = 100000,
+        .flags.disable_ack_check = 1,
+    };
+
+    i2c_master_dev_handle_t dev_handle;
+    TEST_ESP_OK(i2c_master_bus_add_device(bus_handle, &dev_cfg, &dev_handle));
+
+    TEST_ESP_OK(i2c_master_transmit(dev_handle, data_wr, 500, 0));
+
+    uart_bitrate_detect_config_t conf = {
+        .rx_io_num = I2C_MASTER_SCL_IO,
+        .source_clk = UART_SCLK_DEFAULT,
+    };
+    uart_bitrate_res_t res = {};
+    uart_detect_bitrate_start(UART_NUM_1, &conf);
+    vTaskDelay(pdMS_TO_TICKS(50));
+    uart_detect_bitrate_stop(UART_NUM_1, true, &res);
+
+    int freq_hz = res.clk_freq_hz / res.pos_period;
+    printf("The tested I2C SCL frequency is %d\n", freq_hz);
+    TEST_ASSERT_INT_WITHIN(500, 100000, freq_hz);
+
+    TEST_ESP_OK(i2c_master_bus_rm_device(dev_handle));
 
     TEST_ESP_OK(i2c_del_master_bus(bus_handle));
 }
@@ -345,3 +425,64 @@ TEST_CASE("I2C master transaction receive check nack return value", "[i2c]")
     TEST_ESP_ERR(ESP_ERR_INVALID_STATE, i2c_master_receive(dev_handle, data_rd, DATA_LENGTH, -1));
     _test_i2c_del_bus_device(bus_handle, dev_handle);
 }
+
+TEST_CASE("Test get handle with known port", "[i2c]")
+{
+    i2c_master_bus_handle_t handle;
+    TEST_ESP_ERR(ESP_ERR_INVALID_ARG, i2c_master_get_bus_handle(10, &handle));
+    TEST_ESP_ERR(ESP_ERR_INVALID_STATE, i2c_master_get_bus_handle(0, &handle));
+
+    i2c_master_bus_handle_t bus_handle;
+    i2c_master_dev_handle_t dev_handle;
+    _test_i2c_new_bus_device(&bus_handle, &dev_handle);
+    TEST_ESP_OK(i2c_master_get_bus_handle(0, &handle));
+
+    // Check the handle retrieved is as same as original handle
+    TEST_ASSERT((uint32_t)bus_handle == (uint32_t)handle);
+    _test_i2c_del_bus_device(bus_handle, dev_handle);
+}
+
+#if SOC_I2C_SUPPORT_SLAVE
+
+TEST_CASE("I2C peripheral allocate slave all", "[i2c]")
+{
+    i2c_slave_dev_handle_t dev_handle[SOC_HP_I2C_NUM];
+    for (int i = 0; i < SOC_HP_I2C_NUM; i++) {
+        i2c_slave_config_t i2c_slv_config_1 = {
+            .clk_source = I2C_CLK_SRC_DEFAULT,
+            .i2c_port = -1,
+            .scl_io_num = I2C_SLAVE_SCL_IO,
+            .sda_io_num = I2C_SLAVE_SDA_IO,
+            .slave_addr = ESP_SLAVE_ADDR,
+            .send_buf_depth = DATA_LENGTH,
+            .receive_buf_depth = DATA_LENGTH,
+            .flags.enable_internal_pullup = true,
+        };
+
+        TEST_ESP_OK(i2c_new_slave_device(&i2c_slv_config_1, &dev_handle[i]));
+    }
+    i2c_slave_config_t i2c_slv_config_1 = {
+        .clk_source = I2C_CLK_SRC_DEFAULT,
+        .i2c_port = -1,
+        .scl_io_num = I2C_SLAVE_SCL_IO,
+        .sda_io_num = I2C_SLAVE_SDA_IO,
+        .slave_addr = ESP_SLAVE_ADDR,
+        .send_buf_depth = DATA_LENGTH,
+        .receive_buf_depth = DATA_LENGTH,
+        .flags.enable_internal_pullup = true,
+    };
+    i2c_slave_dev_handle_t dev_handle_2;
+
+    TEST_ESP_ERR(ESP_ERR_NOT_FOUND, i2c_new_slave_device(&i2c_slv_config_1, &dev_handle_2));
+
+    for (int i = 0; i < SOC_HP_I2C_NUM; i++) {
+        TEST_ESP_OK(i2c_del_slave_device(dev_handle[i]));
+    }
+
+    // Get another one
+
+    TEST_ESP_OK(i2c_new_slave_device(&i2c_slv_config_1, &dev_handle_2));
+    TEST_ESP_OK(i2c_del_slave_device(dev_handle_2));
+}
+
+#endif // SOC_I2C_SUPPORT_SLAVE

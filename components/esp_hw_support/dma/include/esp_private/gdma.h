@@ -1,11 +1,8 @@
 /*
- * SPDX-FileCopyrightText: 2020-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2020-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-
-// DO NOT USE THESE APIS IN ANY APPLICATIONS
-// GDMA driver is not public for end users, but for ESP-IDF developers.
 
 #pragma once
 
@@ -34,21 +31,9 @@ typedef struct {
     gdma_channel_direction_t direction; /*!< DMA channel direction */
     struct {
         int reserve_sibling: 1; /*!< If set, DMA channel allocator would prefer to allocate new channel in a new pair, and reserve sibling channel for future use */
+        int isr_cache_safe: 1;  /*!< If set, DMA channel allocator would allocate interrupt in cache-safe region, and ISR is serviceable when cache is disabled */
     } flags;
 } gdma_channel_alloc_config_t;
-
-/**
- * @brief GDMA transfer ability
- *
- * @note The alignment set in this structure is **not** a guarantee that gdma driver will take care of the nonalignment cases.
- *       Actually the GDMA driver has no knowledge about the DMA buffer (address and size) used by upper layer.
- *       So it's the responsibility of the **upper layer** to take care of the buffer address and size.
- *
- */
-typedef struct {
-    size_t sram_trans_align;  /*!< DMA transfer alignment for memory in SRAM, in bytes. The driver enables/disables burst mode based on this value. 0 means no alignment is required */
-    size_t psram_trans_align; /*!< DMA transfer alignment for memory in PSRAM, in bytes. The driver sets proper burst block size based on the alignment value. 0 means no alignment is required */
-} gdma_transfer_ability_t;
 
 /**
  * @brief Type of GDMA event data
@@ -125,22 +110,6 @@ typedef struct {
     bool eof_till_data_popped;   /*!< If set / clear, DMA channel out_eof event is triggered on out / in DMA hardware fifo */
 } gdma_strategy_config_t;
 
-/** @cond */
-/**
- * @brief Create GDMA channel (only create AHB GDMA channel)
- * @note This API is going to be deprecated, please use `gdma_new_ahb_channel` or `gdma_new_axi_channel` instead.
- *
- * @param[in] config Pointer to a collection of configurations for allocating GDMA channel
- * @param[out] ret_chan Returned channel handle
- * @return
- *      - ESP_OK: Create DMA channel successfully
- *      - ESP_ERR_INVALID_ARG: Create DMA channel failed because of invalid argument
- *      - ESP_ERR_NO_MEM: Create DMA channel failed because out of memory
- *      - ESP_FAIL: Create DMA channel failed because of other error
- */
-esp_err_t gdma_new_channel(const gdma_channel_alloc_config_t *config, gdma_channel_handle_t *ret_chan);
-/** @endcond */
-
 /**
  * @brief Create AHB-GDMA channel
  * @note This API won't install interrupt service for the allocated channel.
@@ -200,16 +169,48 @@ esp_err_t gdma_connect(gdma_channel_handle_t dma_chan, gdma_trigger_t trig_perip
 esp_err_t gdma_disconnect(gdma_channel_handle_t dma_chan);
 
 /**
- * @brief Set DMA channel transfer ability
+ * @brief Channel transfer configurations
+ */
+typedef struct {
+    uint32_t max_data_burst_size; /*!< Set the max burst size when DMA read/write the data buffer.
+                                       Set to 0 means to disable the data burst.
+                                       Other value must be power of 2, e.g., 4/8/16/32/64 */
+    bool access_ext_mem;          /*!< Set this if the DMA transfer will access external memory */
+} gdma_transfer_config_t;
+
+/**
+ * @brief Configure transfer parameters for a DMA channel
+ *
+ * @note It's highly recommended to enable the burst mode and set proper burst size for the DMA channel,
+ *       which can improve the performance in accessing external memory by a lot.
+ *
+ * @param[in] chan DMA channel handle, allocated by `gdma_new_channel`
+ * @param[in] config Transfer configurations
+ * @return
+ *      - ESP_OK: Configure DMA transfer parameters successfully
+ *      - ESP_ERR_INVALID_ARG: Configure DMA transfer parameters failed because of invalid argument
+ *      - ESP_FAIL: Configure DMA transfer parameters failed because of other error
+ */
+esp_err_t gdma_config_transfer(gdma_channel_handle_t dma_chan, const gdma_transfer_config_t *config);
+
+/**
+ * @brief Get the alignment constraints for internal and external memory
+ *
+ * @note You should call this function after `gdma_config_transfer`, the later one can
+ *       adjust the alignment constraints based on various conditions, e.g. burst size, memory encryption, etc.
+ * @note You can use returned alignment value to validate if a DMA buffer provided by the upper layer meets the constraints.
+ * @note The returned alignment doesn't take the cache line size into account, if you want to do aligned memory allocation,
+ *       you should align the buffer size to the cache line size by yourself if the DMA buffer is behind a cache.
  *
  * @param[in] dma_chan GDMA channel handle, allocated by `gdma_new_channel`
- * @param[in] ability Transfer ability, e.g. alignment
+ * @param[out] int_mem_alignment Internal memory alignment
+ * @param[out] ext_mem_alignment External memory alignment
  * @return
- *      - ESP_OK: Set DMA channel transfer ability successfully
- *      - ESP_ERR_INVALID_ARG: Set DMA channel transfer ability failed because of invalid argument
- *      - ESP_FAIL: Set DMA channel transfer ability failed because of other error
+ *      - ESP_OK: Get alignment constraints successfully
+ *      - ESP_ERR_INVALID_ARG: Get alignment constraints failed because of invalid argument
+ *      - ESP_FAIL: Get alignment constraints failed because of other error
  */
-esp_err_t gdma_set_transfer_ability(gdma_channel_handle_t dma_chan, const gdma_transfer_ability_t *ability);
+esp_err_t gdma_get_alignment_constraints(gdma_channel_handle_t dma_chan, size_t *int_mem_alignment, size_t *ext_mem_alignment);
 
 /**
  * @brief Apply channel strategy for GDMA channel
@@ -249,19 +250,22 @@ esp_err_t gdma_set_priority(gdma_channel_handle_t dma_chan, uint32_t priority);
 esp_err_t gdma_del_channel(gdma_channel_handle_t dma_chan);
 
 /**
- * @brief Get the channel ID
+ * @brief Get the group ID and the channel ID
  *
  * @note This API breaks the encapsulation of GDMA Channel Object.
- *       With the returned channel ID, you can even bypass all other GDMA driver API and access Low Level API directly.
+ *       With the returned group/channel ID, you can even bypass all other GDMA driver API and access Low Level API directly.
  *
  * @param[in] dma_chan GDMA channel handle, allocated by `gdma_new_channel`
+ * @param[out] group_id Returned group ID
  * @param[out] channel_id Returned channel ID
  * @return
- *      - ESP_OK: Get GDMA channel ID successfully
- *      - ESP_ERR_INVALID_ARG: Get GDMA channel ID failed because of invalid argument
+ *      - ESP_OK: Get GDMA channel/group ID successfully
+ *      - ESP_ERR_INVALID_ARG: Get GDMA channel/group ID failed because of invalid argument
  *      - ESP_FAIL: Get GDMA channel ID failed because of other error
  */
-esp_err_t gdma_get_channel_id(gdma_channel_handle_t dma_chan, int *channel_id);
+esp_err_t gdma_get_group_channel_id(gdma_channel_handle_t dma_chan, int *group_id, int *channel_id);
+
+#define gdma_get_channel_id(dma_chan, channel_id) gdma_get_group_channel_id(dma_chan, NULL, channel_id)
 
 /**
  * @brief Set GDMA event callbacks for TX channel
@@ -457,6 +461,28 @@ esp_err_t gdma_config_crc_calculator(gdma_channel_handle_t dma_chan, const gdma_
  */
 esp_err_t gdma_crc_get_result(gdma_channel_handle_t dma_chan, uint32_t *result);
 #endif // SOC_GDMA_SUPPORT_CRC
+
+#if SOC_GDMA_SUPPORT_WEIGHTED_ARBITRATION
+/**
+ * @brief Set GDMA channel weight (0 ~ 15), default weight is 1
+ *
+ * @note Once weight arbitration is enabled, The arbitrator will allocate the corresponding number of tokens based on the weight of each channel.
+ *       You need to set weights for each channel. If the weight is 0, the channel requests will no longer be responded to.
+ * @note If channels have different weights, the channel with a larger weight can get a larger bandwidth.
+ *       e.g. if channel A has weight 2, channel B has weight 3 and channel C has weight 4, the percentage of bandwidth allocated to channel A is 2/9,
+ *       the percentage of bandwidth allocated to channel B is 3/9, and the percentage of bandwidth allocated to channel C is 4/9.
+ * @note Weighted arbitration is different from priority arbitration. "Weight" is used after comparing "priority"
+ *       After the priority comparison, then arbitrator checks whether there are still unused tokens in the channel.
+ *
+ * @param[in] dma_chan GDMA channel handle, allocated by `gdma_new_channel`
+ * @param[in] weight Weight of GDMA channel, higher value means higher priority in weighted arbitration.
+ * @return
+ *      - ESP_OK: Set GDMA channel weight successfully
+ *      - ESP_ERR_INVALID_ARG: Set GDMA channel weight failed because of invalid argument. e.g. weight out of range [0,GDMA_LL_CHANNEL_MAX_WEIGHT]
+ *      - ESP_FAIL: Set GDMA channel weight failed because of other error
+ */
+esp_err_t gdma_set_weight(gdma_channel_handle_t dma_chan, uint32_t weight);
+#endif // SOC_GDMA_SUPPORT_WEIGHTED_ARBITRATION
 
 #ifdef __cplusplus
 }

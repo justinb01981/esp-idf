@@ -35,7 +35,7 @@ This file is used by the :idf_file:`tools/idf_tools.py` script when installing t
 Tools Installation Directory
 ----------------------------
 
-The ``IDF_TOOLS_PATH`` environment variable specifies the location where the tools are to be downloaded and installed. If not set, the default location will be ``HOME/.espressif`` on Linux and macOS, and ``%USER_PROFILE%\.espressif`` on Windows.
+The ``IDF_TOOLS_PATH`` environment variable specifies the location where the tools are to be downloaded and installed. If not set, the default location will be ``$HOME/.espressif`` on Linux and macOS, and ``%USER_PROFILE%\.espressif`` on Windows.
 
 Inside the ``IDF_TOOLS_PATH`` directory, the tools installation scripts create the following directories and files:
 
@@ -43,6 +43,8 @@ Inside the ``IDF_TOOLS_PATH`` directory, the tools installation scripts create t
 - ``tools`` — where the tools are extracted. The tools are extracted into subdirectories: ``tools/TOOL_NAME/VERSION/``. This arrangement allows different versions of tools to be installed side by side.
 - ``idf-env.json`` — user install options, such as targets and features, are stored in this file. Targets are selected chip targets for which tools are installed and kept up-to-date. Features determine the Python package set which should be installed. These options will be discussed later.
 - ``python_env`` —  not related to the tools; virtual Python environments are installed in the sub-directories. Note that the Python environment directory can be placed elsewhere by setting the ``IDF_PYTHON_ENV_PATH`` environment variable.
+
+  - ``idf_version.txt`` — located within each specific Python environment sub-directory under ``python_env``, this file records the ESP-IDF version corresponding to that environment. The version is stored in a format like ``5.3`` to represent ESP-IDF version ``v5.3``.
 - ``espidf.constraints.*.txt`` — one constraint file for each ESP-IDF release containing Python package version requirements.
 
 GitHub Assets Mirror
@@ -58,6 +60,7 @@ Any mirror server can be used provided the URL matches the ``github.com`` downlo
 
 .. note:: The Espressif download server currently does not mirror everything from GitHub, but only files attached as Assets to some releases, as well as source archives for some releases.
 
+.. _idf-tools-py:
 
 ``idf_tools.py`` Script
 -----------------------
@@ -117,7 +120,7 @@ The :idf_file:`tools/idf_tools.py` script bundled with ESP-IDF performs several 
 
 * ``check``: For each tool, checks whether the tool is available in the system path and in ``IDF_TOOLS_PATH``.
 
-* ``install-python-env``: Creates a Python virtual environment in the ``${IDF_TOOLS_PATH}/python_env`` directory or directly in the directory set by the ``IDF_PYTHON_ENV_PATH`` environment variable, and install the required Python packages there.
+* ``install-python-env``: Creates a Python virtual environment in the ``${IDF_TOOLS_PATH}/python_env`` directory or directly in the directory set by the ``IDF_PYTHON_ENV_PATH`` environment variable, and installs the required Python packages there. If the Python virtual environment already exists, packages inside are updated to their latest versions with respect to the ``espidf.constraints.*.txt`` file.
 
   * An optional ``--features`` argument allows one to specify a comma-separated list of features to be added or removed.
 
@@ -182,11 +185,23 @@ Since the installed tools are not permanently added to the user or system ``PATH
 
 .. note::
 
-    To modify the shell environment in Bash, ``export.sh`` must be "sourced" by using the ``. ./export.sh`` command. Please ensure to include the leading dot and space.
+    To modify the shell environment in Bash, ``export.sh`` must be "sourced" by using the command ``. ./export.sh``. Please ensure to include the leading dot and space.
 
-    ``export.sh`` may be used with shells other than Bash (such as zsh). However, in this case, it is required to set the ``IDF_PATH`` environment variable before running the script. When used in Bash, the script guesses the ``IDF_PATH`` value from its own location.
+    ``export.sh`` may be used with various shells like Bash, Zsh, sh, dash, etc. When using Bash or Zsh, you can run it from any path (e.g., ``. ./<<some_path>>/export.sh``) as it automatically detects ``IDF_PATH``. For other shells, it must be run from the ESP-IDF directory (``. ./export.sh``) to locate ``IDF_PATH`` correctly.
 
-In addition to calling ``idf_tools.py``, these scripts list the directories that have been added to the ``PATH``.
+activate.py
+~~~~~~~~~~~
+
+The environment setup is handled by the underlying ``tools/activate.py`` Python script. This script performs all necessary preparations and checks, generating a temporary file that is subsequently sourced by the export script.
+
+``activate.py`` can also function as a standalone command. When run, it launches a new child shell with an ESP-IDF environment, which can be utilized and then exited with the ``exit`` command. Upon exiting the child shell, you will return to the parent shell from which the script was initially executed.
+
+Additionally, the specific behavior of the ``activate.py`` script can be modified with various options, such as spawning a specific shell with ESP-IDF using the ``--shell`` option. For more information on available options, use the ``activate.py --help`` command.
+
+.. note::
+
+    When using ``activate.py`` on Windows, it should be executed with ``python activate.py``. This ensures the script runs in the current terminal window rather than launching a new one that closes immediately.
+
 
 Other Installation Methods
 --------------------------
@@ -201,6 +216,8 @@ Custom Installation
 -------------------
 
 Although the methods above are recommended for ESP-IDF users, they are not a must for building ESP-IDF applications. ESP-IDF build system expects that all the necessary tools are installed somewhere, and made available in the ``PATH``.
+
+When performing a custom installation, ensure that the ``ESP_IDF_VERSION`` environment variable is set to reflect the current ESP-IDF version, using a format like ``5.3`` to represent ESP-IDF version ``v5.3``. This variable is required by some components for version-specific configurations and is typically set by the ``idf_tools.py export`` script in standard installations.
 
 .. _idf-tools-uninstall:
 

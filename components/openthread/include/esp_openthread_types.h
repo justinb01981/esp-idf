@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2021-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2021-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -46,6 +46,7 @@ typedef enum {
     OPENTHREAD_EVENT_SET_DNS_SERVER,            /*!< OpenThread stack set DNS server >*/
     OPENTHREAD_EVENT_PUBLISH_MESHCOP_E,         /*!< OpenThread stack start to publish meshcop-e service >*/
     OPENTHREAD_EVENT_REMOVE_MESHCOP_E,          /*!< OpenThread stack start to remove  meshcop-e service >*/
+    OPENTHREAD_EVENT_DATASET_CHANGED,           /*!< OpenThread dataset changed >*/
 } esp_openthread_event_t;
 
 /**
@@ -62,6 +63,24 @@ typedef struct {
     otDeviceRole previous_role; /*!< Previous Thread role */
     otDeviceRole current_role;  /*!< Current Thread role */
 } esp_openthread_role_changed_event_t;
+
+/**
+ * @brief OpenThread dataset type
+ *
+ */
+typedef enum {
+    OPENTHREAD_ACTIVE_DATASET,  /*!< Active dataset */
+    OPENTHREAD_PENDING_DATASET, /*!< Pending dataset */
+} esp_openthread_dataset_type_t;
+
+/**
+ * @brief OpenThread dataset changed event data
+ *
+ */
+typedef struct {
+    esp_openthread_dataset_type_t type; /*!< Dataset type */
+    otOperationalDataset new_dataset;   /*!< New dataset */
+} esp_openthread_dataset_changed_event_t;
 
 /**
  * This structure represents a context for a select() based mainloop.
@@ -117,6 +136,7 @@ typedef enum {
     RADIO_MODE_NATIVE = 0x0,   /*!< Use the native 15.4 radio */
     RADIO_MODE_UART_RCP,       /*!< UART connection to a 15.4 capable radio co-processor (RCP) */
     RADIO_MODE_SPI_RCP,        /*!< SPI connection to a 15.4 capable radio co-processor (RCP) */
+    RADIO_MODE_TREL,           /*!< Use the Thread Radio Encapsulation Link (TREL) */
     RADIO_MODE_MAX,            /*!< Using for parameter check */
 } esp_openthread_radio_mode_t;
 
@@ -130,6 +150,7 @@ typedef enum {
     HOST_CONNECTION_MODE_CLI_USB,        /*!< CLI USB connection to the host */
     HOST_CONNECTION_MODE_RCP_UART,       /*!< RCP UART connection to the host */
     HOST_CONNECTION_MODE_RCP_SPI,        /*!< RCP SPI connection to the host */
+    HOST_CONNECTION_MODE_RCP_USB,       /*!<  RCP USB Serial JTAG connection to the host */
     HOST_CONNECTION_MODE_MAX,            /*!< Using for parameter check */
 } esp_openthread_host_connection_mode_t;
 
@@ -178,7 +199,23 @@ typedef struct {
     esp_openthread_port_config_t            port_config;  /*!< The port configuration */
 } esp_openthread_platform_config_t;
 
+/**
+ * @brief The OpenThread rcp failure handler
+ *
+ */
 typedef void (*esp_openthread_rcp_failure_handler)(void);
+
+/**
+ * @brief The OpenThread compatibility error callback
+ *
+ */
+typedef void (*esp_openthread_compatibility_error_callback)(void);
+
+/**
+ * @brief The OpenThread co-processor reset failure callback
+ *
+ */
+typedef void (*esp_openthread_coprocessor_reset_failure_callback)(void);
 
 #ifdef __cplusplus
 }

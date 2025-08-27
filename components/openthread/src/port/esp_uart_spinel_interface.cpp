@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2021-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2021-2024 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -18,8 +18,8 @@
 #include "esp_openthread_types.h"
 #include "esp_openthread_uart.h"
 #include "driver/uart_vfs.h"
-#include "core/common/code_utils.hpp"
-#include "core/common/logging.hpp"
+#include "common/code_utils.hpp"
+#include "common/logging.hpp"
 #include "driver/uart.h"
 #include "lib/platform/exit_code.h"
 #include "openthread/platform/time.h"
@@ -295,8 +295,8 @@ esp_err_t UartSpinelInterface::TryRecoverUart(void)
 otError UartSpinelInterface::HardwareReset(void)
 {
     if (mRcpFailureHandler) {
-        mRcpFailureHandler();
         TryRecoverUart();
+        mRcpFailureHandler();
     }
     return OT_ERROR_NONE;
 }

@@ -32,6 +32,7 @@ The following sections of this document cover the typical steps to configure and
 - :ref:`etm-event` - describes how to allocate a new ETM event handle or fetch an existing handle from various peripherals.
 - :ref:`etm-task` - describes how to allocate a new ETM task handle or fetch an existing handle from various peripherals.
 - :ref:`etm-channel-control` - describes common ETM channel control functions.
+- :ref:`etm-power-management` - describes the options and strategies provided by the driver in order to save power.
 - :ref:`etm-thread-safety` - lists which APIs are guaranteed to be thread-safe by the driver.
 - :ref:`etm-kconfig-options` - lists the supported Kconfig options that can be used to make a different effect on driver behavior.
 
@@ -67,11 +68,12 @@ Other Peripheral Events
 
     :SOC_SYSTIMER_SUPPORT_ETM: - You can call :cpp:func:`esp_systick_new_etm_alarm_event` to get the ETM event from RTOS Systick, one per CPU core.
     :SOC_SYSTIMER_SUPPORT_ETM: - Refer to :doc:`/api-reference/system/esp_timer` for how to get the ETM event handle from esp_timer.
-    :SOC_TIMER_SUPPORT_ETM: - Refer to :doc:`/api-reference/peripherals/gptimer` for how to get the ETM event handle from GPTimer.
+    :SOC_TIMER_SUPPORT_ETM: - Refer to :ref:`gptimer-etm-event-and-task` for how to get the ETM event handle from GPTimer.
     :SOC_GDMA_SUPPORT_ETM: - Refer to :doc:`/api-reference/system/async_memcpy` for how to get the ETM event handle from async memcpy.
     :SOC_MCPWM_SUPPORT_ETM: - Refer to :doc:`/api-reference/peripherals/mcpwm` for how to get the ETM event handle from MCPWM.
     :SOC_ANA_CMPR_SUPPORT_ETM: - Refer to :doc:`/api-reference/peripherals/ana_cmpr` for how to get the ETM event handle from analog comparator.
     :SOC_TEMPERATURE_SENSOR_SUPPORT_ETM: - Refer to :doc:`/api-reference/peripherals/temp_sensor` for how to get the ETM event handle from temperature sensor.
+    :SOC_I2S_SUPPORTS_ETM:  - Refer to :doc:`/api-reference/peripherals/i2s` for how to get the ETM event handle from I2S.
 
 .. _etm-task:
 
@@ -96,8 +98,9 @@ Other Peripheral Tasks
 
 .. list::
 
-    :SOC_TIMER_SUPPORT_ETM: - Refer to :doc:`GPTimer </api-reference/peripherals/gptimer>` for how to get the ETM task handle from GPTimer.
+    :SOC_TIMER_SUPPORT_ETM: - Refer to :ref:`gptimer-etm-event-and-task` for how to get the ETM task handle from GPTimer.
     :SOC_TEMPERATURE_SENSOR_SUPPORT_ETM: - Refer to :doc:`/api-reference/peripherals/temp_sensor` for how to get the ETM task handle from temperature sensor.
+    :SOC_I2S_SUPPORTS_ETM:  - Refer to :doc:`/api-reference/peripherals/i2s` for how to get the ETM task handle from I2S.
 
 .. _etm-channel-control:
 
@@ -128,6 +131,17 @@ To check if the ETM channels are set with proper events and tasks, you can call 
     ===========ETM Dump End============
 
 The digital ID printed in the dump information is defined in the ``soc/soc_etm_source.h`` file.
+
+.. _etm-power-management:
+
+Power Management
+^^^^^^^^^^^^^^^^
+
+When power management is enabled, i.e., :ref:`CONFIG_PM_ENABLE` is on, the system may adjust or disable the clock source, and power off the ETM peripheral before going to sleep. As a result, the existing connection between events and tasks will be lost, and the ETM channels can't work correctly after wake up. So by default, the driver will acquire a power management lock internally to forbid the system from powering off the ETM peripheral.
+
+.. only:: SOC_ETM_SUPPORT_SLEEP_RETENTION
+
+    If you want to save more power, you can set :cpp:member:`esp_etm_channel_config_t::etm_chan_flags::allow_pd` to ``true``. Then ETM registers will be backed up before sleep and restored after wake up. Please note, enabling this option will increase the memory consumption for saving the register context.
 
 .. _etm-thread-safety:
 

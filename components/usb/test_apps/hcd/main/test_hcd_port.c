@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2015-2022 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2015-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -9,14 +9,36 @@
 #include "freertos/semphr.h"
 #include "unity.h"
 #include "esp_rom_sys.h"
-#include "test_usb_common.h"
-#include "test_hcd_common.h"
+#include "hcd_common.h"
 
 #define TEST_DEV_ADDR               0
 #define NUM_URBS                    3
 #define TRANSFER_MAX_BYTES          256
 #define URB_DATA_BUFF_SIZE          (sizeof(usb_setup_packet_t) + TRANSFER_MAX_BYTES)   // 256 is worst case size for configuration descriptors
 #define POST_ENQUEUE_DELAY_US       10
+
+/*
+Test a port for a disconnect event, when port is in ENABLED state
+
+Purpose: This test is essential on HS HCD ports, when device is detaching during the action.
+    When the HS port is ENABLED, the port operates in HS mode and device disconnection is detected by HS logic.
+    When the HS port is DISABLED (without issuing a reset), the port operates in FS mode and device disconnection differs for HS mode disconnection logic.
+
+Procedure:
+    - Setup the HCD and a port
+    - Trigger the port connection event
+    - Trigger the port disconnection event
+    - Teardown port and HCD
+*/
+TEST_CASE("Test HCD port disconnect event, port enabled", "[port][low_speed][full_speed][high_speed]")
+{
+    usb_speed_t port_speed = test_hcd_wait_for_conn(port_hdl); // Trigger a connection
+    printf("Connected %s speed device \n", (char *[]) {
+        "Low", "Full", "High"
+    }[port_speed]);
+    vTaskDelay(pdMS_TO_TICKS(100)); // Short delay send of SOF (for FS) or EOPs (for LS)
+    test_hcd_wait_for_disconn(port_hdl, true);
+}
 
 /*
 Test a port sudden disconnect and port recovery
@@ -41,7 +63,7 @@ Procedure:
     - Teardown port and HCD
 */
 
-TEST_CASE("Test HCD port sudden disconnect", "[port][low_speed][full_speed]")
+TEST_CASE("Test HCD port sudden disconnect", "[port][low_speed][full_speed][high_speed]")
 {
     usb_speed_t port_speed = test_hcd_wait_for_conn(port_hdl);  // Trigger a connection
     vTaskDelay(pdMS_TO_TICKS(100)); // Short delay send of SOF (for FS) or EOPs (for LS)
@@ -64,7 +86,8 @@ TEST_CASE("Test HCD port sudden disconnect", "[port][low_speed][full_speed]")
     }
     // Add a short delay to let the transfers run for a bit
     esp_rom_delay_us(POST_ENQUEUE_DELAY_US);
-    test_usb_set_phy_state(false, 0);
+    // Power-off the port to trigger a disconnection
+    TEST_ASSERT_EQUAL(ESP_OK, hcd_port_command(port_hdl, HCD_PORT_CMD_POWER_OFF));
     // Disconnect event should have occurred. Handle the port event
     test_hcd_expect_port_event(port_hdl, HCD_PORT_EVENT_DISCONNECTION);
     TEST_ASSERT_EQUAL(HCD_PORT_EVENT_DISCONNECTION, hcd_port_handle_event(port_hdl));
@@ -130,7 +153,7 @@ Procedure:
     - Cleanup default pipe
     - Trigger disconnection and teardown
 */
-TEST_CASE("Test HCD port suspend and resume", "[port][low_speed][full_speed]")
+TEST_CASE("Test HCD port suspend and resume", "[port][low_speed][full_speed][high_speed]")
 {
     usb_speed_t port_speed = test_hcd_wait_for_conn(port_hdl);  // Trigger a connection
     vTaskDelay(pdMS_TO_TICKS(100)); // Short delay send of SOF (for FS) or EOPs (for LS)
@@ -184,7 +207,7 @@ Procedure:
     - Check that a disconnection still works after disable
     - Teardown
 */
-TEST_CASE("Test HCD port disable", "[port][low_speed][full_speed]")
+TEST_CASE("Test HCD port disable", "[port][low_speed][full_speed][high_speed]")
 {
     usb_speed_t port_speed = test_hcd_wait_for_conn(port_hdl);  // Trigger a connection
     vTaskDelay(pdMS_TO_TICKS(100)); // Short delay send of SOF (for FS) or EOPs (for LS)
@@ -267,12 +290,12 @@ static void concurrent_task(void *arg)
     SemaphoreHandle_t sync_sem = (SemaphoreHandle_t) arg;
     xSemaphoreTake(sync_sem, portMAX_DELAY);
     vTaskDelay(pdMS_TO_TICKS(10));  // Give a short delay let reset command start in main thread
-    // Force a disconnection
-    test_usb_set_phy_state(false, 0);
+    // Power-off the port to trigger a disconnection
+    TEST_ASSERT_EQUAL(ESP_OK, hcd_port_command(port_hdl, HCD_PORT_CMD_POWER_OFF));
     vTaskDelay(portMAX_DELAY);  // Block forever and wait to be deleted
 }
 
-TEST_CASE("Test HCD port command bailout", "[port][low_speed][full_speed]")
+TEST_CASE("Test HCD port command bailout", "[port][low_speed][full_speed][high_speed]")
 {
     test_hcd_wait_for_conn(port_hdl);  // Trigger a connection
     vTaskDelay(pdMS_TO_TICKS(100)); // Short delay send of SOF (for FS) or EOPs (for LS)
@@ -291,7 +314,8 @@ TEST_CASE("Test HCD port command bailout", "[port][low_speed][full_speed]")
     // Attempt to resume the port. But the concurrent task should override this with a disconnection event
     printf("Attempting to resume\n");
     xSemaphoreGive(sync_sem);   // Trigger concurrent task
-    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_RESPONSE, hcd_port_command(port_hdl, HCD_PORT_CMD_RESUME));
+    vTaskDelay(pdMS_TO_TICKS(20)); // Short delay for concurrent task to trigger disconnection
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_STATE, hcd_port_command(port_hdl, HCD_PORT_CMD_RESUME));
 
     // Check that concurrent task triggered a sudden disconnection
     test_hcd_expect_port_event(port_hdl, HCD_PORT_EVENT_DISCONNECTION);

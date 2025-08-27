@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2023-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2023-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -13,10 +13,13 @@ extern "C" {
 #include <stdint.h>
 #include <stdlib.h>
 #include <stdbool.h>
+#include "soc/soc_caps.h"
 
 /**
  * @brief Traverse all possible wake-up sources and update the wake-up cause so that
  *        ulp_lp_core_get_wakeup_cause can obtain the bitmap of the wake-up reasons.
+ * @note Do not call it from user ULP programs because it will clear the wake-up cause bits
+ *       which were set at ULP startup in lp_core_startup().
  */
 void ulp_lp_core_update_wakeup_cause(void);
 
@@ -52,6 +55,13 @@ void ulp_lp_core_delay_us(uint32_t us);
  */
 void ulp_lp_core_delay_cycles(uint32_t cycles);
 
+#if SOC_ULP_LP_UART_SUPPORTED
+/**
+ * @brief Reset LP CORE uart wakeup enable.
+ */
+void ulp_lp_core_lp_uart_reset_wakeup_en(void);
+#endif
+
 /**
  * @brief Finishes the ULP program and powers down the ULP
  *        until next wakeup.
@@ -74,6 +84,11 @@ __attribute__((__noreturn__))  void ulp_lp_core_halt(void);
 __attribute__((__noreturn__))  void ulp_lp_core_stop_lp_core(void);
 
 /**
+ * @brief Abort LP core operation.
+ */
+void __attribute__((noreturn)) ulp_lp_core_abort(void);
+
+/**
  * @brief Enable the SW triggered interrupt from the PMU
  *
  * @note This is the same SW trigger interrupt that is used to wake up the LP CPU
@@ -88,6 +103,28 @@ void ulp_lp_core_sw_intr_enable(bool enable);
  *
  */
 void ulp_lp_core_sw_intr_clear(void);
+
+#if SOC_LP_TIMER_SUPPORTED
+/**
+ * @brief Enable the LP Timer interrupt
+ *
+ */
+void ulp_lp_core_lp_timer_intr_enable(bool enable);
+
+/**
+ * @brief Clear the interrupt status for the LP Timer interrupt
+ *
+ */
+void ulp_lp_core_lp_timer_intr_clear(void);
+#endif
+
+/**
+ * @brief Puts the CPU into a wait state until an interrupt is triggered
+ *
+ * @note The CPU will draw less power when in this state compared to actively running
+ *
+ */
+void ulp_lp_core_wait_for_intr(void);
 
 #ifdef __cplusplus
 }

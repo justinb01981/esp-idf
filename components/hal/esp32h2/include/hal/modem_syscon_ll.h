@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2022-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2022-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -61,14 +61,9 @@ static inline void modem_syscon_ll_enable_modem_sec_clock(modem_syscon_dev_t *hw
 }
 
 __attribute__((always_inline))
-static inline void modem_syscon_ll_enable_ble_timer_apb(modem_syscon_dev_t *hw, bool en)
-{
-    hw->clk_conf.clk_ble_timer_apb_en = en;
-}
-
-__attribute__((always_inline))
 static inline void modem_syscon_ll_enable_ble_timer_clock(modem_syscon_dev_t *hw, bool en)
 {
+    hw->clk_conf.clk_ble_timer_apb_en = en;
     hw->clk_conf.clk_ble_timer_en = en;
 }
 
@@ -149,6 +144,12 @@ static inline void modem_syscon_ll_reset_zbmac(modem_syscon_dev_t *hw)
 {
     hw->modem_rst_conf.rst_zbmac = 1;
     hw->modem_rst_conf.rst_zbmac = 0;
+}
+
+__attribute__((always_inline))
+static inline void modem_syscon_ll_reset_zbmac_apb(modem_syscon_dev_t *hw)
+{
+    // ESP32H2 Not Support
 }
 
 __attribute__((always_inline))

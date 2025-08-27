@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2023-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2023-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -14,33 +14,48 @@
 #include "hal/pmu_ll.h"
 #include "hal/uart_ll.h"
 #include "hal/rtc_io_ll.h"
-
-#if SOC_ETM_SUPPORTED
-#include "hal/etm_ll.h"
+#if SOC_LP_I2S_SUPPORT_VAD
+//For VAD
+#include "hal/lp_i2s_ll.h"
 #endif
 
 #if SOC_LP_TIMER_SUPPORTED
 #include "hal/lp_timer_ll.h"
 #endif
 
+#include "esp_cpu.h"
+
 /* LP_FAST_CLK is not very accurate, for now use a rough estimate */
+#if CONFIG_RTC_FAST_CLK_SRC_RC_FAST
 #define LP_CORE_CPU_FREQUENCY_HZ 16000000 // For P4 TRM says 20 MHz by default, but we tune it closer to 16 MHz
+#elif CONFIG_RTC_FAST_CLK_SRC_XTAL
+#if SOC_XTAL_SUPPORT_48M
+#define LP_CORE_CPU_FREQUENCY_HZ 48000000
+#else
+#define LP_CORE_CPU_FREQUENCY_HZ 40000000
+#endif
+#else  // Default value in chip without rtc fast clock sel option
+#define LP_CORE_CPU_FREQUENCY_HZ 16000000
+#endif
 
 static uint32_t lp_wakeup_cause = 0;
 
 void ulp_lp_core_update_wakeup_cause(void)
 {
+    lp_wakeup_cause = 0;
     if ((lp_core_ll_get_wakeup_source() & LP_CORE_LL_WAKEUP_SOURCE_HP_CPU) \
             && (pmu_ll_lp_get_interrupt_raw(&PMU) & PMU_HP_SW_TRIGGER_INT_RAW)) {
         lp_wakeup_cause |= LP_CORE_LL_WAKEUP_SOURCE_HP_CPU;
         pmu_ll_lp_clear_intsts_mask(&PMU, PMU_HP_SW_TRIGGER_INT_CLR);
     }
 
+#if SOC_ULP_LP_UART_SUPPORTED
     if ((lp_core_ll_get_wakeup_source() & LP_CORE_LL_WAKEUP_SOURCE_LP_UART) \
             && (uart_ll_get_intraw_mask(&LP_UART) & LP_UART_WAKEUP_INT_RAW)) {
         lp_wakeup_cause |= LP_CORE_LL_WAKEUP_SOURCE_LP_UART;
         uart_ll_clr_intsts_mask(&LP_UART, LP_UART_WAKEUP_INT_CLR);
     }
+#endif
 
     if ((lp_core_ll_get_wakeup_source() & LP_CORE_LL_WAKEUP_SOURCE_LP_IO) \
             && rtcio_ll_get_interrupt_status()) {
@@ -48,11 +63,22 @@ void ulp_lp_core_update_wakeup_cause(void)
         rtcio_ll_clear_interrupt_status();
     }
 
+#if SOC_LP_VAD_SUPPORTED
+    if ((lp_core_ll_get_wakeup_source() & LP_CORE_LL_WAKEUP_SOURCE_LP_VAD)) {
+        lp_wakeup_cause |= LP_CORE_LL_WAKEUP_SOURCE_LP_VAD;
+        lp_i2s_ll_rx_clear_interrupt_status(&LP_I2S, LP_I2S_LL_EVENT_VAD_DONE_INT);
+    }
+#endif
+
 #if SOC_ETM_SUPPORTED
     if ((lp_core_ll_get_wakeup_source() & LP_CORE_LL_WAKEUP_SOURCE_ETM) \
-            && etm_ll_is_lpcore_wakeup_triggered()) {
+            && lp_core_ll_get_etm_wakeup_flag()) {
         lp_wakeup_cause |= LP_CORE_LL_WAKEUP_SOURCE_ETM;
-        etm_ll_clear_lpcore_wakeup_status();
+#if CONFIG_IDF_TARGET_ESP32P4
+        lp_core_ll_clear_etm_wakeup_status();
+#else
+        lp_core_ll_clear_etm_wakeup_flag();
+#endif
     }
 #endif /* SOC_ETM_SUPPORTED */
 
@@ -114,6 +140,15 @@ void ulp_lp_core_delay_cycles(uint32_t cycles)
     }
 }
 
+#if SOC_ULP_LP_UART_SUPPORTED
+
+void ulp_lp_core_lp_uart_reset_wakeup_en(void)
+{
+    lp_core_ll_enable_lp_uart_wakeup(false);
+    lp_core_ll_enable_lp_uart_wakeup(true);
+}
+#endif
+
 void ulp_lp_core_halt(void)
 {
     lp_core_ll_request_sleep();
@@ -130,6 +165,16 @@ void ulp_lp_core_stop_lp_core(void)
 
 void __attribute__((noreturn)) abort(void)
 {
+    // By calling abort users expect some panic message to be printed,
+    // so cause an exception like it is done in HP core's version of abort().
+    // If CONFIG_ULP_PANIC_OUTPUT_ENABLE is YES then panic handler will print smth
+    // If debugger is attached it will stop here and user can inspect the backtrace.
+    esp_cpu_dbgr_break();
+    while (1); // to make compiler happy about noreturn attr
+}
+
+void __attribute__((noreturn)) ulp_lp_core_abort(void)
+{
     /* Stop the LP Core */
     ulp_lp_core_stop_lp_core();
 
@@ -144,4 +189,21 @@ void ulp_lp_core_sw_intr_enable(bool enable)
 void ulp_lp_core_sw_intr_clear(void)
 {
     pmu_ll_lp_clear_sw_intr_status(&PMU);
+}
+
+#if SOC_LP_TIMER_SUPPORTED
+void ulp_lp_core_lp_timer_intr_enable(bool enable)
+{
+    lp_timer_ll_lp_alarm_intr_enable(&LP_TIMER, enable);
+}
+
+void ulp_lp_core_lp_timer_intr_clear(void)
+{
+    lp_timer_ll_clear_lp_alarm_intr_status(&LP_TIMER);
+}
+#endif
+
+void ulp_lp_core_wait_for_intr(void)
+{
+    asm volatile("wfi");
 }

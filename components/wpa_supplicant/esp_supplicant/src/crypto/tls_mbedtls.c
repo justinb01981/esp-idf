@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2020-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2020-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -249,6 +249,7 @@ static uint16_t tls_sig_algs_for_suiteb[] = {
 #endif /* MBEDTLS_RSA_C && MBEDTLS_MD_CAN_SHA384 */
 #endif /* CONFIG_TLSV13 */
 
+#if defined(MBEDTLS_SSL_PROTO_TLS1_2)
 #if defined(MBEDTLS_SHA512_C)
 #if defined(MBEDTLS_ECDSA_C)
     MBEDTLS_SSL_TLS12_SIG_AND_HASH_ALG(MBEDTLS_SSL_SIG_ECDSA, MBEDTLS_SSL_HASH_SHA512),
@@ -259,6 +260,7 @@ static uint16_t tls_sig_algs_for_suiteb[] = {
     MBEDTLS_SSL_TLS12_SIG_AND_HASH_ALG(MBEDTLS_SSL_SIG_RSA, MBEDTLS_SSL_HASH_SHA384),
 #endif
 #endif /* MBEDTLS_SHA512_C */
+#endif /* MBEDTLS_SSL_PROTO_TLS1_2 */
     MBEDTLS_TLS_SIG_NONE
 };
 
@@ -336,6 +338,7 @@ static uint16_t tls_sig_algs_for_eap[] = {
 #endif /* MBEDTLS_RSA_C && MBEDTLS_MD_CAN_SHA256 */
 #endif /* CONFIG_TLSV13 */
 
+#if defined(MBEDTLS_SSL_PROTO_TLS1_2)
 #if defined(MBEDTLS_SHA512_C)
 #if defined(MBEDTLS_ECDSA_C)
     MBEDTLS_SSL_TLS12_SIG_AND_HASH_ALG(MBEDTLS_SSL_SIG_ECDSA, MBEDTLS_SSL_HASH_SHA512),
@@ -364,6 +367,7 @@ static uint16_t tls_sig_algs_for_eap[] = {
     MBEDTLS_SSL_TLS12_SIG_AND_HASH_ALG(MBEDTLS_SSL_SIG_RSA, MBEDTLS_SSL_HASH_SHA1),
 #endif
 #endif /* MBEDTLS_SHA1_C */
+#endif /* MBEDTLS_SSL_PROTO_TLS1_2 */
     MBEDTLS_TLS_SIG_NONE
 };
 
@@ -516,18 +520,24 @@ static int set_client_config(const struct tls_connection_params *cfg, tls_contex
         }
     }
 
-    /* Usages of default ciphersuites can take a lot of time on low end device
-     * and can cause watchdog. Enabling the ciphers which are secured enough
-     * but doesn't take that much processing power */
+    /* The use of default ciphersuites may take a lot of time on low-end devices
+     * and may trigger the watchdog timer. Enable ciphers that are secure enough
+     * but require less processing power. */
     tls_set_ciphersuite(cfg, tls);
 
 #ifdef CONFIG_ESP_WIFI_DISABLE_KEY_USAGE_CHECK
     mbedtls_ssl_set_verify(&tls->ssl, tls_disable_key_usages, NULL);
 #endif /*CONFIG_ESP_WIFI_DISABLE_KEY_USAGE_CHECK*/
+    ret = mbedtls_ssl_set_hostname(&tls->ssl, cfg->domain_match);
+    if (ret != 0) {
+        wpa_printf(MSG_ERROR, "Failed to set hostname");
+        return ret;
+    }
 
 #ifdef CONFIG_MBEDTLS_CERTIFICATE_BUNDLE
     if (cfg->flags & TLS_CONN_USE_DEFAULT_CERT_BUNDLE) {
         wpa_printf(MSG_INFO, "Using default cert bundle");
+        mbedtls_ssl_conf_authmode(&tls->conf, MBEDTLS_SSL_VERIFY_REQUIRED);
         if (esp_crt_bundle_attach_fn) {
             ret = (*esp_crt_bundle_attach_fn)(&tls->conf);
         }

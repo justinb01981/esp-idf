@@ -14,6 +14,7 @@
 #include "hal/lcd_types.h"
 
 #define MIPI_DSI_LL_GET_BRG(bus_id) (bus_id == 0 ? &MIPI_DSI_BRIDGE : NULL)
+#define MIPI_DSI_LL_EVENT_UNDERRUN  (1 << 0)
 
 #ifdef __cplusplus
 extern "C" {
@@ -25,6 +26,17 @@ typedef enum {
 } mipi_dsi_ll_flow_controller_t;
 
 /**
+ * @brief Force enable the register clock for the DSI bridge
+ *
+ * @param dev Pointer to the DSI bridge controller register base address
+ * @param en true to enable, false to disable
+ */
+static inline void mipi_dsi_brg_ll_force_enable_reg_clock(dsi_brg_dev_t *dev, bool en)
+{
+    dev->clk_en.clk_en = en;
+}
+
+/**
  * @brief Enable the DSI bridge
  *
  * @param dev Pointer to the DSI bridge controller register base address
@@ -33,6 +45,46 @@ typedef enum {
 static inline void mipi_dsi_brg_ll_enable(dsi_brg_dev_t *dev, bool en)
 {
     dev->en.dsi_en = en;
+}
+
+/**
+ * @brief Enable DSI bridge interrupt for specific event mask
+ *
+ * @param dev Pointer to the DSI bridge controller register base address
+ * @param mask Event mask
+ * @param enable True to enable, False to disable
+ */
+static inline void mipi_dsi_brg_ll_enable_interrupt(dsi_brg_dev_t *dev, uint32_t mask, bool enable)
+{
+    if (enable) {
+        dev->int_ena.val |= mask;
+    } else {
+        dev->int_ena.val &= ~mask;
+    }
+}
+
+/**
+ * @brief Clear DSI bridge interrupt for specific event mask
+ *
+ * @param dev Pointer to the DSI bridge controller register base address
+ * @param mask Event mask
+ */
+__attribute__((always_inline))
+static inline void mipi_dsi_brg_ll_clear_interrupt_status(dsi_brg_dev_t *dev, uint32_t mask)
+{
+    dev->int_clr.val = mask;
+}
+
+/**
+ * @brief Get interrupt status for DSI bridge
+ *
+ * @param dev Pointer to the DSI bridge controller register base address
+ * @return Interrupt status
+ */
+__attribute__((always_inline))
+static inline uint32_t mipi_dsi_brg_ll_get_interrupt_status(dsi_brg_dev_t *dev)
+{
+    return dev->int_st.val;
 }
 
 /**
@@ -118,23 +170,25 @@ static inline void mipi_dsi_brg_ll_credit_reset(dsi_brg_dev_t *dev)
  * @brief Set the color coding for the bridge controller
  *
  * @param dev Pointer to the DSI bridge controller register base address
- * @param pixel_format Color coding
+ * @param color_coding Color coding value
  * @param sub_config Sub configuration
  */
-static inline void mipi_dsi_brg_ll_set_pixel_format(dsi_brg_dev_t *dev, lcd_color_rgb_pixel_format_t pixel_format, uint32_t sub_config)
+static inline void mipi_dsi_brg_ll_set_pixel_format(dsi_brg_dev_t *dev, lcd_color_format_t color_coding, uint32_t sub_config)
 {
-    switch (pixel_format) {
-    case LCD_COLOR_PIXEL_FORMAT_RGB565:
+    switch (color_coding) {
+    case LCD_COLOR_FMT_RGB565:
         dev->pixel_type.raw_type = 2;
         break;
-    case LCD_COLOR_PIXEL_FORMAT_RGB666:
+    case LCD_COLOR_FMT_RGB666:
         dev->pixel_type.raw_type = 1;
         break;
-    case LCD_COLOR_PIXEL_FORMAT_RGB888:
+    case LCD_COLOR_FMT_RGB888:
         dev->pixel_type.raw_type = 0;
         break;
     default:
-        abort();
+        // MIPI DSI host can only accept RGB data, no YUV data
+        HAL_ASSERT(false);
+        break;
     }
     dev->pixel_type.dpi_config = sub_config;
 }
@@ -242,7 +296,7 @@ static inline void mipi_dsi_brg_ll_enable_ref_clock(dsi_brg_dev_t *dev, bool en)
  * @param dev Pointer to the DSI bridge controller register base address
  * @param controller Flow controller
  */
-static inline void mipi_dsi_brg_ll_set_flow_controller(dsi_brg_dev_t* dev, mipi_dsi_ll_flow_controller_t controller)
+static inline void mipi_dsi_brg_ll_set_flow_controller(dsi_brg_dev_t *dev, mipi_dsi_ll_flow_controller_t controller)
 {
     dev->dma_flow_ctrl.dsi_dma_flow_controller = controller;
 }
@@ -255,9 +309,21 @@ static inline void mipi_dsi_brg_ll_set_flow_controller(dsi_brg_dev_t* dev, mipi_
  * @param dev Pointer to the DSI bridge controller register base address
  * @param number Number of blocks
  */
-static inline void mipi_dsi_brg_ll_set_multi_block_number(dsi_brg_dev_t* dev, uint32_t number)
+static inline void mipi_dsi_brg_ll_set_multi_block_number(dsi_brg_dev_t *dev, uint32_t number)
 {
     dev->dma_flow_ctrl.dma_flow_multiblk_num = number;
+    dev->dma_frame_interval.dma_multiblk_en = number > 1;
+}
+
+/**
+ * @brief Get the FIFO depth of the DSI bridge
+ *
+ * @param dev Pointer to the DSI bridge controller register base address
+ * @return FIFO depth
+ */
+static inline uint32_t mipi_dsi_brg_ll_get_fifo_depth(dsi_brg_dev_t *dev)
+{
+    return dev->fifo_flow_status.raw_buf_depth;
 }
 
 /**
@@ -266,7 +332,7 @@ static inline void mipi_dsi_brg_ll_set_multi_block_number(dsi_brg_dev_t* dev, ui
  * @param dev Pointer to the DSI bridge controller register base address
  * @param std YUV-RGB conversion standard
  */
-static inline void mipi_dsi_brg_ll_set_yuv_convert_std(dsi_brg_dev_t* dev, lcd_yuv_conv_std_t std)
+static inline void mipi_dsi_brg_ll_set_yuv_convert_std(dsi_brg_dev_t *dev, lcd_yuv_conv_std_t std)
 {
     switch (std) {
     case LCD_YUV_CONV_STD_BT601:
@@ -274,6 +340,36 @@ static inline void mipi_dsi_brg_ll_set_yuv_convert_std(dsi_brg_dev_t* dev, lcd_y
         break;
     case LCD_YUV_CONV_STD_BT709:
         dev->yuv_cfg.protocol = 1;
+        break;
+    default:
+        abort();
+    }
+}
+
+/**
+ * @brief Set the YUV422 packing order
+ *
+ * @param dev Pointer to the DSI bridge controller register base address
+ * @param order YUV422 packing order
+ */
+static inline void mipi_dsi_brg_ll_set_yuv422_pack_order(dsi_brg_dev_t *dev, lcd_yuv422_pack_order_t order)
+{
+    switch (order) {
+    case LCD_YUV422_PACK_ORDER_UYVY:
+        dev->yuv_cfg.yuv422_format = 0;
+        dev->yuv_cfg.yuv_pix_endian = 1;
+        break;
+    case LCD_YUV422_PACK_ORDER_VYUY:
+        dev->yuv_cfg.yuv422_format = 1;
+        dev->yuv_cfg.yuv_pix_endian = 1;
+        break;
+    case LCD_YUV422_PACK_ORDER_YUYV:
+        dev->yuv_cfg.yuv422_format = 2;
+        dev->yuv_cfg.yuv_pix_endian = 1;
+        break;
+    case LCD_YUV422_PACK_ORDER_YVYU:
+        dev->yuv_cfg.yuv422_format = 3;
+        dev->yuv_cfg.yuv_pix_endian = 1;
         break;
     default:
         abort();

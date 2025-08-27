@@ -13,6 +13,7 @@ When reproducible builds are enabled, the application built with ESP-IDF does no
 - Directory where the project is located
 - Directory where ESP-IDF is located (``IDF_PATH``)
 - Build time
+- Toolchain installation path
 
 Reasons for Non-Reproducible Builds
 -----------------------------------
@@ -46,9 +47,12 @@ ESP-IDF achieves reproducible builds using the following measures:
     - Path to the project is replaced with ``/IDF_PROJECT``
     - Path to the build directory is replaced with ``/IDF_BUILD``
     - Paths to components are replaced with ``/COMPONENT_NAME_DIR`` (where ``NAME`` is the name of the component)
+    - Path to the toolchain is replaced with ``/TOOLCHAIN``
 
 - Build date and time are not included into the :ref:`application  metadata structure <app-image-format-application-description>` and :ref:`bootloader metadata structure <image-format-bootloader-description>` if :ref:`CONFIG_APP_REPRODUCIBLE_BUILD` is enabled.
 - ESP-IDF build system ensures that source file lists, component lists and other sequences are sorted before passing them to CMake. Various other parts of the build system, such as the linker script generator also perform sorting to ensure that same output is produced regardless of the environment.
+
+.. _reproducible-builds-and-debugging:
 
 Reproducible Builds and Debugging
 ---------------------------------
@@ -61,9 +65,9 @@ This issue can be solved using GDB ``set substitute-path`` command. For example,
 
     set substitute-path /COMPONENT_FREERTOS_DIR /home/user/esp/esp-idf/components/freertos
 
-ESP-IDF build system generates a file with the list of such ``set substitute-path`` commands automatically during the build process. The file is called ``prefix_map_gdbinit`` and is located in the project ``build`` directory.
+ESP-IDF build system generates a file with the list of such ``set substitute-path`` commands automatically during the build process. The file is called ``prefix_map`` and is located in the project ``build/gdbinit`` directory.
 
-When :ref:`idf.py gdb <jtag-debugging-with-idf-py>` is used to start debugging, this additional ``gdbinit`` file is automatically passed to GDB. When launching GDB manually or from IDE, please pass this additional ``gdbinit`` script to GDB using ``-x build/prefix_map_gdbinit`` argument.
+When :ref:`idf.py gdb <jtag-debugging-with-idf-py>` is used to start debugging, this additional ``gdbinit`` file is automatically passed to GDB. When launching GDB manually or from IDE, please pass this additional ``gdbinit`` script to GDB using ``-x build/gdbinit/prefix_map`` argument.
 
 Factors Which Still Affect Reproducible Builds
 ----------------------------------------------

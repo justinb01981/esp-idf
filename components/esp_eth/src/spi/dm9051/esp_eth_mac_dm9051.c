@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2019-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2019-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -10,6 +10,8 @@
 #include <inttypes.h>
 #include "esp_eth_mac_spi.h"
 #include "driver/gpio.h"
+#include "esp_private/gpio.h"
+#include "soc/io_mux_reg.h"
 #include "driver/spi_master.h"
 #include "esp_attr.h"
 #include "esp_log.h"
@@ -23,10 +25,10 @@
 #include "freertos/semphr.h"
 #include "dm9051.h"
 #include "sdkconfig.h"
-#include "esp_rom_gpio.h"
 #include "esp_rom_sys.h"
 #include "esp_cpu.h"
 #include "esp_timer.h"
+#include "esp_rom_crc.h"
 
 static const char *TAG = "dm9051.mac";
 
@@ -36,18 +38,14 @@ static const char *TAG = "dm9051.mac";
 #define DM9051_RX_MEM_START_ADDR        (3072)
 #define DM9051_RX_MEM_MAX_SIZE          (16384)
 #define DM9051_RX_HDR_SIZE              (4)
-#define DM9051_ETH_MAC_RX_BUF_SIZE_AUTO (0)
+
+#define DM9051_HASH_FILTER_TABLE_SIZE   (64)
 
 typedef struct {
-    uint32_t copy_len;
-    uint32_t byte_cnt;
-} __attribute__((packed)) dm9051_auto_buf_info_t;
-
-typedef struct {
-    uint8_t flag;
-    uint8_t status;
-    uint8_t length_low;
-    uint8_t length_high;
+    uint8_t flag;        // 0 = no frame, 1 = frame received, others = possible memory pointer error or tcpip_checksum_offload status flag if enabled
+    uint8_t status;      // Events occurred between this and previous frame (the same format as RSR)
+    uint8_t length_low;  // Low byte of received frame length
+    uint8_t length_high; // High byte of received frame length
 } dm9051_rx_header_t;
 
 typedef struct {
@@ -73,10 +71,11 @@ typedef struct {
     int int_gpio_num;
     esp_timer_handle_t poll_timer;
     uint32_t poll_period_ms;
-    uint8_t addr[6];
+    uint8_t addr[ETH_ADDR_LEN];
     bool packets_remain;
     bool flow_ctrl_enabled;
     uint8_t *rx_buffer;
+    uint8_t hash_filter_cnt[DM9051_HASH_FILTER_TABLE_SIZE];
 } emac_dm9051_t;
 
 static void *dm9051_spi_init(const void *spi_config)
@@ -231,20 +230,12 @@ static esp_err_t dm9051_memory_read(emac_dm9051_t *emac, uint8_t *buffer, uint32
 }
 
 /**
- * @brief peek buffer from dm9051 internal memory (without internal cursor moved)
- */
-static esp_err_t dm9051_memory_peek(emac_dm9051_t *emac, uint8_t *buffer, uint32_t len)
-{
-    return emac->spi.read(emac->spi.ctx, DM9051_SPI_RD, DM9051_MRCMDX1, buffer, len);
-}
-
-/**
  * @brief read mac address from internal registers
  */
 static esp_err_t dm9051_get_mac_addr(emac_dm9051_t *emac)
 {
     esp_err_t ret = ESP_OK;
-    for (int i = 0; i < 6; i++) {
+    for (int i = 0; i < ETH_ADDR_LEN; i++) {
         ESP_GOTO_ON_ERROR(dm9051_register_read(emac, DM9051_PAR + i, &emac->addr[i]), err, TAG, "read PAR failed");
     }
     return ESP_OK;
@@ -258,7 +249,7 @@ err:
 static esp_err_t dm9051_set_mac_addr(emac_dm9051_t *emac)
 {
     esp_err_t ret = ESP_OK;
-    for (int i = 0; i < 6; i++) {
+    for (int i = 0; i < ETH_ADDR_LEN; i++) {
         ESP_GOTO_ON_ERROR(dm9051_register_write(emac, DM9051_PAR + i, emac->addr[i]), err, TAG, "write PAR failed");
     }
     return ESP_OK;
@@ -272,16 +263,57 @@ err:
 static esp_err_t dm9051_clear_multicast_table(emac_dm9051_t *emac)
 {
     esp_err_t ret = ESP_OK;
-    /* rx broadcast packet control by bit7 of MAC register 1DH */
-    ESP_GOTO_ON_ERROR(dm9051_register_write(emac, DM9051_BCASTCR, 0x00), err, TAG, "write BCASTCR failed");
-    for (int i = 0; i < 7; i++) {
+    /* Keep multicast hash table empty and use DM9051_BCASTCR to accept broadcast for in better performance */
+    for (int i = 0; i < 8; i++) {
         ESP_GOTO_ON_ERROR(dm9051_register_write(emac, DM9051_MAR + i, 0x00), err, TAG, "write MAR failed");
     }
-    /* enable receive broadcast paclets */
-    ESP_GOTO_ON_ERROR(dm9051_register_write(emac, DM9051_MAR + 7, 0x80), err, TAG, "write MAR failed");
     return ESP_OK;
 err:
     return ret;
+}
+
+static esp_err_t dm9051_hash_filter_modify(emac_dm9051_t *emac, uint8_t *addr, bool add)
+{
+    esp_err_t ret = ESP_OK;
+
+    // calculate crc32 value of mac address
+    uint32_t crc = ~esp_rom_crc32_le(0, addr, ETH_ADDR_LEN);
+
+    uint8_t hash_value = crc & 0x3F;
+    uint8_t hash_group = hash_value / 8;
+    uint8_t hash_bit = hash_value % 8;
+
+    uint8_t mar;
+    ESP_GOTO_ON_ERROR(dm9051_register_read(emac, (DM9051_MAR + hash_group), &mar), err, TAG, "read MAR failed");
+    if (add) {
+        // add address to hash table
+        mar |= (1 << hash_bit);
+        emac->hash_filter_cnt[hash_value]++;
+    } else {
+        emac->hash_filter_cnt[hash_value]--;
+        if (emac->hash_filter_cnt[hash_value] == 0) {
+            // remove address from hash table
+            mar &= ~(1 << hash_bit);
+        }
+    }
+    ESP_GOTO_ON_ERROR(dm9051_register_write(emac, (DM9051_MAR + hash_group), mar), err, TAG, "write MAR failed");
+
+err:
+    return ret;
+}
+
+static esp_err_t emac_dm9051_add_mac_filter(esp_eth_mac_t *mac, uint8_t *addr)
+{
+    emac_dm9051_t *emac = __containerof(mac, emac_dm9051_t, parent);
+    ESP_RETURN_ON_ERROR(dm9051_hash_filter_modify(emac, addr, true), TAG, "modify multicast table failed");
+    return ESP_OK;
+}
+
+static esp_err_t emac_dm9051_rm_mac_filter(esp_eth_mac_t *mac, uint8_t *addr)
+{
+    emac_dm9051_t *emac = __containerof(mac, emac_dm9051_t, parent);
+    ESP_RETURN_ON_ERROR(dm9051_hash_filter_modify(emac, addr, false), TAG, "modify multicast table failed");
+    return ESP_OK;
 }
 
 /**
@@ -292,7 +324,7 @@ static esp_err_t dm9051_reset(emac_dm9051_t *emac)
     esp_err_t ret = ESP_OK;
     /* power on phy */
     ESP_GOTO_ON_ERROR(dm9051_register_write(emac, DM9051_GPR, 0x00), err, TAG, "write GPR failed");
-    /* mac and phy register won't be accesable within at least 1ms */
+    /* mac and phy register won't be accessible within at least 1ms */
     vTaskDelay(pdMS_TO_TICKS(10));
     /* software reset */
     uint8_t ncr = NCR_RST;
@@ -340,26 +372,34 @@ static esp_err_t dm9051_setup_default(emac_dm9051_t *emac)
     ESP_GOTO_ON_ERROR(dm9051_register_write(emac, DM9051_WCR, 0x00), err, TAG, "write WCR failed");
     /* stop transmitting, enable appending pad, crc for packets */
     ESP_GOTO_ON_ERROR(dm9051_register_write(emac, DM9051_TCR, 0x00), err, TAG, "write TCR failed");
-    /* stop receiving, no promiscuous mode, no runt packet(size < 64bytes), receive all multicast packets */
+    /* Before enabling the RCR feature, make sure to set IMR_PAR in IMR */
+    ESP_GOTO_ON_ERROR(dm9051_register_write(emac, DM9051_IMR, IMR_PAR), err, TAG, "write DM9051_IMR failed");
+    /* stop receiving, no promiscuous mode, no runt packet(size < 64bytes) */
     /* discard long packet(size > 1522bytes) and crc error packet, enable watchdog */
-    ESP_GOTO_ON_ERROR(dm9051_register_write(emac, DM9051_RCR, RCR_DIS_LONG | RCR_DIS_CRC | RCR_ALL_MCAST), err, TAG, "write RCR failed");
+    ESP_GOTO_ON_ERROR(dm9051_register_write(emac, DM9051_RCR, RCR_DIS_LONG | RCR_DIS_CRC), err, TAG, "write RCR failed");
     /* retry late collision packet, at most two transmit command can be issued before transmit complete */
     ESP_GOTO_ON_ERROR(dm9051_register_write(emac, DM9051_TCR2, TCR2_RLCP), err, TAG, "write TCR2 failed");
     /* enable auto transmit */
     ESP_GOTO_ON_ERROR(dm9051_register_write(emac, DM9051_ATCR, ATCR_AUTO_TX), err, TAG, "write ATCR failed");
-    /* generate checksum for UDP, TCP and IPv4 packets */
-    ESP_GOTO_ON_ERROR(dm9051_register_write(emac, DM9051_TCSCR, TCSCR_IPCSE | TCSCR_TCPCSE | TCSCR_UDPCSE), err, TAG, "write TCSCR failed");
+    /* do not generate checksum for UDP, TCP and IPv4 packets */
+    ESP_GOTO_ON_ERROR(dm9051_register_write(emac, DM9051_TCSCR, 0x00), err, TAG, "write TCSCR failed");
     /* disable check sum for receive packets */
     ESP_GOTO_ON_ERROR(dm9051_register_write(emac, DM9051_RCSCSR, 0x00), err, TAG, "write RCSCSR failed");
     /* interrupt pin config: push-pull output, active high */
     ESP_GOTO_ON_ERROR(dm9051_register_write(emac, DM9051_INTCR, 0x00), err, TAG, "write INTCR failed");
-    ESP_GOTO_ON_ERROR(dm9051_register_write(emac, DM9051_INTCKCR, 0x00), err, TAG, "write INTCKCR failed");
+    /* Utilize DM9051_INTCKCR to enable edge-triggered interrupts and address level-triggered interrupt loss */
+    ESP_GOTO_ON_ERROR(dm9051_register_write(emac, DM9051_INTCKCR, 0x83), err, TAG, "write INTCKCR failed");
     /* no length limitation for rx packets */
     ESP_GOTO_ON_ERROR(dm9051_register_write(emac, DM9051_RLENCR, 0x00), err, TAG, "write RLENCR failed");
     /* 3K-byte for TX and 13K-byte for RX */
     ESP_GOTO_ON_ERROR(dm9051_register_write(emac, DM9051_MEMSCR, 0x00), err, TAG, "write MEMSCR failed");
     /* clear network status: wakeup event, tx complete */
-    ESP_GOTO_ON_ERROR(dm9051_register_write(emac, DM9051_NSR, NSR_WAKEST | NSR_TX2END | NSR_TX1END), err, TAG, "write NSR failed");
+    /* Optimize transmission process using TX2END and TX1END */
+    ESP_GOTO_ON_ERROR(dm9051_register_write(emac, DM9051_NSR, NSR_WAKEST), err, TAG, "write NSR failed");
+    /* Set Link & Traffic LED mode */
+    ESP_GOTO_ON_ERROR(dm9051_register_write(emac, DM9051_MLEDCR, MLEDCR_MOD3 | MLEDCR_LED_TYPE_01), err, TAG, "write DM9051_MLEDCR failed");
+    /* Enable packet length filter of broadcast packet */
+    ESP_GOTO_ON_ERROR(dm9051_register_write(emac, DM9051_BCASTCR, 0xc0), err, TAG, "write DM9051_BCASTCR failed");
     return ESP_OK;
 err:
     return ret;
@@ -414,8 +454,8 @@ static esp_err_t emac_dm9051_stop(esp_eth_mac_t *mac)
 {
     esp_err_t ret = ESP_OK;
     emac_dm9051_t *emac = __containerof(mac, emac_dm9051_t, parent);
-    /* disable interrupt */
-    ESP_GOTO_ON_ERROR(dm9051_register_write(emac, DM9051_IMR, 0x00), err, TAG, "write IMR failed");
+    /* IMR_PAR should not be cleared unless Wake-on-LAN (WOL) functionality is required */
+    ESP_GOTO_ON_ERROR(dm9051_register_write(emac, DM9051_IMR, IMR_PAR), err, TAG, "write IMR failed");
     /* disable rx */
     uint8_t rcr = 0;
     ESP_GOTO_ON_ERROR(dm9051_register_read(emac, DM9051_RCR, &rcr), err, TAG, "read RCR failed");
@@ -622,6 +662,22 @@ err:
     return ret;
 }
 
+static esp_err_t emac_dm9051_set_all_multicast(esp_eth_mac_t *mac, bool enable)
+{
+    esp_err_t ret = ESP_OK;
+    emac_dm9051_t *emac = __containerof(mac, emac_dm9051_t, parent);
+    uint8_t rcr = 0;
+    ESP_GOTO_ON_ERROR(dm9051_register_read(emac, DM9051_RCR, &rcr), err, TAG, "read RCR failed");
+    if (enable) {
+        rcr |= RCR_ALL_MCAST;
+    } else {
+        rcr &= ~RCR_ALL_MCAST;
+    }
+    ESP_GOTO_ON_ERROR(dm9051_register_write(emac, DM9051_RCR, rcr), err, TAG, "write RCR failed");
+err:
+    return ret;
+}
+
 static esp_err_t emac_dm9051_enable_flow_ctrl(esp_eth_mac_t *mac, bool enable)
 {
     emac_dm9051_t *emac = __containerof(mac, emac_dm9051_t, parent);
@@ -647,20 +703,24 @@ static esp_err_t emac_dm9051_transmit(esp_eth_mac_t *mac, uint8_t *buf, uint32_t
 {
     esp_err_t ret = ESP_OK;
     emac_dm9051_t *emac = __containerof(mac, emac_dm9051_t, parent);
-    /* Check if last transmit complete */
-    uint8_t tcr = 0;
 
     ESP_GOTO_ON_FALSE(length <= ETH_MAX_PACKET_SIZE, ESP_ERR_INVALID_ARG, err,
                       TAG, "frame size is too big (actual %" PRIu32 ", maximum %d)", length, ETH_MAX_PACKET_SIZE);
 
+    uint8_t reg_nsr = 0;
     int64_t wait_time =  esp_timer_get_time();
     do {
-        ESP_GOTO_ON_ERROR(dm9051_register_read(emac, DM9051_TCR, &tcr), err, TAG, "read TCR failed");
-    } while ((tcr & TCR_TXREQ) && ((esp_timer_get_time() - wait_time) < 100));
+        ESP_GOTO_ON_ERROR(dm9051_register_read(emac, DM9051_NSR, &reg_nsr), err, TAG, "read NSR failed");
+        reg_nsr &= (NSR_TX2END | NSR_TX1END);
+    } while((!reg_nsr) && ((esp_timer_get_time() - wait_time) < 100));
 
-    if (tcr & TCR_TXREQ) {
+    if (!reg_nsr) {
         ESP_LOGE(TAG, "last transmit still in progress, cannot send.");
         return ESP_ERR_INVALID_STATE;
+    }
+
+    if(reg_nsr == (NSR_TX2END | NSR_TX1END)) {
+        ESP_GOTO_ON_ERROR(dm9051_register_write(emac, DM9051_MPTRCR, MPTRCR_RST_TX), err, TAG, "write MPTRCR failed");
     }
 
     /* set tx length */
@@ -668,8 +728,6 @@ static esp_err_t emac_dm9051_transmit(esp_eth_mac_t *mac, uint8_t *buf, uint32_t
     ESP_GOTO_ON_ERROR(dm9051_register_write(emac, DM9051_TXPLH, (length >> 8) & 0xFF), err, TAG, "write TXPLH failed");
     /* copy data to tx memory */
     ESP_GOTO_ON_ERROR(dm9051_memory_write(emac, buf, length), err, TAG, "write memory failed");
-    /* issue tx polling command */
-    ESP_GOTO_ON_ERROR(dm9051_register_write(emac, DM9051_TCR, TCR_TXREQ), err, TAG, "write TCR failed");
     return ESP_OK;
 err:
     return ret;
@@ -682,88 +740,69 @@ static esp_err_t dm9051_skip_recv_frame(emac_dm9051_t *emac, uint16_t rx_length)
     ESP_GOTO_ON_ERROR(dm9051_register_read(emac, DM9051_MRRH, &mrrh), err, TAG, "read MDRAH failed");
     ESP_GOTO_ON_ERROR(dm9051_register_read(emac, DM9051_MRRL, &mrrl), err, TAG, "read MDRAL failed");
     uint16_t addr = mrrh << 8 | mrrl;
-    /* include 4B for header */
-    addr += rx_length + DM9051_RX_HDR_SIZE;
+    addr += rx_length;
     if (addr > DM9051_RX_MEM_MAX_SIZE) {
         addr = addr - DM9051_RX_MEM_MAX_SIZE + DM9051_RX_MEM_START_ADDR;
     }
-    ESP_GOTO_ON_ERROR(dm9051_register_write(emac, DM9051_MRRH, addr >> 8), err, TAG, "write MDRAH failed");
     ESP_GOTO_ON_ERROR(dm9051_register_write(emac, DM9051_MRRL, addr & 0xFF), err, TAG, "write MDRAL failed");
+    ESP_GOTO_ON_ERROR(dm9051_register_write(emac, DM9051_MRRH, addr >> 8), err, TAG, "write MDRAH failed");
 err:
     return ret;
 }
 
-static esp_err_t dm9051_get_recv_byte_count(emac_dm9051_t *emac, uint16_t *size)
+static esp_err_t dm9051_flush_recv_queue(emac_dm9051_t *emac)
+{
+    esp_err_t ret = ESP_OK;
+    ESP_GOTO_ON_ERROR(emac->parent.stop(&emac->parent), err, TAG, "stop dm9051 failed");
+    /* reset rx fifo pointer */
+    ESP_GOTO_ON_ERROR(dm9051_register_write(emac, DM9051_MPTRCR, MPTRCR_RST_RX), err, TAG, "write MPTRCR failed");
+    esp_rom_delay_us(10);
+    ESP_GOTO_ON_ERROR(emac->parent.start(&emac->parent), err, TAG, "start dm9051 failed");
+err:
+    return ret;
+}
+
+static esp_err_t dm9051_frame_to_rx_buffer(emac_dm9051_t *emac, uint16_t *size)
 {
     esp_err_t ret = ESP_OK;
     uint8_t rxbyte = 0;
     __attribute__((aligned(4))) dm9051_rx_header_t header; // SPI driver needs the rx buffer 4 byte align
+    bool try_again = false;
 
-    *size = 0;
-    /* dummy read, get the most updated data */
-    ESP_GOTO_ON_ERROR(dm9051_register_read(emac, DM9051_MRCMDX, &rxbyte), err, TAG, "read MRCMDX failed");
-    ESP_GOTO_ON_ERROR(dm9051_register_read(emac, DM9051_MRCMDX, &rxbyte), err, TAG, "read MRCMDX failed");
-    /* rxbyte must be 0xFF, 0 or 1 */
-    if (rxbyte > 1) {
-        ESP_GOTO_ON_ERROR(emac->parent.stop(&emac->parent), err, TAG, "stop dm9051 failed");
-        /* reset rx fifo pointer */
-        ESP_GOTO_ON_ERROR(dm9051_register_write(emac, DM9051_MPTRCR, MPTRCR_RST_RX), err, TAG, "write MPTRCR failed");
-        esp_rom_delay_us(10);
-        ESP_GOTO_ON_ERROR(emac->parent.start(&emac->parent), err, TAG, "start dm9051 failed");
-        ESP_GOTO_ON_FALSE(false, ESP_FAIL, err, TAG, "reset rx fifo pointer");
-    } else if (rxbyte) {
-        ESP_GOTO_ON_ERROR(dm9051_memory_peek(emac, (uint8_t *)&header, sizeof(header)), err, TAG, "peek rx header failed");
-        uint16_t rx_len = header.length_low + (header.length_high << 8);
-        if (header.status & 0xBF) {
-            /* erroneous frames should not be forwarded by DM9051, however, if it happens, just skip it */
-            dm9051_skip_recv_frame(emac, rx_len);
-            ESP_GOTO_ON_FALSE(false, ESP_FAIL, err, TAG, "receive status error: %" PRIx8 "H", header.status);
+    do {
+        *size = 0;
+        uint8_t reg_nsr = 0;
+        ESP_GOTO_ON_ERROR(dm9051_register_read(emac, DM9051_NSR, &reg_nsr), err, TAG, "read NSR failed");
+        if (reg_nsr & NSR_RXRDY) {
+            /* dummy read, get the most updated data */
+            ESP_GOTO_ON_ERROR(dm9051_register_read(emac, DM9051_MRCMDX, &rxbyte), err, TAG, "read MRCMDX failed");
+            ESP_GOTO_ON_ERROR(dm9051_register_read(emac, DM9051_MRCMDX1, &rxbyte), err, TAG, "read MRCMDX failed");
+            if (0x01 != rxbyte) {
+                ESP_GOTO_ON_ERROR(dm9051_flush_recv_queue(emac), err, TAG, "flush rx queue failed");
+                ESP_GOTO_ON_FALSE(false, ESP_FAIL, err, TAG, "unexpected rx flag (0x%" PRIx8 "), reset rx fifo pointer", rxbyte);
+            }
+            ESP_GOTO_ON_ERROR(dm9051_memory_read(emac, (uint8_t *)&header, sizeof(header)), err, TAG, "read rx header failed");
+            uint16_t rx_len = header.length_low + (header.length_high << 8);
+            /* store the whole frame to preallocated memory */
+            if (rx_len <= ETH_MAX_PACKET_SIZE) {
+                ESP_GOTO_ON_ERROR(dm9051_memory_read(emac, emac->rx_buffer, rx_len), err, TAG, "read rx data failed");
+            } else {
+                /* we are out of sync or data is corrupted, there is no way how to fix position in rx fifo => flush all */
+                ESP_GOTO_ON_ERROR(dm9051_flush_recv_queue(emac), err, TAG, "flush rx queue failed");
+                ESP_GOTO_ON_FALSE(false, ESP_FAIL, err, TAG, "invalid frame length, reset rx fifo pointer");
+            }
+            if (header.status & (RSR_RF | RSR_RWTO | RSR_CE | RSR_FOE)) {
+                /* erroneous frames should not be forwarded by DM9051, however, if it happens, just skip it */
+                dm9051_skip_recv_frame(emac, rx_len);
+                ESP_LOGE(TAG, "receive status error: %" PRIx8 "H", header.status);
+                /* try again to check if other frame is waiting */
+                try_again = true;
+            } else {
+                *size = rx_len;
+            }
         }
-        *size = rx_len;
-    }
+    } while (try_again);
 err:
-    return ret;
-}
-
-static esp_err_t dm9051_flush_recv_frame(emac_dm9051_t *emac)
-{
-    esp_err_t ret = ESP_OK;
-    uint16_t rx_len;
-    ESP_GOTO_ON_ERROR(dm9051_get_recv_byte_count(emac, &rx_len), err, TAG, "get rx frame length failed");
-    ESP_GOTO_ON_ERROR(dm9051_skip_recv_frame(emac, rx_len), err, TAG, "skipping frame in RX memory failed");
-err:
-    return ret;
-}
-
-static esp_err_t dm9051_alloc_recv_buf(emac_dm9051_t *emac, uint8_t **buf, uint32_t *length)
-{
-    esp_err_t ret = ESP_OK;
-    uint16_t rx_len = 0;
-    uint16_t byte_count;
-    *buf = NULL;
-
-    ESP_GOTO_ON_ERROR(dm9051_get_recv_byte_count(emac, &byte_count), err, TAG, "get rx frame length failed");
-    // silently return when no frame is waiting
-    if (!byte_count) {
-        goto err;
-    }
-    // do not include 4 bytes CRC at the end
-    rx_len = byte_count - ETH_CRC_LEN;
-    // frames larger than expected will be truncated
-    uint16_t copy_len = rx_len > *length ? *length : rx_len;
-    // runt frames are not forwarded, but check the length anyway since it could be corrupted at SPI bus
-    ESP_GOTO_ON_FALSE(copy_len >= ETH_MIN_PACKET_SIZE - ETH_CRC_LEN, ESP_ERR_INVALID_SIZE, err, TAG, "invalid frame length %" PRIu16, copy_len);
-    *buf = malloc(copy_len);
-    if (*buf != NULL) {
-        dm9051_auto_buf_info_t *buff_info = (dm9051_auto_buf_info_t *)*buf;
-        buff_info->copy_len = copy_len;
-        buff_info->byte_cnt = byte_count;
-    } else {
-        ret = ESP_ERR_NO_MEM;
-        goto err;
-    }
-err:
-    *length = rx_len;
     return ret;
 }
 
@@ -771,38 +810,32 @@ static esp_err_t emac_dm9051_receive(esp_eth_mac_t *mac, uint8_t *buf, uint32_t 
 {
     esp_err_t ret = ESP_OK;
     emac_dm9051_t *emac = __containerof(mac, emac_dm9051_t, parent);
-    uint16_t rx_len = 0;
-    uint8_t rxbyte;
-    uint16_t copy_len = 0;
     uint16_t byte_count = 0;
     emac->packets_remain = false;
 
-    if (*length != DM9051_ETH_MAC_RX_BUF_SIZE_AUTO) {
-        ESP_GOTO_ON_ERROR(dm9051_get_recv_byte_count(emac, &byte_count), err, TAG, "get rx frame length failed");
-        /* silently return when no frame is waiting */
-        if (!byte_count) {
-            goto err;
-        }
-        /* do not include 4 bytes CRC at the end */
-        rx_len = byte_count - ETH_CRC_LEN;
-        /* frames larger than expected will be truncated */
-        copy_len = rx_len > *length ? *length : rx_len;
+    /* always read the full frame to preallocated memory to simplify subsequent rx fifo pointer operations */
+    ESP_GOTO_ON_ERROR(dm9051_frame_to_rx_buffer(emac, &byte_count), err, TAG, "moving data to internal rx_buffer failed");
+    /* silently return when no frame is waiting */
+    if (!byte_count) {
+        goto err;
+    }
+    /* do not include 4 bytes CRC at the end */
+    uint16_t rx_len = byte_count - ETH_CRC_LEN;
+    if (buf == emac->rx_buffer) {
+        /* if we use internal buffer, we are done */
+        *length = rx_len;
     } else {
-        dm9051_auto_buf_info_t *buff_info = (dm9051_auto_buf_info_t *)buf;
-        copy_len = buff_info->copy_len;
-        byte_count = buff_info->byte_cnt;
+        /* if frame to be copied to external buffer allocated by user */
+        ESP_GOTO_ON_FALSE(buf, ESP_ERR_INVALID_ARG, err, TAG, "buffer can't be NULL");
+        /* frames larger than expected will be truncated */
+        uint16_t copy_len = rx_len > *length ? *length : rx_len;
+        memcpy(buf, emac->rx_buffer, copy_len);
+        *length = copy_len;
     }
 
-    byte_count += DM9051_RX_HDR_SIZE;
-    ESP_GOTO_ON_ERROR(dm9051_memory_read(emac, emac->rx_buffer, byte_count), err, TAG, "read rx data failed");
-    memcpy(buf, emac->rx_buffer + DM9051_RX_HDR_SIZE, copy_len);
-    *length = copy_len;
-
-    /* dummy read, get the most updated data */
-    ESP_GOTO_ON_ERROR(dm9051_register_read(emac, DM9051_MRCMDX, &rxbyte), err, TAG, "read MRCMDX failed");
-    /* check for remaining packets */
-    ESP_GOTO_ON_ERROR(dm9051_register_read(emac, DM9051_MRCMDX, &rxbyte), err, TAG, "read MRCMDX failed");
-    emac->packets_remain = rxbyte > 0;
+    uint8_t reg_nsr = 0;
+    ESP_GOTO_ON_ERROR(dm9051_register_read(emac, DM9051_NSR, &reg_nsr), err, TAG, "read NSR failed");
+    emac->packets_remain = (reg_nsr & NSR_RXRDY);
     return ESP_OK;
 err:
     *length = 0;
@@ -815,9 +848,9 @@ static esp_err_t emac_dm9051_init(esp_eth_mac_t *mac)
     emac_dm9051_t *emac = __containerof(mac, emac_dm9051_t, parent);
     esp_eth_mediator_t *eth = emac->eth;
     if (emac->int_gpio_num >= 0) {
-        esp_rom_gpio_pad_select_gpio(emac->int_gpio_num);
-        gpio_set_direction(emac->int_gpio_num, GPIO_MODE_INPUT);
-        gpio_set_pull_mode(emac->int_gpio_num, GPIO_PULLDOWN_ONLY);
+        gpio_func_sel(emac->int_gpio_num, PIN_FUNC_GPIO);
+        gpio_input_enable(emac->int_gpio_num);
+        gpio_pulldown_en(emac->int_gpio_num);
         gpio_set_intr_type(emac->int_gpio_num, GPIO_INTR_POSEDGE);
         gpio_intr_enable(emac->int_gpio_num);
         gpio_isr_handler_add(emac->int_gpio_num, dm9051_isr_handler, emac);
@@ -837,7 +870,6 @@ static esp_err_t emac_dm9051_init(esp_eth_mac_t *mac)
 err:
     if (emac->int_gpio_num >= 0) {
         gpio_isr_handler_remove(emac->int_gpio_num);
-        gpio_reset_pin(emac->int_gpio_num);
     }
     eth->on_state_changed(eth, ETH_STATE_DEINIT, NULL);
     return ret;
@@ -850,7 +882,6 @@ static esp_err_t emac_dm9051_deinit(esp_eth_mac_t *mac)
     mac->stop(mac);
     if (emac->int_gpio_num >= 0) {
         gpio_isr_handler_remove(emac->int_gpio_num);
-        gpio_reset_pin(emac->int_gpio_num);
     }
     if (emac->poll_timer && esp_timer_is_active(emac->poll_timer)) {
         esp_timer_stop(emac->poll_timer);
@@ -863,12 +894,11 @@ static void emac_dm9051_task(void *arg)
 {
     emac_dm9051_t *emac = (emac_dm9051_t *)arg;
     uint8_t status = 0;
-    esp_err_t ret;
     while (1) {
         // check if the task receives any notification
         if (emac->int_gpio_num >= 0) {                                   // if in interrupt mode
-            if (ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(1000)) == 0 &&   // if no notification ...
-                    gpio_get_level(emac->int_gpio_num) == 0) {               // ...and no interrupt asserted
+            if (ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(1000)) == 0 &&    // if no notification ...
+                    gpio_get_level(emac->int_gpio_num) == 0) {           // ...and no interrupt asserted
                 continue;                                                // -> just continue to check again
             }
         } else {
@@ -880,38 +910,22 @@ static void emac_dm9051_task(void *arg)
         /* packet received */
         if (status & ISR_PR) {
             do {
-                /* define max expected frame len */
-                uint32_t frame_len = ETH_MAX_PACKET_SIZE;
-                uint8_t *buffer;
-                if ((ret = dm9051_alloc_recv_buf(emac, &buffer, &frame_len)) == ESP_OK) {
-                    if (buffer != NULL) {
-                        /* we have memory to receive the frame of maximal size previously defined */
-                        uint32_t buf_len = DM9051_ETH_MAC_RX_BUF_SIZE_AUTO;
-                        if (emac->parent.receive(&emac->parent, buffer, &buf_len) == ESP_OK) {
-                            if (buf_len == 0) {
-                                dm9051_flush_recv_frame(emac);
-                                free(buffer);
-                            } else if (frame_len > buf_len) {
-                                ESP_LOGE(TAG, "received frame was truncated");
-                                free(buffer);
-                            } else {
-                                ESP_LOGD(TAG, "receive len=%" PRIu32, buf_len);
-                                /* pass the buffer to stack (e.g. TCP/IP layer) */
-                                emac->eth->stack_input(emac->eth, buffer, buf_len);
-                            }
+                uint32_t buf_len;
+                if (emac->parent.receive(&emac->parent, emac->rx_buffer, &buf_len) == ESP_OK) {
+                    /* if there is waiting frame */
+                    if (buf_len > 0) {
+                        uint8_t *buffer = malloc(buf_len);
+                        if (buffer == NULL) {
+                            ESP_LOGE(TAG, "no mem for receive buffer");
                         } else {
-                            ESP_LOGE(TAG, "frame read from module failed");
-                            dm9051_flush_recv_frame(emac);
-                            free(buffer);
+                            memcpy(buffer, emac->rx_buffer, buf_len);
+                            ESP_LOGD(TAG, "receive len=%" PRIu32, buf_len);
+                            /* pass the buffer to stack (e.g. TCP/IP layer) */
+                            emac->eth->stack_input(emac->eth, buffer, buf_len);
                         }
-                    } else if (frame_len) {
-                        ESP_LOGE(TAG, "invalid combination of frame_len(%" PRIu32 ") and buffer pointer(%p)", frame_len, buffer);
                     }
-                } else if (ret == ESP_ERR_NO_MEM) {
-                    ESP_LOGE(TAG, "no mem for receive buffer");
-                    dm9051_flush_recv_frame(emac);
                 } else {
-                    ESP_LOGE(TAG, "unexpected error 0x%x", ret);
+                    ESP_LOGE(TAG, "frame read from module failed");
                 }
             } while (emac->packets_remain);
         }
@@ -960,10 +974,13 @@ esp_eth_mac_t *esp_eth_mac_new_dm9051(const eth_dm9051_config_t *dm9051_config, 
     emac->parent.set_duplex = emac_dm9051_set_duplex;
     emac->parent.set_link = emac_dm9051_set_link;
     emac->parent.set_promiscuous = emac_dm9051_set_promiscuous;
+    emac->parent.set_all_multicast = emac_dm9051_set_all_multicast;
     emac->parent.set_peer_pause_ability = emac_dm9051_set_peer_pause_ability;
     emac->parent.enable_flow_ctrl = emac_dm9051_enable_flow_ctrl;
     emac->parent.transmit = emac_dm9051_transmit;
     emac->parent.receive = emac_dm9051_receive;
+    emac->parent.add_mac_filter = emac_dm9051_add_mac_filter;
+    emac->parent.rm_mac_filter = emac_dm9051_rm_mac_filter;
 
     if (dm9051_config->custom_spi_driver.init != NULL && dm9051_config->custom_spi_driver.deinit != NULL
             && dm9051_config->custom_spi_driver.read != NULL && dm9051_config->custom_spi_driver.write != NULL) {
@@ -997,7 +1014,7 @@ esp_eth_mac_t *esp_eth_mac_new_dm9051(const eth_dm9051_config_t *dm9051_config, 
                                                    mac_config->rx_task_prio, &emac->rx_task_hdl, core_num);
     ESP_GOTO_ON_FALSE(xReturned == pdPASS, NULL, err, TAG, "create dm9051 task failed");
 
-    emac->rx_buffer = heap_caps_malloc(ETH_MAX_PACKET_SIZE + DM9051_RX_HDR_SIZE, MALLOC_CAP_DMA);
+    emac->rx_buffer = heap_caps_malloc(ETH_MAX_PACKET_SIZE, MALLOC_CAP_DMA);
     ESP_GOTO_ON_FALSE(emac->rx_buffer, NULL, err, TAG, "RX buffer allocation failed");
 
     if (emac->int_gpio_num < 0) {

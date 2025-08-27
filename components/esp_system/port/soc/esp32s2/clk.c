@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2015-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2015-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -13,7 +13,7 @@
 #include "esp_log.h"
 #include "esp_cpu.h"
 #include "esp_clk_internal.h"
-#include "esp_rom_uart.h"
+#include "esp_rom_serial_output.h"
 #include "esp_rom_sys.h"
 #include "soc/system_reg.h"
 #include "soc/dport_reg.h"
@@ -59,7 +59,7 @@ typedef enum {
 
 static void select_rtc_slow_clk(slow_clk_sel_t slow_clk);
 
-__attribute__((weak)) void esp_clk_init(void)
+void esp_rtc_init(void)
 {
     rtc_config_t cfg = RTC_CONFIG_DEFAULT();
     soc_reset_reason_t rst_reas = esp_rom_get_reset_reason(0);
@@ -73,7 +73,10 @@ __attribute__((weak)) void esp_clk_init(void)
         }
     }
     rtc_init(cfg);
+}
 
+__attribute__((weak)) void esp_clk_init(void)
+{
     bool rc_fast_d256_is_enabled = rtc_clk_8md256_enabled();
     rtc_clk_8m_enable(true, rc_fast_d256_is_enabled);
     rtc_clk_fast_src_set(SOC_RTC_FAST_CLK_SRC_RC_FAST);
@@ -163,7 +166,7 @@ static void select_rtc_slow_clk(slow_clk_sel_t slow_clk)
             }
             // When SLOW_CLK_CAL_CYCLES is set to 0, clock calibration will not be performed at startup.
             if (SLOW_CLK_CAL_CYCLES > 0) {
-                cal_val = rtc_clk_cal(RTC_CAL_32K_XTAL, SLOW_CLK_CAL_CYCLES);
+                cal_val = rtc_clk_cal(CLK_CAL_32K_XTAL, SLOW_CLK_CAL_CYCLES);
                 if (cal_val == 0) {
                     if (retry_32k_xtal-- > 0) {
                         continue;
@@ -176,12 +179,15 @@ static void select_rtc_slow_clk(slow_clk_sel_t slow_clk)
             rtc_clk_8m_enable(true, true);
         }
         rtc_clk_slow_src_set(rtc_slow_clk_src);
-
+        if (rtc_slow_clk_src != SOC_RTC_SLOW_CLK_SRC_XTAL32K) {
+            rtc_clk_32k_enable(false);
+            rtc_clk_32k_disable_external();
+        }
         if (SLOW_CLK_CAL_CYCLES > 0) {
             /* TODO: 32k XTAL oscillator has some frequency drift at startup.
              * Improve calibration routine to wait until the frequency is stable.
              */
-            cal_val = rtc_clk_cal(RTC_CAL_RTC_MUX, SLOW_CLK_CAL_CYCLES);
+            cal_val = rtc_clk_cal(CLK_CAL_RTC_SLOW, SLOW_CLK_CAL_CYCLES);
         } else {
             const uint64_t cal_dividend = (1ULL << RTC_CLK_CAL_FRACT) * 1000000ULL;
             cal_val = (uint32_t)(cal_dividend / rtc_clk_slow_freq_get_hz());
@@ -237,7 +243,6 @@ __attribute__((weak)) void esp_perip_clk_init(void)
                            DPORT_PWM0_CLK_EN |
                            DPORT_TWAI_CLK_EN |
                            DPORT_PWM1_CLK_EN |
-                           DPORT_I2S1_CLK_EN |
                            DPORT_SPI2_DMA_CLK_EN |
                            DPORT_SPI3_DMA_CLK_EN |
                            DPORT_PWM2_CLK_EN |
@@ -273,7 +278,6 @@ __attribute__((weak)) void esp_perip_clk_init(void)
                         DPORT_UHCI1_CLK_EN |
                         DPORT_SPI3_CLK_EN |
                         DPORT_I2C_EXT1_CLK_EN |
-                        DPORT_I2S1_CLK_EN |
                         DPORT_SPI2_DMA_CLK_EN |
                         DPORT_SPI3_DMA_CLK_EN;
     common_perip_clk1 = 0;

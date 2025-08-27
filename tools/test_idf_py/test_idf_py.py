@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 #
-# SPDX-FileCopyrightText: 2019-2024 Espressif Systems (Shanghai) CO LTD
+# SPDX-FileCopyrightText: 2019-2025 Espressif Systems (Shanghai) CO LTD
 # SPDX-License-Identifier: Apache-2.0
 import json
 import os
@@ -13,9 +13,7 @@ from unittest import main
 from unittest import mock
 from unittest import TestCase
 
-import elftools.common.utils as ecu
 import jsonschema
-from elftools.elf.elffile import ELFFile
 
 try:
     from StringIO import StringIO
@@ -265,48 +263,6 @@ class TestHelpOutput(TestWithoutExtensions):
         self.action_test_idf_py(['help', '--json', '--add-options'], schema_json)
 
 
-class TestROMs(TestWithoutExtensions):
-    def get_string_from_elf_by_addr(self, filename: str, address: int) -> str:
-        result = ''
-        with open(filename, 'rb') as stream:
-            elf_file = ELFFile(stream)
-            ro = elf_file.get_section_by_name('.rodata')
-            ro_addr_delta = ro['sh_addr'] - ro['sh_offset']
-            cstring = ecu.parse_cstring_from_stream(ro.stream, address - ro_addr_delta)
-            if cstring:
-                result = str(cstring.decode('utf-8'))
-        return result
-
-    def test_roms_validate_json(self):
-        with open(os.path.join(py_actions_path, 'roms.json'), 'r') as f:
-            roms_json = json.load(f)
-
-        with open(os.path.join(py_actions_path, 'roms_schema.json'), 'r') as f:
-            schema_json = json.load(f)
-        jsonschema.validate(roms_json, schema_json)
-
-    def test_roms_check_supported_chips(self):
-        from idf_py_actions.constants import SUPPORTED_TARGETS
-        with open(os.path.join(py_actions_path, 'roms.json'), 'r') as f:
-            roms_json = json.load(f)
-        for chip in SUPPORTED_TARGETS:
-            self.assertTrue(chip in roms_json, msg=f'Have no ROM data for chip {chip}')
-
-    def test_roms_validate_build_date(self):
-        sys.path.append(py_actions_path)
-
-        rom_elfs_dir = os.getenv('ESP_ROM_ELF_DIR')
-        with open(os.path.join(py_actions_path, 'roms.json'), 'r') as f:
-            roms_json = json.load(f)
-
-        for chip in roms_json:
-            for k in roms_json[chip]:
-                rom_file = os.path.join(rom_elfs_dir, f'{chip}_rev{k["rev"]}_rom.elf')
-                build_date_str = self.get_string_from_elf_by_addr(rom_file, int(k['build_date_str_addr'], base=16))
-                self.assertTrue(len(build_date_str) == 11)
-                self.assertTrue(build_date_str == k['build_date_str'])
-
-
 class TestFileArgumentExpansion(TestCase):
     def test_file_expansion(self):
         """Test @filename expansion functionality"""
@@ -358,6 +314,253 @@ class TestFileArgumentExpansion(TestCase):
                 env=os.environ,
                 stderr=subprocess.STDOUT).decode('utf-8', 'ignore')
         self.assertIn('(expansion of @args_non_existent) could not be opened', cm.exception.output.decode('utf-8', 'ignore'))
+
+
+class TestWrapperCommands(TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.sample_project_dir = os.path.join(current_dir, '..', 'test_build_system', 'build_test_app')
+        os.chdir(cls.sample_project_dir)
+        super().setUpClass()
+
+    def call_command(self, command: List[str]) -> str:
+        try:
+            output = subprocess.check_output(
+                command,
+                env=os.environ,
+                stderr=subprocess.STDOUT).decode('utf-8', 'ignore')
+            return output
+        except subprocess.CalledProcessError as e:
+            self.fail(f'Process should have exited normally, but it exited with a return code of {e.returncode}')
+
+    @classmethod
+    def tearDownClass(cls):
+        subprocess.run([sys.executable, idf_py_path, 'fullclean'], stdout=subprocess.DEVNULL)
+        os.chdir(current_dir)
+        super().tearDownClass()
+
+
+class TestEFuseCommands(TestWrapperCommands):
+    """
+    Test if wrapper commands for espefuse.py are working as expected.
+    The goal is NOT to test the functionality of espefuse.py, but to test if the wrapper commands are working as expected.
+    """
+
+    def test_efuse_summary(self):
+        summary_command = [sys.executable, idf_py_path, 'efuse-summary', '--virt']
+        output = self.call_command(summary_command)
+        self.assertIn('EFUSE_NAME (Block) Description  = [Meaningful Value] [Readable/Writeable] (Hex Value)', output)
+
+        output = self.call_command(summary_command + ['--format','summary'])
+        self.assertIn('00:00:00:00:00:00', output)
+        self.assertIn('MAC address', output)
+
+        output = self.call_command(summary_command + ['--format','value-only', 'WR_DIS'])
+        self.assertIn('0', output)
+
+    def test_efuse_burn(self):
+        burn_command = [sys.executable, idf_py_path, 'efuse-burn', '--virt', '--do-not-confirm']
+        output = self.call_command(burn_command + ['WR_DIS', '1'])
+        self.assertIn('\'WR_DIS\' (Efuse write disable mask) 0x0000 -> 0x0001', output)
+        self.assertIn('Successful', output)
+
+        output = self.call_command(burn_command + ['WR_DIS', '1', 'RD_DIS', '1'])
+        self.assertIn('WR_DIS', output)
+        self.assertIn('RD_DIS', output)
+        self.assertIn('Successful', output)
+
+    def test_efuse_burn_key(self):
+        key_name = 'efuse_test_key.bin'
+        subprocess.run([sys.executable, idf_py_path, 'secure-generate-flash-encryption-key', os.path.join(current_dir, key_name)], stdout=subprocess.DEVNULL)
+        burn_key_command = [sys.executable, idf_py_path, 'efuse-burn-key', '--virt', '--do-not-confirm']
+        output = self.call_command(burn_key_command + ['--show-sensitive-info', 'secure_boot_v1', os.path.join(current_dir, key_name)])
+        self.assertIn('Burn keys to blocks:', output)
+        self.assertIn('Successful', output)
+
+    def test_efuse_dump(self):
+        dump_command = [sys.executable, idf_py_path, 'efuse-dump', '--virt']
+        output = self.call_command(dump_command)
+        self.assertIn('BLOCK0', output)
+        self.assertIn('BLOCK1', output)
+        self.assertIn('BLOCK2', output)
+        self.assertIn('BLOCK3', output)
+
+    def test_efuse_read_protect(self):
+        read_protect_command = [sys.executable, idf_py_path, 'efuse-read-protect', '--virt', '--do-not-confirm']
+        output = self.call_command(read_protect_command + ['MAC_VERSION'])
+        self.assertIn('MAC_VERSION', output)
+        self.assertIn('Successful', output)
+
+    def test_efuse_write_protect(self):
+        write_protect_command = [sys.executable, idf_py_path, 'efuse-write-protect', '--virt', '--do-not-confirm']
+        output = self.call_command(write_protect_command + ['WR_DIS'])
+        self.assertIn('WR_DIS', output)
+        self.assertIn('Successful', output)
+
+
+class TestSecureCommands(TestWrapperCommands):
+    """
+    Test if wrapper commands for espsecure.py are working as expected.
+    The goal is NOT to test the functionality of espsecure.py, but to test if the wrapper commands are working as expected.
+    """
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        subprocess.run([sys.executable, idf_py_path, 'build'], stdout=subprocess.DEVNULL)
+        cls.flash_encryption_key = 'test_key.bin'
+        cls.signing_key = 'test_signing_key.pem'
+        cls.nvs_partition_key = 'nvs_partition_key.bin'
+
+    def secure_generate_flash_encryption_key(self):
+        generate_key_command = [sys.executable, idf_py_path, 'secure-generate-flash-encryption-key', self.flash_encryption_key]
+        output = self.call_command(generate_key_command)
+        self.assertIn(f'Writing 256 random bits to key file {self.flash_encryption_key}', output)
+
+    def secure_encrypt_flash_data(self):
+        self.secure_generate_flash_encryption_key()
+        encrypt_command = [sys.executable,
+                           idf_py_path,
+                           'secure-encrypt-flash-data',
+                           '--aes-xts',
+                           '--keyfile',
+                           f'../{self.flash_encryption_key}',
+                           '--address',
+                           '0x1000',
+                           '--output',
+                           'bootloader-enc.bin',
+                           'bootloader/bootloader.bin']
+        output = self.call_command(encrypt_command)
+        self.assertIn('Using 256-bit key', output)
+        self.assertIn('Done', output)
+
+    def test_secure_decrypt_flash_data(self):
+        self.secure_encrypt_flash_data()
+        decrypt_command = [sys.executable,
+                           idf_py_path,
+                           'secure-decrypt-flash-data',
+                           '--aes-xts',
+                           '--keyfile',
+                           f'../{self.flash_encryption_key}',
+                           '--address',
+                           '0x1000',
+                           '--output',
+                           'bootloader-dec.bin',
+                           'bootloader-enc.bin']
+        output = self.call_command(decrypt_command)
+        self.assertIn('Using 256-bit key', output)
+        self.assertIn('Done', output)
+
+    def secure_sign_data(self):
+        self.secure_generate_signing_key()
+        sign_command = [sys.executable,
+                        idf_py_path,
+                        'secure-sign-data',
+                        '--version',
+                        '2',
+                        '--keyfile',
+                        f'../{self.signing_key}',
+                        '--output',
+                        'bootloader-signed.bin',
+                        'bootloader/bootloader.bin']
+        output = self.call_command(sign_command)
+        self.assertIn('Signed', output)
+
+    def secure_verify_signature(self):
+        self.secure_sign_data()
+        sign_command = [sys.executable,
+                        idf_py_path,
+                        'secure-verify-signature',
+                        '--version',
+                        '2',
+                        '--keyfile',
+                        f'../{self.signing_key}',
+                        'bootloader-signed.bin']
+        output = self.call_command(sign_command)
+        self.assertIn('verification successful', output)
+
+    def secure_generate_signing_key(self):
+        generate_key_command = [sys.executable,
+                                idf_py_path,
+                                'secure-generate-signing-key',
+                                '--version',
+                                '2',
+                                '--scheme',
+                                'rsa3072',
+                                self.signing_key]
+        output = self.call_command(generate_key_command)
+        self.assertIn(f'RSA 3072 private key in PEM format written to {self.signing_key}', output)
+
+    def test_secure_generate_key_digest(self):
+        self.secure_generate_signing_key()
+        digest_command = [sys.executable,
+                          idf_py_path,
+                          'secure-generate-key-digest',
+                          '--keyfile',
+                          f'{self.signing_key}',
+                          '--output',
+                          'key_digest.bin']
+        output = self.call_command(digest_command)
+        self.assertIn(f'Writing the public key digest of {self.signing_key} to key_digest.bin', output)
+
+    def test_secure_generate_nvs_partition_key(self):
+        generate_key_command = [sys.executable,
+                                idf_py_path,
+                                'secure-generate-nvs-partition-key',
+                                '--keyfile',
+                                f'{self.nvs_partition_key}',
+                                '--encryption-scheme',
+                                'HMAC',
+                                '--hmac-keyfile',
+                                'nvs_partition_key.bin']
+        output = self.call_command(generate_key_command)
+        self.assertIn('Created encryption keys:', output)
+
+
+class TestMergeBinCommands(TestWrapperCommands):
+    """
+    Test if merge-bin command is invoked as expected.
+    This test is not testing the functionality of esptool.py merge_bin command, but the invocation of the command from idf.py.
+    """
+
+    def test_merge_bin(self):
+        merge_bin_command = [sys.executable, idf_py_path, 'merge-bin']
+        merged_binary_name = 'test-merge-binary.bin'
+        output = self.call_command(merge_bin_command + ['--output', merged_binary_name])
+        self.assertIn(f'file {merged_binary_name}, ready to flash to offset 0x0', output)
+        self.assertIn(f'Merged binary {merged_binary_name} will be created in the build directory...', output)
+
+
+class TestUF2Commands(TestWrapperCommands):
+    """
+    Test if uf2 commands are invoked as expected.
+    This test is not testing the functionality of mkuf2.py/idf.py uf2, but the invocation of the command from idf.py.
+    """
+
+    def test_uf2(self):
+        uf2_command = [sys.executable, idf_py_path, 'uf2']
+        output = self.call_command(uf2_command)
+        self.assertIn('Executing:', output)
+
+    def test_uf2_with_envvars(self):
+        # Values do not really matter, they should not be used.
+        os.environ['ESPBAUD'] = '115200'
+        os.environ['ESPPORT'] = '/dev/ttyUSB0'
+        self.test_uf2()
+        os.environ.pop('ESPBAUD')
+        os.environ.pop('ESPPORT')
+
+    def test_uf2_app(self):
+        uf2_app_command = [sys.executable, idf_py_path, 'uf2-app']
+        output = self.call_command(uf2_app_command)
+        self.assertIn('Executing:', output)
+
+    def test_uf2_app_with_envvars(self):
+        # Values do not really matter, they should not be used.
+        os.environ['ESPBAUD'] = '115200'
+        os.environ['ESPPORT'] = '/dev/ttyUSB0'
+        self.test_uf2_app()
+        os.environ.pop('ESPBAUD')
+        os.environ.pop('ESPPORT')
 
 
 if __name__ == '__main__':

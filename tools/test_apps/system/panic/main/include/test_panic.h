@@ -31,13 +31,22 @@ void test_hw_stack_guard_cpu1(void);
 #endif // CONFIG_FREERTOS_UNICORE
 #endif // CONFIG_ESP_SYSTEM_HW_STACK_GUARD
 
-#if CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH && CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY
-void test_panic_extram_stack(void);
+#if CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH && CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM
+void test_panic_extram_stack_heap(void);
+#if CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY
+void test_panic_extram_stack_bss(void);
+#endif
 #endif
 
 #if !CONFIG_FREERTOS_UNICORE
 void test_task_wdt_cpu1(void);
+void test_panic_handler_stuck1(void);
+void test_panic_handler_crash1(void);
 #endif
+
+void test_panic_handler_stuck0(void);
+
+void test_panic_handler_crash0(void);
 
 void test_loadprohibited(void);
 
@@ -61,16 +70,22 @@ void test_assert_cache_disabled(void);
 
 void test_assert_cache_write_back_error_can_print_backtrace(void);
 
-void test_assert_cache_write_back_error_can_print_backtrace2(void);
-
 void test_illegal_access(void);
 
 void test_capture_dram(void);
 
-#if CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH && CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF
+void test_tcb_corrupted(void);
+
+#if CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH
 void test_setup_coredump_summary(void);
 void test_coredump_summary(void);
 #endif
+
+void test_panic_print_backtrace(void);
+
+#if CONFIG_ESP_SYSTEM_PANIC_PRINT_HALT
+void test_panic_halt(void);
+#endif /* CONFIG_ESP_SYSTEM_PANIC_PRINT_HALT */
 
 #ifdef __cplusplus
 }

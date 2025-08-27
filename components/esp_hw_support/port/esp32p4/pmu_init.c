@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2023-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2023-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -9,13 +9,17 @@
 #include <esp_types.h>
 #include "sdkconfig.h"
 #include "esp_attr.h"
+#include "soc/chip_revision.h"
 #include "soc/soc.h"
 #include "soc/pmu_struct.h"
+#include "hal/efuse_hal.h"
 #include "hal/pmu_hal.h"
 #include "pmu_param.h"
 #include "esp_private/esp_pmu.h"
 #include "soc/regi2c_dig_reg.h"
 #include "regi2c_ctrl.h"
+#include "esp_rom_sys.h"
+#include "soc/rtc.h"
 
 static __attribute__((unused)) const char *TAG = "pmu_init";
 
@@ -79,13 +83,14 @@ void pmu_hp_system_init(pmu_context_t *ctx, pmu_hp_mode_t mode, pmu_hp_system_pa
     pmu_ll_hp_set_bias_xpd                    (ctx->hal->dev, mode, anlg->bias.xpd_bias);
     pmu_ll_hp_set_dcm_mode                    (ctx->hal->dev, mode, anlg->bias.dcm_mode);
     pmu_ll_hp_set_dcm_vset                    (ctx->hal->dev, mode, anlg->bias.dcm_vset);
-    pmu_ll_hp_set_bias_xpd                    (ctx->hal->dev, mode, anlg->bias.xpd_bias);
     pmu_ll_hp_set_dbg_atten                   (ctx->hal->dev, mode, anlg->bias.dbg_atten);
     pmu_ll_hp_set_current_power_off           (ctx->hal->dev, mode, anlg->bias.pd_cur);
     pmu_ll_hp_set_bias_sleep_enable           (ctx->hal->dev, mode, anlg->bias.bias_sleep);
     pmu_ll_hp_set_regulator_sleep_memory_xpd  (ctx->hal->dev, mode, anlg->regulator0.slp_mem_xpd);
     pmu_ll_hp_set_regulator_sleep_logic_xpd   (ctx->hal->dev, mode, anlg->regulator0.slp_logic_xpd);
-    pmu_ll_hp_set_regulator_sleep_memory_dbias(ctx->hal->dev, mode, anlg->regulator0.slp_mem_dbias);
+    if (ESP_CHIP_REV_ABOVE(efuse_hal_chip_revision(), 100) && (mode == PMU_MODE_HP_SLEEP)) {
+        pmu_ll_hp_enable_sleep_flash_ldo_channel(ctx->hal->dev, anlg->regulator0.xpd_0p1a);
+    }
     pmu_ll_hp_set_regulator_sleep_logic_dbias (ctx->hal->dev, mode, anlg->regulator0.slp_logic_dbias);
     pmu_ll_hp_set_regulator_driver_bar        (ctx->hal->dev, mode, anlg->regulator1.drv_b);
 
@@ -146,8 +151,8 @@ static inline void pmu_power_domain_force_default(pmu_context_t *ctx)
     pmu_ll_lp_set_power_force_power_down(ctx->hal->dev, false);
     pmu_ll_lp_set_power_force_isolate   (ctx->hal->dev, false);
     pmu_ll_lp_set_power_force_reset     (ctx->hal->dev, false);
-    pmu_ll_set_dcdc_force_power_up(ctx->hal->dev, false);
-    pmu_ll_set_dcdc_force_power_down(ctx->hal->dev, false);
+    pmu_ll_set_dcdc_switch_force_power_up(ctx->hal->dev, false);
+    pmu_ll_set_dcdc_switch_force_power_down(ctx->hal->dev, false);
 }
 
 static inline void pmu_hp_system_param_default(pmu_hp_mode_t mode, pmu_hp_system_param_t *param)
@@ -191,4 +196,10 @@ void pmu_init(void)
     pmu_hp_system_init_default(PMU_instance());
     pmu_lp_system_init_default(PMU_instance());
     pmu_power_domain_force_default(PMU_instance());
+#if CONFIG_ESP_ENABLE_PVT
+    pvt_auto_dbias_init();
+    pvt_func_enable(true);
+    // For PVT func taking effect, need delay.
+    esp_rom_delay_us(1000);
+#endif
 }

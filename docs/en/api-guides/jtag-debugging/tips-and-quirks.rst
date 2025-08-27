@@ -83,7 +83,7 @@ GDB has a Python extension for FreeRTOS support. ESP-IDF automatically loads thi
 
     The MTDI pin of ESP32, being among four pins used for JTAG communication, is also one of ESP32's bootstrapping pins. On power up ESP32 is sampling binary level on MTDI to set it's internal voltage regulator used to supply power to external SPI flash chip. If binary level on MDTI pin on power up is low, the voltage regulator is set to deliver 3.3 V, if it is high, then the voltage is set to 1.8 V. The MTDI pin should have a pull-up or may rely on internal weak pull down resistor (see `ESP32 Series Datasheet <https://www.espressif.com/sites/default/files/documentation/esp32_datasheet_en.pdf>`_ for details), depending on the type of SPI chip used. Once JTAG is connected, it overrides the pull-up or pull-down resistor that is supposed to do the bootstrapping.
 
-    To handle this issue OpenOCD's board configuration file (e.g. ``board\esp32-wrover-kit-3.3v.cfg`` for ESP-WROVER-KIT board) provides ``ESP32_FLASH_VOLTAGE`` parameter to set the idle state of the ``TDO`` line to a specified binary level, therefore reducing the chance of a bad bootup of application due to incorrect flash voltage.
+    To handle this issue OpenOCD's board configuration file (e.g. ``board\esp32-wrover-kit-3.3v.cfg`` for ESP-WROVER-KIT board) provides ``ESP32_FLASH_VOLTAGE`` parameter to set the idle state of the ``TDO`` line to a specified binary level, therefore reducing the chance of a bad boot-up of application due to incorrect flash voltage.
 
     Check specification of ESP32 module connected to JTAG, what is the power supply voltage of SPI flash chip. Then set ``ESP32_FLASH_VOLTAGE`` accordingly. Most WROOM modules use 3.3 V flash. WROVER earlier than ESP32-WROVER-B use 1.8 V flash, while ESP32-WROVER-B and -E modules use 3.3 V flash.
 
@@ -103,8 +103,20 @@ In order to achieve higher data rates and minimize number of dropped packets it 
 3.  In particular reduce frequency, if you get DSR/DIR errors (and they do not relate to OpenOCD trying to read from a memory range without physical memory being present there).
 4.  ESP-WROVER-KIT operates stable at 20 MHz or 26 MHz.
 
+.. only:: SOC_DEBUG_HAVE_OCD_STUB_BINS
 
-.. _jtag-debugging-tip-debugger-startup-commands:
+    .. _jtag-debugging-tip-improve-debugging-speed:
+
+    Improve Debugging Speed
+    ^^^^^^^^^^^^^^^^^^^^^^^
+
+    Enabling :ref:`CONFIG_ESP_DEBUG_INCLUDE_OCD_STUB_BINS` allocates 8 KB of RAM and embeds pre-built stub binaries into RAM. This improves the overall debugging speed by eliminating the need to load the stub binaries at runtime. It is particularly beneficial when using flash breakpoints, as it reduces the latency of add/remove breakpoints. However, keep in mind that the increased RAM usage may reduce memory availability for other tasks.
+
+    .. _jtag-debugging-tip-debugger-startup-commands:
+
+.. only:: not SOC_DEBUG_HAVE_OCD_STUB_BINS
+
+    .. _jtag-debugging-tip-debugger-startup-commands:
 
 What Is the Meaning of Debugger's Startup Commands?
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -178,6 +190,8 @@ It is important to set the variable before including the ESP-specific configurat
       - Set to ``0`` to disable Flash breakpoints support.
     * - ``ESP_SEMIHOST_BASEDIR``
       - Set to the path (on the host) which will be the default directory for semihosting functions.
+    * - ``ESP_ONLYCPU``
+      - For multi-core targets, can be set to ``1`` to only enable single core debugging.
 
 .. include:: {IDF_TARGET_PATH_NAME}.inc
     :start-after: openocd-target-specific-config-vars

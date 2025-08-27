@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2015-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2015-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -16,13 +16,15 @@
 
 #pragma once
 
+#include <sys/queue.h>
+#include <stdbool.h>
 #include "hal/sdio_slave_types.h"
-#include "soc/slc_struct.h"
-#include "soc/slc_reg.h"
-#include "soc/host_struct.h"
-#include "soc/host_reg.h"
-#include "soc/hinf_struct.h"
-#include "soc/lldesc.h"
+#include "hal/misc.h"
+#include "soc/sdio_slc_struct.h"
+#include "soc/sdio_slc_reg.h"
+#include "soc/sdio_slc_host_struct.h"
+#include "soc/sdio_slc_host_reg.h"
+#include "soc/sdio_hinf_struct.h"
 #include "soc/dport_reg.h"
 
 #ifdef __cplusplus
@@ -90,7 +92,10 @@ static inline void _sdio_slave_ll_enable_bus_clock(bool enable)
 
 /// use a macro to wrap the function, force the caller to use it in a critical section
 /// the critical section needs to declare the __DECLARE_RCC_ATOMIC_ENV variable in advance
-#define sdio_slave_ll_enable_bus_clock(...) (void)__DECLARE_RCC_ATOMIC_ENV; _sdio_slave_ll_enable_bus_clock(__VA_ARGS__)
+#define sdio_slave_ll_enable_bus_clock(...) do { \
+        (void)__DECLARE_RCC_ATOMIC_ENV; \
+        _sdio_slave_ll_enable_bus_clock(__VA_ARGS__); \
+    } while(0)
 
 /**
  * @brief Reset the SDIO slave module
@@ -103,7 +108,10 @@ static inline void _sdio_slave_ll_reset_register(void)
 
 /// use a macro to wrap the function, force the caller to use it in a critical section
 /// the critical section needs to declare the __DECLARE_RCC_ATOMIC_ENV variable in advance
-#define sdio_slave_ll_reset_register(...) (void)__DECLARE_RCC_ATOMIC_ENV; _sdio_slave_ll_reset_register(__VA_ARGS__)
+#define sdio_slave_ll_reset_register(...) do { \
+        (void)__DECLARE_RCC_ATOMIC_ENV; \
+        _sdio_slave_ll_reset_register(__VA_ARGS__); \
+    } while(0)
 
 /**
  * Initialize the hardware.
@@ -514,7 +522,7 @@ static inline void sdio_slave_ll_host_send_int(slc_dev_t *slc, const sdio_slave_
 {
     //use registers in SLC to trigger, rather than write HOST registers directly
     //other interrupts than tohost interrupts are not supported yet
-    slc->intvec_tohost.slc0_intvec = (*mask);
+    HAL_FORCE_MODIFY_U32_REG_FIELD(slc->intvec_tohost, slc0_intvec, *mask);
 }
 
 /**

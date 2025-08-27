@@ -5,13 +5,11 @@
  */
 
 #include "esp_check.h"
-#include "esp_dma_utils.h"
 #include "sdkconfig.h"
 #include "soc/soc_caps.h"
-#if SOC_CACHE_INTERNAL_MEM_VIA_L1CACHE
 #include "esp_cache.h"
-#endif
 #include "hal/emac_hal.h"
+#include "esp_heap_caps.h"
 #include "esp_private/eth_mac_esp_dma.h"
 
 #define ETH_CRC_LENGTH (4)
@@ -20,6 +18,8 @@
 
 #define EMAC_TDES0_FS_CTRL_FLAGS_MASK 0x0FCC0000 // modifiable bits mask associated with the First Segment
 #define EMAC_TDES0_LS_CTRL_FLAGS_MASK 0x40000000 // modifiable bits mask associated with the Last Segment
+
+#define PTP_TX_TIMESTAMP_TO 50 //  maximum loops observed on P4 was 31 @ETH frame 1500B
 
 #if SOC_CACHE_INTERNAL_MEM_VIA_L1CACHE
 #define DMA_CACHE_WB(addr, size) do {                                                           \
@@ -41,8 +41,7 @@
 
 static const char *TAG = "esp.emac.dma";
 
-struct emac_esp_dma_t
-{
+struct emac_esp_dma_t {
     emac_hal_context_t hal;
     uint32_t tx_desc_flags;
     uint32_t rx_desc_flags;
@@ -58,14 +57,14 @@ typedef struct {
     uint32_t magic_id;
 #endif // NDEBUG
     uint32_t copy_len;
-}__attribute__((packed)) emac_esp_dma_auto_buf_info_t;
+} __attribute__((packed)) emac_esp_dma_auto_buf_info_t;
 
 void emac_esp_dma_reset(emac_esp_dma_handle_t emac_esp_dma)
 {
     /* reset DMA descriptors */
     emac_esp_dma->rx_desc = (eth_dma_rx_descriptor_t *)(emac_esp_dma->descriptors);
     emac_esp_dma->tx_desc = (eth_dma_tx_descriptor_t *)(emac_esp_dma->descriptors +
-                   sizeof(eth_dma_rx_descriptor_t) * CONFIG_ETH_DMA_RX_BUFFER_NUM);
+                                                        sizeof(eth_dma_rx_descriptor_t) * CONFIG_ETH_DMA_RX_BUFFER_NUM);
     /* init rx chain */
     for (int i = 0; i < CONFIG_ETH_DMA_RX_BUFFER_NUM; i++) {
         /* Set Own bit of the Rx descriptor Status: DMA */
@@ -117,6 +116,15 @@ void emac_esp_dma_set_tdes0_ctrl_bits(emac_esp_dma_handle_t emac_esp_dma, uint32
 void emac_esp_dma_clear_tdes0_ctrl_bits(emac_esp_dma_handle_t emac_esp_dma, uint32_t flag)
 {
     emac_esp_dma->tx_desc_flags &= ~flag;
+}
+
+void emac_esp_dma_ts_enable(emac_esp_dma_handle_t emac_esp_dma, bool enable)
+{
+    if (enable) {
+        emac_esp_dma_set_tdes0_ctrl_bits(emac_esp_dma, EMAC_HAL_TDES0_TX_TS_ENABLE);
+    } else {
+        emac_esp_dma_clear_tdes0_ctrl_bits(emac_esp_dma, EMAC_HAL_TDES0_TX_TS_ENABLE);
+    }
 }
 
 uint32_t emac_esp_dma_transmit_frame(emac_esp_dma_handle_t emac_esp_dma, uint8_t *buf, uint32_t length)
@@ -186,16 +194,19 @@ err:
     return 0;
 }
 
-uint32_t emac_esp_dma_transmit_multiple_buf_frame(emac_esp_dma_handle_t emac_esp_dma, uint8_t **buffs, uint32_t *lengths, uint32_t buffs_cnt)
+uint32_t emac_esp_dma_transmit_frame_ext(emac_esp_dma_handle_t emac_esp_dma, emac_esp_dma_transmit_buff_t *buffs_array, uint32_t buffs_cnt, eth_mac_time_t *ts)
 {
     /* Get the number of Tx buffers to use for the frame */
     uint32_t dma_bufcount = 0;
     uint32_t sentout = 0;
-    uint8_t *ptr = buffs[0];
-    uint32_t lastlen = lengths[0];
     uint32_t avail_len = CONFIG_ETH_DMA_BUFFER_SIZE;
+    uint8_t *ptr = buffs_array->buf;
+    uint32_t lastlen = buffs_array->size;
 
     eth_dma_tx_descriptor_t *desc_iter = emac_esp_dma->tx_desc;
+#if SOC_EMAC_IEEE1588V2_SUPPORTED
+    eth_dma_tx_descriptor_t *desc_last = desc_iter;
+#endif
     /* A frame is transmitted in multiple descriptor */
     while (dma_bufcount < CONFIG_ETH_DMA_TX_BUFFER_NUM) {
         DMA_CACHE_INVALIDATE(desc_iter, EMAC_HAL_DMA_DESC_SIZE);
@@ -225,9 +236,10 @@ uint32_t emac_esp_dma_transmit_multiple_buf_frame(emac_esp_dma_handle_t emac_esp
 
                 /* Update processed input buffers info */
                 buffs_cnt--;
-                ptr = *(++buffs);
-                lastlen = *(++lengths);
-            /* There is only limited available space in the current descriptor, use it all */
+                buffs_array++;
+                ptr = buffs_array->buf;
+                lastlen = buffs_array->size;
+                /* There is only limited available space in the current descriptor, use it all */
             } else {
                 /* copy data from uplayer stack buffer */
                 memcpy((void *)(desc_iter->Buffer1Addr + (CONFIG_ETH_DMA_BUFFER_SIZE - avail_len)), ptr, avail_len);
@@ -236,12 +248,13 @@ uint32_t emac_esp_dma_transmit_multiple_buf_frame(emac_esp_dma_handle_t emac_esp
                 /* If lastlen is not zero, input buff will be fragmented over multiple descriptors */
                 if (lastlen > 0) {
                     ptr += avail_len;
-                /* Input buff fully fits the descriptor, move to the next input buff */
+                    /* Input buff fully fits the descriptor, move to the next input buff */
                 } else {
                     /* Update processed input buffers info */
                     buffs_cnt--;
-                    ptr = *(++buffs);
-                    lastlen = *(++lengths);
+                    buffs_array++;
+                    ptr = buffs_array->buf;
+                    lastlen = buffs_array->size;
                 }
                 avail_len = CONFIG_ETH_DMA_BUFFER_SIZE;
                 desc_iter->TDES1.TransmitBuffer1Size = CONFIG_ETH_DMA_BUFFER_SIZE;
@@ -258,6 +271,9 @@ uint32_t emac_esp_dma_transmit_multiple_buf_frame(emac_esp_dma_handle_t emac_esp
             /* Setting the last segment bit */
             desc_iter->TDES0.LastSegment = 1;
             desc_iter->TDES0.Value |= emac_esp_dma->tx_desc_flags & EMAC_TDES0_LS_CTRL_FLAGS_MASK;
+#if SOC_EMAC_IEEE1588V2_SUPPORTED
+            desc_last = desc_iter;
+#endif
             break;
         }
 
@@ -273,6 +289,23 @@ uint32_t emac_esp_dma_transmit_multiple_buf_frame(emac_esp_dma_handle_t emac_esp
     }
 
     emac_hal_transmit_poll_demand(&emac_esp_dma->hal);
+
+#if SOC_EMAC_IEEE1588V2_SUPPORTED
+    if (ts != NULL) {
+        uint32_t timeout = 0;
+        do {
+            timeout++;
+            DMA_CACHE_INVALIDATE(desc_last, EMAC_HAL_DMA_DESC_SIZE);
+        } while (emac_hal_get_txdesc_timestamp(&emac_esp_dma->hal, desc_last, &ts->seconds, &ts->nanoseconds) == ESP_ERR_INVALID_STATE &&
+                 timeout < PTP_TX_TIMESTAMP_TO);
+        if (timeout >= PTP_TX_TIMESTAMP_TO) {
+            /* zeros indicate invalid time stamp since it is not possible to ever get "zero time" under normal conditions */
+            ts->seconds = 0;
+            ts->nanoseconds = 0;
+        }
+    }
+#endif
+
     return sentout;
 err:
     return 0;
@@ -363,7 +396,7 @@ uint8_t *emac_esp_dma_alloc_recv_buf(emac_esp_dma_handle_t emac_esp_dma, uint32_
     return buf;
 }
 
-uint32_t emac_esp_dma_receive_frame(emac_esp_dma_handle_t emac_esp_dma, uint8_t *buf, uint32_t size)
+uint32_t emac_esp_dma_receive_frame(emac_esp_dma_handle_t emac_esp_dma, uint8_t *buf, uint32_t size, eth_mac_time_t *ts)
 {
     uint32_t ret_len = 0;
     uint32_t copy_len = 0;
@@ -386,7 +419,7 @@ uint32_t emac_esp_dma_receive_frame(emac_esp_dma_handle_t emac_esp_dma, uint8_t 
 
     if (copy_len) {
         eth_dma_rx_descriptor_t *desc_iter = emac_esp_dma->rx_desc;
-        while(copy_len > CONFIG_ETH_DMA_BUFFER_SIZE) {
+        while (copy_len > CONFIG_ETH_DMA_BUFFER_SIZE) {
             DMA_CACHE_INVALIDATE(desc_iter->Buffer1Addr, CONFIG_ETH_DMA_BUFFER_SIZE);
             memcpy(buf, (void *)(desc_iter->Buffer1Addr), CONFIG_ETH_DMA_BUFFER_SIZE);
             buf += CONFIG_ETH_DMA_BUFFER_SIZE;
@@ -398,14 +431,25 @@ uint32_t emac_esp_dma_receive_frame(emac_esp_dma_handle_t emac_esp_dma, uint8_t 
         }
         DMA_CACHE_INVALIDATE(desc_iter->Buffer1Addr, CONFIG_ETH_DMA_BUFFER_SIZE);
         memcpy(buf, (void *)(desc_iter->Buffer1Addr), copy_len);
-        desc_iter->RDES0.Own = EMAC_LL_DMADESC_OWNER_DMA;
-        DMA_CACHE_WB(desc_iter, EMAC_HAL_DMA_DESC_SIZE);
         /* `copy_len` does not include CRC (which may be stored in separate buffer), hence check if we reached the last descriptor */
         while (!desc_iter->RDES0.LastDescriptor) {
-            desc_iter = (eth_dma_rx_descriptor_t *)(desc_iter->Buffer2NextDescAddr);
             desc_iter->RDES0.Own = EMAC_LL_DMADESC_OWNER_DMA;
             DMA_CACHE_WB(desc_iter, EMAC_HAL_DMA_DESC_SIZE);
+            desc_iter = (eth_dma_rx_descriptor_t *)(desc_iter->Buffer2NextDescAddr);
         }
+#if SOC_EMAC_IEEE1588V2_SUPPORTED
+        if (ts != NULL) {
+            if (emac_hal_get_rxdesc_timestamp(&emac_esp_dma->hal, desc_iter, &ts->seconds, &ts->nanoseconds) != ESP_OK) {
+                /* zeros indicate invalid time stamp since it is not possible to ever get "zero time" under normal conditions */
+                ts->seconds = 0;
+                ts->nanoseconds = 0;
+            }
+        }
+#endif
+        /* return last descriptor to DMA */
+        desc_iter->RDES0.Own = EMAC_LL_DMADESC_OWNER_DMA;
+        DMA_CACHE_WB(desc_iter, EMAC_HAL_DMA_DESC_SIZE);
+
         /* update rxdesc */
         emac_esp_dma->rx_desc = (eth_dma_rx_descriptor_t *)(desc_iter->Buffer2NextDescAddr);
         /* poll rx demand */
@@ -449,7 +493,7 @@ esp_err_t emac_esp_del_dma(emac_esp_dma_handle_t emac_esp_dma)
     return ESP_OK;
 }
 
-esp_err_t emac_esp_new_dma(const emac_esp_dma_config_t* config, emac_esp_dma_handle_t *ret_handle)
+esp_err_t emac_esp_new_dma(const emac_esp_dma_config_t *config, emac_esp_dma_handle_t *ret_handle)
 {
     esp_err_t ret = ESP_OK;
     *ret_handle = NULL;
@@ -459,20 +503,15 @@ esp_err_t emac_esp_new_dma(const emac_esp_dma_config_t* config, emac_esp_dma_han
     /* alloc memory for ethernet dma descriptor */
     uint32_t desc_size = CONFIG_ETH_DMA_RX_BUFFER_NUM * sizeof(eth_dma_rx_descriptor_t) +
                          CONFIG_ETH_DMA_TX_BUFFER_NUM * sizeof(eth_dma_tx_descriptor_t);
-    esp_dma_mem_info_t dma_mem_info = {
-        .extra_heap_caps = MALLOC_CAP_INTERNAL,
-        .dma_alignment_bytes = 4,
-    };
-    esp_dma_capable_calloc(1, desc_size, &dma_mem_info, (void*)&emac_esp_dma->descriptors, NULL);
-
+    emac_esp_dma->descriptors = heap_caps_aligned_calloc(4, 1, desc_size, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     ESP_GOTO_ON_FALSE(emac_esp_dma->descriptors, ESP_ERR_NO_MEM, err, TAG, "no mem for descriptors");
     /* alloc memory for ethernet dma buffer */
     for (int i = 0; i < CONFIG_ETH_DMA_RX_BUFFER_NUM; i++) {
-        esp_dma_capable_calloc(1, CONFIG_ETH_DMA_BUFFER_SIZE, &dma_mem_info, (void*)&emac_esp_dma->rx_buf[i], NULL);
+        emac_esp_dma->rx_buf[i] = heap_caps_aligned_calloc(4, 1, CONFIG_ETH_DMA_BUFFER_SIZE, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
         ESP_GOTO_ON_FALSE(emac_esp_dma->rx_buf[i], ESP_ERR_NO_MEM, err, TAG, "no mem for RX DMA buffers");
     }
     for (int i = 0; i < CONFIG_ETH_DMA_TX_BUFFER_NUM; i++) {
-        esp_dma_capable_calloc(1, CONFIG_ETH_DMA_BUFFER_SIZE, &dma_mem_info, (void*)&emac_esp_dma->tx_buf[i], NULL);
+        emac_esp_dma->tx_buf[i] = heap_caps_aligned_calloc(4, 1, CONFIG_ETH_DMA_BUFFER_SIZE, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
         ESP_GOTO_ON_FALSE(emac_esp_dma->tx_buf[i], ESP_ERR_NO_MEM, err, TAG, "no mem for TX DMA buffers");
     }
     emac_hal_init(&emac_esp_dma->hal);

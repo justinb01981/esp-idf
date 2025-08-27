@@ -18,14 +18,23 @@
 
     此外，{IDF_TARGET_NAME} 芯片还有一个满足低功耗需求的 LP UART 控制器。LP UART 是原 UART 的功能剪裁版本。它只支持基础 UART 功能，不支持 IrDA 或 RS485 协议，并且只有一块较小的 RAM 存储空间。想要全面了解的 UART 及 LP UART 功能区别，请参考 **{IDF_TARGET_NAME} 技术参考手册** > UART 控制器 (UART) > 主要特性 [`PDF <{IDF_TARGET_TRM_EN_URL}#uart>`__]。
 
+.. toctree::
+    :hidden:
+
+    uhci
+
+.. only:: SOC_UHCI_SUPPORTED
+
+    {IDF_TARGET_NAME} 芯片也支持 UART DMA 模式, 请参考 :doc:`uhci` 以获得更多信息.
+
 功能概述
 -------------------
 
 下文介绍了如何使用 UART 驱动程序的函数和数据类型在 {IDF_TARGET_NAME} 和其他 UART 设备之间建立通信。基本编程流程分为以下几个步骤：
 
-1. :ref:`uart-api-setting-communication-parameters` - 设置波特率、数据位、停止位等
-2. :ref:`uart-api-setting-communication-pins` - 分配连接设备的管脚
-3. :ref:`uart-api-driver-installation` - 为 UART 驱动程序分配 {IDF_TARGET_NAME} 资源
+1. :ref:`uart-api-driver-installation` - 为 UART 驱动程序分配 {IDF_TARGET_NAME} 资源
+2. :ref:`uart-api-setting-communication-parameters` - 设置波特率、数据位、停止位等
+3. :ref:`uart-api-setting-communication-pins` - 分配连接设备的管脚
 4. :ref:`uart-api-running-uart-communication` - 发送/接收数据
 5. :ref:`uart-api-using-interrupts` - 触发特定通信事件的中断
 6. :ref:`uart-api-deleting-driver` - 如无需 UART 通信，则释放已分配的资源
@@ -39,13 +48,39 @@
 UART 驱动程序函数通过 :cpp:type:`uart_port_t` 识别不同的 UART 控制器。调用以下所有函数均需此标识。
 
 
+.. _uart-api-driver-installation:
+
+安装驱动程序
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+首先，请调用 :cpp:func:`uart_driver_install` 安装驱动程序并指定以下参数：
+
+- UART 控制器编号
+- Rx 环形缓冲区的大小
+- Tx 环形缓冲区的大小
+- 事件队列大小
+- 指向事件队列句柄的指针
+- 分配中断的标志
+
+.. _driver-code-snippet:
+
+该函数将为 UART 驱动程序分配所需的内部资源。
+
+.. code-block:: c
+
+    // Setup UART buffered IO with event queue
+    const int uart_buffer_size = (1024 * 2);
+    QueueHandle_t uart_queue;
+    // Install UART driver using an event queue here
+    ESP_ERROR_CHECK(uart_driver_install({IDF_TARGET_UART_EXAMPLE_PORT}, uart_buffer_size, uart_buffer_size, 10, &uart_queue, 0));
+
+
 .. _uart-api-setting-communication-parameters:
 
 设置通信参数
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-UART 通信参数可以在一个步骤中完成全部配置，也可以在多个步骤中单独配置。
-
+其次，UART 通信参数可以在一个步骤中完成全部配置，也可以在多个步骤中单独配置。
 
 一次性配置所有参数
 """"""""""""""""""""""""""""""""
@@ -67,6 +102,10 @@ UART 通信参数可以在一个步骤中完成全部配置，也可以在多个
     ESP_ERROR_CHECK(uart_param_config(uart_num, &uart_config));
 
 了解配置硬件流控模式的更多信息，请参考 :example:`peripherals/uart/uart_echo`。
+
+.. only:: SOC_UART_SUPPORT_SLEEP_RETENTION
+
+    此外，置位 :cpp:member:`uart_config_t::allow_pd` 会使能在进入睡眠模式前备份 UART 配置寄存器并在退出睡眠后恢复这些寄存器。这个功能使 UART 能够在系统唤醒后继续正常工作，即使其电源域在睡眠过程中被完全关闭。此选项需要用户在功耗和内存使用之间取得平衡。如果功耗不是一个问题，可以禁用这个选项来节省内存。
 
 分步依次配置每个参数
 """""""""""""""""""""""""""""""
@@ -100,43 +139,14 @@ UART 通信参数可以在一个步骤中完成全部配置，也可以在多个
 设置通信管脚
 ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-通信参数设置完成后，可以配置其他 UART 设备连接的 GPIO 管脚。调用函数 :cpp:func:`uart_set_pin`，指定配置 Tx、Rx、RTS 和 CTS 信号的 GPIO 管脚编号。如要为特定信号保留当前分配的管脚编号，可传递宏 :c:macro:`UART_PIN_NO_CHANGE`。
+通信参数设置完成后，可以配置其他 UART 设备连接的 GPIO 管脚。调用函数 :cpp:func:`uart_set_pin`，指定配置 Tx、Rx、RTS、CTS、DTR 和 DSR 信号的 GPIO 管脚编号。如要为特定信号保留当前分配的管脚编号，可传递宏 :c:macro:`UART_PIN_NO_CHANGE`。
 
 请为不使用的管脚都指定为宏 :c:macro:`UART_PIN_NO_CHANGE`。
 
 .. code-block:: c
 
-  // Set UART pins(TX: IO4, RX: IO5, RTS: IO18, CTS: IO19)
-  ESP_ERROR_CHECK(uart_set_pin({IDF_TARGET_UART_EXAMPLE_PORT}, 4, 5, 18, 19));
-
-.. _uart-api-driver-installation:
-
-安装驱动程序
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-通信管脚设置完成后，请调用 :cpp:func:`uart_driver_install` 安装驱动程序并指定以下参数：
-
-- UART 控制器编号
-- Tx 环形缓冲区的大小
-- Rx 环形缓冲区的大小
-- 指向事件队列句柄的指针
-- 事件队列大小
-- 分配中断的标志
-
-.. _driver-code-snippet:
-
-该函数将为 UART 驱动程序分配所需的内部资源。
-
-.. code-block:: c
-
-    // Setup UART buffered IO with event queue
-    const int uart_buffer_size = (1024 * 2);
-    QueueHandle_t uart_queue;
-    // Install UART driver using an event queue here
-    ESP_ERROR_CHECK(uart_driver_install({IDF_TARGET_UART_EXAMPLE_PORT}, uart_buffer_size, \
-                                            uart_buffer_size, 10, &uart_queue, 0));
-
-此步骤完成后，可连接外部 UART 设备检查通信。
+  // Set UART pins(TX: IO4, RX: IO5, RTS: IO18, CTS: IO19, DTR: UNUSED, DSR: UNUSED)
+  ESP_ERROR_CHECK(uart_set_pin({IDF_TARGET_UART_EXAMPLE_PORT}, 4, 5, 18, 19, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
 
 
 .. _uart-api-running-uart-communication:
@@ -317,11 +327,15 @@ RS485 特定通信模式简介
 
 冲突检测功能允许在激活和触发中断时处理冲突。中断 ``UART_RS485_FRM_ERR_INT`` 和 ``UART_RS485_PARITY_ERR_INT`` 可与冲突检测功能一起使用，在 RS485 模式下分别控制帧错误和奇偶校验位错误。UART 驱动程序支持此功能，通过选择 :cpp:enumerator:`UART_MODE_RS485_APP_CTRL` 模式可以使用（参考函数 :cpp:func:`uart_set_mode`）。
 
-冲突检测功能可与电路 A 和电路 C 一起使用（参考章节 `接口连接选项`_）。在使用电路 A 或 B 时，连接到总线驱动 DE 管脚的 RTS 管脚应由用户应用程序控制。调用函数 :cpp:func:`uart_get_collision_flag` 能够查看是否触发冲突检测标志。
+冲突检测功能可与电路 A 和电路 C 一起使用（参考章节 `接口连接选项`_）。调用函数 :cpp:func:`uart_get_collision_flag` 能够查看是否触发冲突检测标志。在使用电路 A 或 B 时，DTR 或 RTS 管脚可以连接到收发器芯片的 DE/~RE 管脚，以实现半双工通信。
 
-{IDF_TARGET_NAME} UART 控制器本身不支持半双工通信，因其无法自动控制连接到 RS485 总线驱动 RE/DE 输入的 RTS 管脚。然而，半双工通信能够通过 UART 驱动程序对 RTS 管脚的软件控制来实现，调用 :cpp:func:`uart_set_mode` 并选择 :cpp:enumerator:`UART_MODE_RS485_HALF_DUPLEX` 模式能够启用这一功能。
+UART 驱动支持通过向 :cpp:func:`uart_set_mode` 函数传入 :cpp:enumerator:`UART_MODE_RS485_HALF_DUPLEX` 来启用 RS485 半双工通信模式。DTR 信号在 RS485 模式下由硬件直接控制，而 RTS 信号由 UART 驱动程序控制。当主机开始向 Tx FIFO 缓冲区写入数据时，UART 驱动程序会自动置位 RTS 信号（逻辑 1）；最后一位数据传输完成后，驱动程序就会取消置位 RTS 信号（逻辑 0）。要使用此模式，软件必须禁用硬件流控功能。由于切换是在中断处理程序中进行的，因此 RTS 线上会相对 DTR 线有一定延迟。
 
-主机开始向 Tx FIFO 缓冲区写入数据时，UART 驱动程序会自动置位 RTS 管脚（逻辑 1）；最后一位数据传输完成后，驱动程序就会取消置位 RTS 管脚（逻辑 0）。要使用此模式，软件必须禁用硬件流控功能。此模式适用于下文所有已用电路。
+.. only:: esp32
+
+    .. note::
+
+        ESP32 的 DTR 信号仅在 UART0 上可用。对于其他 UART 端口，只能将 RTS 信号连接到收发器芯片的 DE/~RE 管脚。
 
 
 接口连接选项
@@ -348,7 +362,7 @@ RS485 特定通信模式简介
                     |              B|----------<> B
          TXD ------>| D    ADM483   |
  ESP                |               |     RS485 bus side
-         RTS ------>| DE            |
+     DTR/RTS ------>| DE            |
                     |              A|----------<> A
                +----| /RE           |
                |    +-------x-------+
@@ -371,7 +385,7 @@ RS485 特定通信模式简介
                     |              B|-----------<> B
          TXD ------>| D    ADM483   |
  ESP                |               |     RS485 bus side
-         RTS --+--->| DE            |
+     DTR/RTS --+--->| DE            |
                |    |              A|-----------<> A
                +----| /RE           |
                     +-------x-------+
@@ -411,47 +425,26 @@ RS485 特定通信模式简介
 应用示例
 --------------------
 
-下表列出了目录 :example:`peripherals/uart/` 下可用的代码示例。
-
-.. list-table::
-   :widths: 35 65
-   :header-rows: 1
-
-   * - 代码示例
-     - 描述
-   * - :example:`peripherals/uart/uart_echo`
-     - 配置 UART 设置、安装 UART 驱动程序以及通过 UART1 接口读取/写入。
-   * - :example:`peripherals/uart/uart_events`
-     - 报告各种通信事件，使用模式检测中断。
-   * - :example:`peripherals/uart/uart_async_rxtxtasks`
-     - 通过同一 UART 在两个独立的 FreeRTOS 任务中发送和接收数据。
-   * - :example:`peripherals/uart/uart_select`
-     - 针对 UART 文件描述符使用同步 I/O 多路复用。
-   * - :example:`peripherals/uart/uart_echo_rs485`
-     - 设置 UART 驱动程序以半双工模式通过 RS485 接口进行通信。此示例与 :example:`peripherals/uart/uart_echo` 类似，但允许通过连接到 {IDF_TARGET_NAME} 管脚的 RS485 接口芯片进行通信。
-   * - :example:`peripherals/uart/nmea0183_parser`
-     - 解析通过 UART 外设从 GPS 收到的 NMEA0183 语句来获取 GPS 信息。
+* :example:`peripherals/uart/uart_async_rxtxtasks` 演示了通过同一 UART 接口完成两个独立任务的通信。其中一个任务定期发送 "Hello world"，另一个任务接收并打印 UART 接收到的数据。
+* :example:`peripherals/uart/uart_echo` 演示了使用 UART 接口回显接收到的所有数据。
+* :example:`peripherals/uart/uart_echo_rs485` 演示了如何使用 UART 软件驱动程序以 RS485 半双工传输模式回显接收到的 UART 数据，要求外部连接总线驱动器。
+* :example:`peripherals/uart/uart_events` 演示了如何使用 UART 驱动程序处理特殊的 UART 事件，从 UART0 读取数据，并将数据回显到监视控制台。
+* :example:`peripherals/uart/uart_repl` 演示了如何使用和连接两个 UART 接口，使用于标准输出的 UART 可以发送命令并接收来自另一个控制台 UART 的回复，无需人工交互。
+* :example:`peripherals/uart/uart_select` 演示了在 UART 接口上使用 ``select()`` 函数来同步 I/O 多路复用，允许从/向各种来源（如 UART 和套接字）进行非阻塞读写操作，从而立即处理准备就绪的资源。
+* :example:`peripherals/uart/nmea0183_parser` 演示了如何使用 ESP UART 事件驱动程序和 ESP 事件循环库来解析来自 GPS/BDS/GLONASS 模块的 NMEA-0183 数据流，并输出常见的信息，如 UTC 时间、纬度、经度、海拔和速度。
 
 
 API 参考
 ---------------
 
 .. include-build-file:: inc/uart.inc
+.. include-build-file:: inc/uart_wakeup.inc
 .. include-build-file:: inc/uart_types.inc
 
 
 GPIO 查找宏指令
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-UART 外设有供直接连接的专用 IO_MUX 管脚，但也可用非直接的 GPIO 矩阵将信号配置到其他管脚。如要直接连接，需要知道哪一管脚为 UART 通道的专用 IO_MUX 管脚。GPIO 查找宏简化了查找和分配 IO_MUX 管脚的过程，可根据 IO_MUX 管脚编号或所需 UART 通道名称选择一个宏，该宏将返回匹配的对应项。请查看下列示例。
-
-.. note::
-
-    如需较高的 UART 波特率（超过 40 MHz），即仅使用 IO_MUX 管脚时，可以使用此类宏。在其他情况下可以忽略这些宏，并使用 GPIO 矩阵为 UART 功能配置任一 GPIO 管脚。
-
-1. :c:macro:`UART_NUM_2_TXD_DIRECT_GPIO_NUM` 返回 UART 通道 2 TXD 管脚的 IO_MUX 管脚编号（管脚 17）
-2. :c:macro:`UART_GPIO19_DIRECT_CHANNEL` 在通过 IO_MUX 连接到 UART 外设时返回 GPIO 19 的 UART 编号（即 UART_NUM_0）
-3. GPIO 19 在通过 IO_MUX 用作 UART CTS 管脚时，:c:macro:`UART_CTS_GPIO19_DIRECT_CHANNEL` 将返回 GPIO 19 的 UART 编号（即 UART_NUM_0）。该宏类似于上述宏，但指定了管脚功能，这也是 IO_MUX 分配的一部分。
+一些 UART 外设有供直接连接的专用 IO_MUX 管脚。这些管脚可用于需要极高 UART 波特率的场景，即仅可使用 IO_MUX 管脚。在其他情况下，任一 GPIO 管脚都可用于 UART 通信，只需将信号通过 GPIO 矩阵路由即可。当特定的 UART 外设有专用 IO_MUX 管脚时，:c:macro:`UART_NUM_x_TXD_DIRECT_GPIO_NUM` 和 :c:macro:`UART_NUM_x_RXD_DIRECT_GPIO_NUM` 可用于查找对应的 IO_MUX 管脚编号。
 
 .. include-build-file:: inc/uart_channel.inc
-

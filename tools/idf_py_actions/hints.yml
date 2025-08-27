@@ -216,7 +216,7 @@
 
 -
     re: "Failed to resolve component '(?!esp_ipc)(\\w+)'"
-    hint: "The component {} could not be found. This could be because: component name was misspelled, the component was not added to the build, the component has been moved to the IDF component manager or has been removed and refactored into some other component.\nPlease look out for component in 'https://components.espressif.com' and add using 'idf.py add-dependency' command.\nRefer to the migration guide for more details about moved components.\nRefer to the build-system guide for more details about how components are found and included in the build."
+    hint: "The component '{}' could not be found. This could be because: component name was misspelled, the component was not added to the build, the component has been moved to the IDF component manager, the component has been removed and refactored into some other component or the component may not be supported by the selected target.\nPlease look out for component in 'https://components.espressif.com' and add using 'idf.py add-dependency' command.\nRefer to the migration guide for more details about moved components.\nRefer to the build-system guide for more details about how components are found and included in the build."
     match_to_output: True
 
 -
@@ -259,7 +259,7 @@
 
 -
     re: "`iram0_0_seg' overflowed"
-    hint: "The applications static IRAM usage is larger than the available IRAM size.\nFor more information on how to reduze IRAM usage run 'idf.py docs -sp api-guides/performance/ram-usage.html#optimizing-iram-usage' "
+    hint: "The applications static IRAM usage is larger than the available IRAM size.\nFor more information on how to reduce IRAM usage run 'idf.py docs -sp api-guides/performance/ram-usage.html#optimizing-iram-usage' "
 
 -
     re: "fatal error: (tinyusb.h): No such file or directory"
@@ -319,6 +319,11 @@
 -
     re: "Error: libusb_open\\(\\) failed with LIBUSB_ERROR_NOT_FOUND"
     hint: "Device drivers are not correct.\nPlease check configuration of USB drivers: https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-guides/jtag-debugging/configure-ft2232h-jtag.html?highlight=zadig#configure-usb-drivers"
+
+-
+    re: "\\[-Werror=(address-of-packed-member|aggressive-loop-optimizations|attribute-warning|builtin-macro-redefined|cpp|designated-init|deprecated-declarations|discarded-array-qualifiers|discarded-qualifiers|div-by-zero|endif-labels|free-nonheap-object|if-not-aligned|ignored-attributes|incompatible-pointer-types|int-conversion|int-to-pointer-cast|lto-type-mismatch|multichar|overflow|override-init-side-effects|packed-bitfield-compat|pointer-compare|pointer-to-int-cast|return-local-addr|scalar-storage-order|shift-count-negative|shift-count-overflow|sizeof-array-argument|stringop-truncation| switch-bool|switch-outside-range|varargs)\\]"
+    hint: "The error(s) '{}' may appear after IDF upgrade since previous versions were not considering those warnings as errors.\nTo suppress these warnings use 'idf.py menuconfig' to enable configure option 'Compiler options' -> 'Disable errors for default warnings'\nPlease note that this is not a permanent solution, and this option will be removed in a future update of the ESP-IDF.\nIt is strongly recommended to fix all warnings, as they may indicate potential issues!"
+    match_to_output: True
 
 -
     re: "(-Werror=address|-Werror=use-after-free)"
@@ -411,6 +416,10 @@
             hint_variables: ['ESP_HF_CME_MEMEORY_FAILURE', 'ESP_HF_CME_MEMORY_FAILURE ']
 
 -
+    re: "error: 'USBPHY_\\w+' undeclared"
+    hint: "USBPHY_* pin definitions from <soc/usb_pins.h> have been removed.\nTo use an external USB PHY, wire it to any GPIOs and declare those pin mappings in your application to match your hardware."
+
+-
     re: "intr_alloc: No free interrupt inputs for [_\\w]+ interrupt"
     hint: "For troubleshooting instructions related to interrupt allocation, run 'idf.py docs -sp api-reference/system/intr_alloc.html'"
 
@@ -429,4 +438,108 @@
 
 -
     re: "unplaced orphan section"
-    hint: "Avoid creating custom sections. Please refer to the 'Linker Script Generation' article in the IDF documentation to address this. Or set option CONFIG_COMPILER_ORPHAN_SECTIONS_PLACE (not recommended)."
+    hint: "An orphan section was detected during linking stage. For more information run 'idf.py docs -sp migration-guides/release-6.x/build-system.html#linker-orphan-handling-behavior-changed-to-error'."
+
+-
+    re: "the current mclk multiple cannot perform integer division"
+    hint: "Please adjust the mclk multiple to get the accurate sample rate.\nFor example, if you're using 24-bit slot width or enabled 3 slots, then the mclk multiple should be a multiple of 3, otherwise the sample rate will be inaccurate."
+
+-
+    re: "discarded output section: .*\\.got"
+    hint: "Some objects being linked were compiled with the \"-fpic\"/\"-fpie\" options. These options may be suitable for \"linux\" builds, but must not be applied for esp32XX targets."
+
+-
+    re: "(error: Total discarded sections size is \\d+ bytes)|(region [`'.\\w]+ overflowed by \\d+ bytes)"
+    hint: "The binary size has exceeded the limit. To resolve the issue consider reducing the binary size.\nYou can explore size optimization techniques in the documentation by running 'idf.py docs -sp api-guides/performance/size.html#reducing-overall-size'.\nNote that the linker performed the dead code elimination."
+
+-
+    re: "implicit declaration of function '__VA_NARG__'"
+    hint: "__VA_NARG_ has been renamed. Please use ESP_VA_NARG instead"
+
+-
+    re: "Configuration descriptor larger than control transfer max length"
+    hint: "Connected USB device has a large Configuration descriptor.\nTo increase the transfer size, go to 'idf.py menuconfig' -> 'Component config' -> 'USB-OTG' -> 'Largest size of transfers to/from default endpoints' and set appropriate size."
+
+-
+    re: "error: implicit declaration of function '(socketpair|gai_strerror|getifaddrs|freeifaddrs)'"
+    hint: "{}() is not supported in IDF.\nTo use a simplified implementation of this function, add a dependency to sock_utils library 'idf.py add-dependency espressif/sock_utils'"
+    match_to_output: True
+
+-
+    re: "undefined reference to `(socketpair|gai_strerror|gethostname|getnameinfo|pipe|getifaddrs|freeifaddrs)'"
+    hint: "{}() is not supported in IDF.\nTo use a simplified implementation of this function, add a dependency to sock_utils library 'idf.py add-dependency espressif/sock_utils'"
+    match_to_output: True
+
+-
+    re: "spi_hal: The clock_speed_hz should less than"
+    hint: "When operating in full-duplex mode at high frequencies, the device may not read data correctly.\nTry using IOMUX pins to increase the frequency limit or switch to half-duplex mode.\nNote that the SPI master can only operate at divisors of 80 MHz, and the driver always selects the closest available frequency to your configuration.\nSpecify SPI_DEVICE_NO_DUMMY to bypass this check. This allows higher output speeds but may result in unreliable data reads."
+
+-
+    re: "has no member named 'io_loop_back'"
+    hint: "If you want to bind different driver objects to the same GPIO, just set them with the same GPIO number."
+
+-
+    re: "has no member named '{}'"
+    hint: "Please include 'driver/gpio.h' and call 'gpio_set_pull_mode' to set the correct pull mode."
+    variables:
+        -
+            re_variables: ['pull_up']
+            hint_variables: []
+        -
+            re_variables: ['pull_down']
+            hint_variables: []
+
+-
+    re: "has no member named 'io_od_mode'"
+    hint: "Please include 'driver/gpio.h' and call 'gpio_od_enable' to enable the open-drain mode."
+
+-
+    re: "error: implicit declaration of function '(esp_dma_capable_malloc|esp_dma_capable_calloc|esp_cache_aligned_malloc|esp_cache_aligned_calloc)'"
+    hint: "Use the memory allocation functions from the esp_heap_caps.h with proper capability flags.\nFor example, use heap_caps_malloc() with the MALLOC_CAP_CACHE_ALIGNED flag to allocate memory that is aligned to cache line."
+
+-
+    re: "fatal error: {}: No such file or directory"
+    hint: "The {} driver is removed. It should be replaced by '{}' in the '{}' component. Please read the migration guide for more details."
+    variables:
+        -
+            re_variables: ['driver/timer.h']
+            hint_variables: ['legacy timer group', 'driver/gptimer.h', 'esp_driver_gptimer']
+        -
+            re_variables: ['driver/i2s.h']
+            hint_variables: ['legacy I2S', 'driver/i2s_std.h, driver/i2s_pdm.h, driver/i2s_tdm.h', 'esp_driver_i2s']
+        -
+            re_variables: ['driver/pcnt.h']
+            hint_variables: ['legacy pcnt', 'driver/pulse_cnt.h', 'esp_driver_pcnt']
+        -
+            re_variables: ['driver/dac.h']
+            hint_variables: ['legacy DAC', 'driver/dac_oneshot.h, driver/dac_continuous.h, driver/dac_cosine.h', 'esp_driver_dac']
+        -
+            re_variables: ['driver/adc.h']
+            hint_variables: ['legacy ADC', 'esp_adc/adc_oneshot.h, esp_adc/adc_continuous.h, esp_adc/adc_cali.h, esp_adc/adc_cali_scheme.h', 'esp_adc']
+        -
+            re_variables: ['driver/mcpwm.h']
+            hint_variables: ['legacy MCPWM', 'driver/mcpwm_prelude', 'esp_driver_mcpwm']
+        -
+            re_variables: ['driver/sigmadelta.h']
+            hint_variables: ['legacy Sigma-Delta', 'driver/sdm.h', 'esp_driver_sdm']
+
+-
+    re: undefined reference to `i3c_new_master_bus'
+    hint: "The I3C master driver is not fully supported in IDF. To use this driver please enable `IDF_EXPERIMENTAL_FEATURES`"
+
+-
+    re: "error: implicit declaration of function '{}'"
+    hint: "The FreeRTOS compatibility function '{}' has been removed in ESP-IDF v6.0. Please use {} instead."
+    variables:
+        -
+            re_variables: ['xQueueGenericReceive']
+            hint_variables: ['xQueueGenericReceive', 'xQueueReceive(), xQueuePeek(), or xQueueSemaphoreTake() depending on your use case']
+        -
+            re_variables: ['vTaskDelayUntil']
+            hint_variables: ['vTaskDelayUntil', 'xTaskDelayUntil']
+        -
+            re_variables: ['ulTaskNotifyTake']
+            hint_variables: ['ulTaskNotifyTake', 'the macro ulTaskNotifyTake']
+        -
+            re_variables: ['xTaskNotifyWait']
+            hint_variables: ['xTaskNotifyWait', 'the macro xTaskNotifyWait']

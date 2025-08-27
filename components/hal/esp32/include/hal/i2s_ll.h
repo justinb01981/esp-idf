@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2020-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2020-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -74,7 +74,7 @@ static inline void i2s_ll_dma_enable_auto_write_back(i2s_dev_t *hw, bool en)
 }
 
 /**
- * @brief I2S DMA generate EOF event on data in FIFO poped out
+ * @brief I2S DMA generate EOF event on data in FIFO popped out
  *
  * @param hw Peripheral I2S hardware instance address.
  * @param en True to enable, False to disable
@@ -109,7 +109,10 @@ static inline void i2s_ll_enable_bus_clock(int i2s_id, bool enable)
 
 /// use a macro to wrap the function, force the caller to use it in a critical section
 /// the critical section needs to declare the __DECLARE_RCC_ATOMIC_ENV variable in advance
-#define i2s_ll_enable_bus_clock(...) (void)__DECLARE_RCC_ATOMIC_ENV; i2s_ll_enable_bus_clock(__VA_ARGS__)
+#define i2s_ll_enable_bus_clock(...) do { \
+        (void)__DECLARE_RCC_ATOMIC_ENV; \
+        i2s_ll_enable_bus_clock(__VA_ARGS__); \
+    } while(0)
 
 
 /**
@@ -130,7 +133,10 @@ static inline void i2s_ll_reset_register(int i2s_id)
 
 /// use a macro to wrap the function, force the caller to use it in a critical section
 /// the critical section needs to declare the __DECLARE_RCC_ATOMIC_ENV variable in advance
-#define i2s_ll_reset_register(...) (void)__DECLARE_RCC_ATOMIC_ENV; i2s_ll_reset_register(__VA_ARGS__)
+#define i2s_ll_reset_register(...) do { \
+        (void)__DECLARE_RCC_ATOMIC_ENV; \
+        i2s_ll_reset_register(__VA_ARGS__); \
+    } while(0)
 
 /**
  * @brief I2S module general init, enable I2S clock.
@@ -150,7 +156,10 @@ static inline void i2s_ll_enable_core_clock(i2s_dev_t *hw, bool enable)
 
 /// use a macro to wrap the function, force the caller to use it in a critical section
 /// the critical section needs to declare the __DECLARE_RCC_ATOMIC_ENV variable in advance
-#define i2s_ll_enable_core_clock(...) (void)__DECLARE_RCC_ATOMIC_ENV; i2s_ll_enable_core_clock(__VA_ARGS__)
+#define i2s_ll_enable_core_clock(...) do { \
+        (void)__DECLARE_RCC_ATOMIC_ENV; \
+        i2s_ll_enable_core_clock(__VA_ARGS__); \
+    } while(0)
 
 /**
  * @brief I2S tx msb right enable
@@ -350,11 +359,6 @@ static inline void i2s_ll_set_raw_mclk_div(i2s_dev_t *hw, uint32_t mclk_div, uin
  */
 static inline void i2s_ll_tx_set_mclk(i2s_dev_t *hw, const hal_utils_clk_div_t *mclk_div)
 {
-    /* Workaround for inaccurate clock while switching from a relatively low sample rate to a high sample rate
-     * Set to particular coefficients first then update to the target coefficients,
-     * otherwise the clock division might be inaccurate.
-     * the general idea is to set a value that unlike to calculate from the regular decimal */
-    i2s_ll_set_raw_mclk_div(hw, 7, 47, 3);
     i2s_ll_set_raw_mclk_div(hw, mclk_div->integer, mclk_div->denominator, mclk_div->numerator);
 }
 
@@ -659,7 +663,7 @@ static inline void i2s_ll_tx_set_bits_mod(i2s_dev_t *hw, uint32_t val)
 }
 
 /**
- * @brief Congfigure TX chan bit and audio data bit, on ESP32, sample_bit should equals to data_bit
+ * @brief Configure TX chan bit and audio data bit, on ESP32, sample_bit should equals to data_bit
  *
  * @param hw Peripheral I2S hardware instance address.
  * @param chan_bit The chan bit width
@@ -672,7 +676,7 @@ static inline void i2s_ll_tx_set_sample_bit(i2s_dev_t *hw, uint8_t chan_bit, int
 }
 
 /**
- * @brief Congfigure RX chan bit and audio data bit, on ESP32, sample_bit should equals to data_bit
+ * @brief Configure RX chan bit and audio data bit, on ESP32, sample_bit should equals to data_bit
  *
  * @param hw Peripheral I2S hardware instance address.
  * @param chan_bit The chan bit width
@@ -693,17 +697,6 @@ static inline void i2s_ll_rx_set_sample_bit(i2s_dev_t *hw, uint8_t chan_bit, int
 static inline void i2s_ll_tx_stop_on_fifo_empty(i2s_dev_t *hw, bool en)
 {
     hw->conf1.tx_stop_en = en;
-}
-
-/**
- * @brief Set whether to bypass the internal PCM module
- *
- * @param hw Peripheral I2S hardware instance address.
- * @param bypass whether to bypass the PCM module
- */
-static inline void i2s_ll_tx_bypass_pcm(i2s_dev_t *hw, bool bypass)
-{
-    hw->conf1.tx_pcm_bypass = bypass;
 }
 
 /**
@@ -932,7 +925,7 @@ static inline void i2s_ll_share_bck_ws(i2s_dev_t *hw, bool loopback_en)
  * @brief Configure RX PDM downsample
  *
  * @param hw Peripheral I2S hardware instance address.
- * @param dsr PDM downsample configuration paramater
+ * @param dsr PDM downsample configuration parameter
  */
 static inline void i2s_ll_rx_set_pdm_dsr(i2s_dev_t *hw, i2s_pdm_dsr_t dsr)
 {
@@ -978,25 +971,26 @@ static inline void i2s_ll_rx_enable_std(i2s_dev_t *hw)
  * @brief Enable I2S TX PDM mode
  *
  * @param hw Peripheral I2S hardware instance address.
- * @param pdm_ena Set true to enable TX PDM mode
+ * @param pcm2pdm_en Set true to enable TX PCM to PDM filter
  */
-static inline void i2s_ll_tx_enable_pdm(i2s_dev_t *hw)
+static inline void i2s_ll_tx_enable_pdm(i2s_dev_t *hw, bool pcm2pdm_en)
 {
     hw->conf2.val = 0;
     hw->pdm_conf.tx_pdm_en = true;
-    hw->pdm_conf.pcm2pdm_conv_en = true;
+    hw->pdm_conf.pcm2pdm_conv_en = pcm2pdm_en;
 }
 
 /**
  * @brief Enable I2S RX PDM mode
  *
  * @param hw Peripheral I2S hardware instance address.
+ * @param pdm2pcm_en Set true to enable RX PDM to PCM filter
  */
-static inline void i2s_ll_rx_enable_pdm(i2s_dev_t *hw)
+static inline void i2s_ll_rx_enable_pdm(i2s_dev_t *hw, bool pdm2pcm_en)
 {
     hw->conf2.val = 0;
     hw->pdm_conf.rx_pdm_en = true;
-    hw->pdm_conf.pdm2pcm_conv_en = true;
+    hw->pdm_conf.pdm2pcm_conv_en = pdm2pcm_en;
 }
 
 /**
@@ -1080,11 +1074,11 @@ static inline void i2s_ll_tx_set_pdm_fpfs(i2s_dev_t *hw, uint32_t fp, uint32_t f
 }
 
 /**
- * @brief Get I2S TX PDM fp configuration paramater
+ * @brief Get I2S TX PDM fp configuration parameter
  *
  * @param hw Peripheral I2S hardware instance address.
  * @return
- *        - fp configuration paramater
+ *        - fp configuration parameter
  */
 static inline uint32_t i2s_ll_tx_get_pdm_fp(i2s_dev_t *hw)
 {
@@ -1092,11 +1086,11 @@ static inline uint32_t i2s_ll_tx_get_pdm_fp(i2s_dev_t *hw)
 }
 
 /**
- * @brief Get I2S TX PDM fs configuration paramater
+ * @brief Get I2S TX PDM fs configuration parameter
  *
  * @param hw Peripheral I2S hardware instance address.
  * @return
- *        - fs configuration paramater
+ *        - fs configuration parameter
  */
 static inline uint32_t i2s_ll_tx_get_pdm_fs(i2s_dev_t *hw)
 {

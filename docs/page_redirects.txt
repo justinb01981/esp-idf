@@ -27,6 +27,11 @@ api-reference/storage/spi_flash                 api-reference/peripherals/spi_fl
 api-reference/storage/spi_flash_concurrency     api-reference/peripherals/spi_flash/spi_flash_concurrency
 api-reference/storage/spi_flash_override_driver api-reference/peripherals/spi_flash/spi_flash_override_driver
 api-reference/storage/spi_flash_optional_feature    api-reference/peripherals/spi_flash/spi_flash_optional_feature
+api-reference/peripherals/adc_oneshot     /api-reference/peripherals/adc/adc_oneshot
+api-reference/peripherals/adc_continuous     api-reference/peripherals/adc/adc_continuous
+api-reference/peripherals/adc_calibration     api-reference/peripherals/adc/adc_calibration
+api-reference/peripherals/adc     api-reference/peripherals/adc/index
+api-reference/peripherals/lcd     api-reference/peripherals/lcd/index
 
 
 get-started/idf-monitor                         api-guides/tools/idf-monitor
@@ -73,6 +78,9 @@ api-guides/event-handling                       api-reference/system/esp_event
 
 api-reference/network/tcpip_adapter             migration-guides/tcpip-adapter
 api-reference/system/system                     api-reference/system/misc_system_api
+api-reference/protocols/esp_spi_slave_protocol  "https://espressif.github.io/idf-extra-components/latest/esp_serial_slave_link/spi_slave_hd_protocol.html"
+api-reference/protocols/esp_sdio_slave_protocol "https://espressif.github.io/idf-extra-components/latest/esp_serial_slave_link/sdio_slave_protocol.html"
+api-reference/protocols/esp_serial_slave_link   "https://espressif.github.io/idf-extra-components/latest/esp_serial_slave_link/index.html"
 
 # Driver-NG refactor
 api-reference/peripherals/timer                 api-reference/peripherals/gptimer
@@ -80,6 +88,7 @@ api-reference/peripherals/sigmadelta            api-reference/peripherals/sdm
 
 # The 'secure boot' guides are now 'secure boot v1' guides
 security/secure-boot                           security/secure-boot-v1
+security/host-based-security-workflows         security/security-features-enablement-workflows
 
 # Since ESP32-S2, hw-reference URLs are now namespaced by chip
 hw-reference/get-started-devkitc                hw-reference/esp32/get-started-devkitc
@@ -104,3 +113,6 @@ get-started/macos-setup-scratch                 get-started/linux-macos-setup
 get-started/toolchain-setup-scratch             get-started/index
 get-started/eclipse-setup                       get-started/index
 get-started/vscode-setup                        get-started/index
+
+# Kconfig documentation got pretty serious file structure changes
+api-reference/kconfig                          api-reference/kconfig-reference

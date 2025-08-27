@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2015-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2015-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -19,6 +19,7 @@
 #include "esp_types.h"
 #include "esp_attr.h"
 #include "esp_bit_defs.h"
+#include "esp_compiler.h"
 #include "soc/spi_periph.h"
 #include "soc/spi_struct.h"
 #include "soc/spi_reg.h"
@@ -49,6 +50,8 @@ extern "C" {
 #define SPI_LL_CPU_MAX_BIT_LEN    (18 * 32)    //Fifo len: 18 words
 #define SPI_LL_MOSI_FREE_LEVEL    1            //Default level after bus initialized
 #define SPI_LL_DMA_SHARED         1            //spi_dma shared with adc and dac on S2
+
+#define SPI_LL_SUPPORT_SEG_GAP    1            // support update seg_gap_len by conf buffer
 
 /**
  * The data structure holding calculated clock configuration. Since the
@@ -89,7 +92,7 @@ typedef enum {
 
 // SPI base command in esp32s2
 typedef enum {
-     /* Slave HD Only */
+    /* Slave HD Only */
     SPI_LL_BASE_CMD_HD_WRBUF    = 0x01,
     SPI_LL_BASE_CMD_HD_RDBUF    = 0x02,
     SPI_LL_BASE_CMD_HD_WRDMA    = 0x03,
@@ -111,10 +114,10 @@ typedef enum {
  * @param host_id   Peripheral index number, see `spi_host_device_t`
  * @param enable    Enable/Disable
  */
-static inline void spi_ll_enable_bus_clock(spi_host_device_t host_id, bool enable) {
+static inline void spi_ll_enable_bus_clock(spi_host_device_t host_id, bool enable)
+{
     if (enable) {
-        switch (host_id)
-        {
+        switch (host_id) {
         case SPI1_HOST:
             DPORT_SET_PERI_REG_MASK(DPORT_PERIP_CLK_EN_REG, DPORT_SPI01_CLK_EN);
             break;
@@ -127,8 +130,7 @@ static inline void spi_ll_enable_bus_clock(spi_host_device_t host_id, bool enabl
         default: HAL_ASSERT(false);
         }
     } else {
-        switch (host_id)
-        {
+        switch (host_id) {
         case SPI1_HOST:
             DPORT_CLEAR_PERI_REG_MASK(DPORT_PERIP_CLK_EN_REG, DPORT_SPI01_CLK_EN);
             break;
@@ -145,16 +147,19 @@ static inline void spi_ll_enable_bus_clock(spi_host_device_t host_id, bool enabl
 
 /// use a macro to wrap the function, force the caller to use it in a critical section
 /// the critical section needs to declare the __DECLARE_RCC_ATOMIC_ENV variable in advance
-#define spi_ll_enable_bus_clock(...) (void)__DECLARE_RCC_ATOMIC_ENV; spi_ll_enable_bus_clock(__VA_ARGS__)
+#define spi_ll_enable_bus_clock(...) do { \
+        (void)__DECLARE_RCC_ATOMIC_ENV; \
+        spi_ll_enable_bus_clock(__VA_ARGS__); \
+    } while(0)
 
 /**
  * Reset whole peripheral register to init value defined by HW design
  *
  * @param host_id   Peripheral index number, see `spi_host_device_t`
  */
-static inline void spi_ll_reset_register(spi_host_device_t host_id) {
-    switch (host_id)
-    {
+static inline void spi_ll_reset_register(spi_host_device_t host_id)
+{
+    switch (host_id) {
     case SPI1_HOST:
         DPORT_SET_PERI_REG_MASK(DPORT_PERIP_RST_EN_REG, DPORT_SPI01_RST);
         DPORT_CLEAR_PERI_REG_MASK(DPORT_PERIP_RST_EN_REG, DPORT_SPI01_RST);
@@ -173,7 +178,10 @@ static inline void spi_ll_reset_register(spi_host_device_t host_id) {
 
 /// use a macro to wrap the function, force the caller to use it in a critical section
 /// the critical section needs to declare the __DECLARE_RCC_ATOMIC_ENV variable in advance
-#define spi_ll_reset_register(...) (void)__DECLARE_RCC_ATOMIC_ENV; spi_ll_reset_register(__VA_ARGS__)
+#define spi_ll_reset_register(...) do { \
+        (void)__DECLARE_RCC_ATOMIC_ENV; \
+        spi_ll_reset_register(__VA_ARGS__); \
+    } while(0)
 
 /**
  * Enable functional output clock within peripheral
@@ -687,6 +695,25 @@ static inline void spi_ll_master_keep_cs(spi_dev_t *hw, int keep_active)
  * Configs: parameters
  *----------------------------------------------------------------------------*/
 /**
+ * Set the standard clock mode for master.
+ *
+ * @param hw  Beginning address of the peripheral registers.
+ * @param enable_std True for std timing, False for half cycle delay sampling.
+ */
+static inline void spi_ll_master_set_rx_timing_mode(spi_dev_t *hw, spi_sampling_point_t sample_point)
+{
+    //This is not supported
+}
+
+/**
+ * Get if standard clock mode is supported.
+ */
+static inline bool spi_ll_master_is_rx_std_sample_supported(void)
+{
+    return false;
+}
+
+/**
  * Set the clock for master by stored value.
  *
  * @param hw Beginning address of the peripheral registers.
@@ -706,6 +733,7 @@ static inline void spi_ll_master_set_clock_by_reg(spi_dev_t *hw, const spi_ll_cl
  *
  * @return Frequency of given dividers.
  */
+__attribute__((always_inline))
 static inline int spi_ll_freq_for_pre_n(int fapb, int pre, int n)
 {
     return (fapb / (pre * n));
@@ -721,9 +749,10 @@ static inline int spi_ll_freq_for_pre_n(int fapb, int pre, int n)
  *
  * @return Actual (nearest) frequency.
  */
+__attribute__((always_inline))
 static inline int spi_ll_master_cal_clock(int fapb, int hz, int duty_cycle, spi_ll_clock_val_t *out_reg)
 {
-    typeof(GPSPI2.clock) reg;
+    typeof(GPSPI2.clock) reg = {.val = 0};
     int eff_clk;
 
     //In hw, n, h and l are 1-64, pre is 1-8K. Value written to register is one lower than used value.
@@ -852,7 +881,9 @@ static inline void spi_ll_set_miso_delay(spi_dev_t *hw, int delay_mode, int dela
 static inline void spi_ll_set_dummy(spi_dev_t *hw, int dummy_n)
 {
     hw->user.usr_dummy = dummy_n ? 1 : 0;
-    HAL_FORCE_MODIFY_U32_REG_FIELD(hw->user1, usr_dummy_cyclelen, dummy_n - 1);
+    if (dummy_n > 0) {
+        HAL_FORCE_MODIFY_U32_REG_FIELD(hw->user1, usr_dummy_cyclelen, dummy_n - 1);
+    }
 }
 
 /**
@@ -870,7 +901,7 @@ static inline void spi_ll_master_set_cs_hold(spi_dev_t *hw, int hold)
 /**
  * Set the delay of SPI clocks before the first SPI clock after the CS active edge.
  *
- * Note ESP32 doesn't support to use this feature when command/address phases
+ * Note ESP32S2 doesn't support to use this feature when command/address phases
  * are used in full duplex mode.
  *
  * @param hw Beginning address of the peripheral registers.
@@ -1206,10 +1237,10 @@ static inline uint32_t spi_ll_slave_hd_get_last_addr(spi_dev_t *hw)
  * @param host_id   Peripheral index number, see `spi_host_device_t`
  * @param enable    Enable/Disable
  */
-static inline void spi_dma_ll_enable_bus_clock(spi_host_device_t host_id, bool enable) {
+static inline void spi_dma_ll_enable_bus_clock(spi_host_device_t host_id, bool enable)
+{
     if (enable) {
-        switch (host_id)
-        {
+        switch (host_id) {
         case SPI2_HOST:
             DPORT_SET_PERI_REG_MASK(DPORT_PERIP_CLK_EN_REG, DPORT_SPI2_DMA_CLK_EN);
             break;
@@ -1220,8 +1251,7 @@ static inline void spi_dma_ll_enable_bus_clock(spi_host_device_t host_id, bool e
             HAL_ASSERT(false);
         }
     } else {
-        switch (host_id)
-        {
+        switch (host_id) {
         case SPI2_HOST:
             DPORT_CLEAR_PERI_REG_MASK(DPORT_PERIP_CLK_EN_REG, DPORT_SPI2_DMA_CLK_EN);
             break;
@@ -1236,16 +1266,19 @@ static inline void spi_dma_ll_enable_bus_clock(spi_host_device_t host_id, bool e
 
 /// use a macro to wrap the function, force the caller to use it in a critical section
 /// the critical section needs to declare the __DECLARE_RCC_RC_ATOMIC_ENV variable in advance
-#define spi_dma_ll_enable_bus_clock(...) (void)__DECLARE_RCC_RC_ATOMIC_ENV; spi_dma_ll_enable_bus_clock(__VA_ARGS__)
+#define spi_dma_ll_enable_bus_clock(...) do { \
+        (void)__DECLARE_RCC_RC_ATOMIC_ENV; \
+        spi_dma_ll_enable_bus_clock(__VA_ARGS__); \
+    } while(0)
 
 /**
  * Reset whole peripheral register to init value defined by HW design
  *
  * @param host_id   Peripheral index number, see `spi_host_device_t`
  */
-static inline void spi_dma_ll_reset_register(spi_host_device_t host_id) {
-    switch (host_id)
-    {
+static inline void spi_dma_ll_reset_register(spi_host_device_t host_id)
+{
+    switch (host_id) {
     case SPI2_HOST:
         DPORT_SET_PERI_REG_MASK(DPORT_PERIP_RST_EN_REG, DPORT_SPI2_DMA_RST);
         DPORT_CLEAR_PERI_REG_MASK(DPORT_PERIP_RST_EN_REG, DPORT_SPI2_DMA_RST);
@@ -1261,7 +1294,10 @@ static inline void spi_dma_ll_reset_register(spi_host_device_t host_id) {
 
 /// use a macro to wrap the function, force the caller to use it in a critical section
 /// the critical section needs to declare the __DECLARE_RCC_RC_ATOMIC_ENV variable in advance
-#define spi_dma_ll_reset_register(...) (void)__DECLARE_RCC_RC_ATOMIC_ENV; spi_dma_ll_reset_register(__VA_ARGS__)
+#define spi_dma_ll_reset_register(...) do { \
+        (void)__DECLARE_RCC_RC_ATOMIC_ENV; \
+        spi_dma_ll_reset_register(__VA_ARGS__); \
+    } while(0)
 
 //---------------------------------------------------RX-------------------------------------------------//
 /**
@@ -1336,6 +1372,7 @@ static inline void spi_dma_ll_rx_enable_burst_desc(spi_dma_dev_t *dma_in, uint32
 __attribute__((always_inline))
 static inline uint32_t spi_dma_ll_get_in_suc_eof_desc_addr(spi_dma_dev_t *dma_in, uint32_t channel)
 {
+    ESP_STATIC_ANALYZER_CHECK(!dma_in, -1);
     return dma_in->dma_in_suc_eof_des_addr;
 }
 
@@ -1437,6 +1474,7 @@ static inline void spi_dma_ll_enable_out_auto_wrback(spi_dma_dev_t *dma_out, uin
 __attribute__((always_inline))
 static inline uint32_t spi_dma_ll_get_out_eof_desc_addr(spi_dma_dev_t *dma_out, uint32_t channel)
 {
+    ESP_STATIC_ANALYZER_CHECK(!dma_out, -1);
     return dma_out->dma_out_eof_des_addr;
 }
 
@@ -1528,7 +1566,7 @@ static inline bool spi_ll_tx_get_empty_err(spi_dev_t *hw)
 static inline void spi_ll_set_conf_base_bitslen(spi_dev_t *hw, uint8_t conf_base)
 {
     // 7 bits wide
-    if(conf_base < 128) {
+    if (conf_base < 128) {
         hw->slv_wrbuf_dlen.conf_base_bitlen = conf_base;
     }
 }
@@ -1589,33 +1627,30 @@ static inline void spi_ll_format_line_mode_conf_buff(spi_dev_t *hw, spi_line_mod
     conf_buffer[SPI_LL_CTRL_REG_POS + SPI_LL_CONF_BUFFER_OFFSET] &= ~SPI_LL_ONE_LINE_CTRL_MASK;
     conf_buffer[SPI_LL_USER_REG_POS + SPI_LL_CONF_BUFFER_OFFSET] &= ~SPI_LL_ONE_LINE_USER_MASK;
 
-    switch (line_mode.cmd_lines)
-    {
+    switch (line_mode.cmd_lines) {
     case 2: SPI_LL_CONF_BUF_SET_BIT(conf_buffer[SPI_LL_CTRL_REG_POS + SPI_LL_CONF_BUFFER_OFFSET], SPI_FCMD_DUAL_M); break;
     case 4: SPI_LL_CONF_BUF_SET_BIT(conf_buffer[SPI_LL_CTRL_REG_POS + SPI_LL_CONF_BUFFER_OFFSET], SPI_FCMD_QUAD_M); break;
-    case 8: SPI_LL_CONF_BUF_SET_BIT(conf_buffer[SPI_LL_CTRL_REG_POS + SPI_LL_CONF_BUFFER_OFFSET], SPI_FCMD_OCT_M ); break;
+    case 8: SPI_LL_CONF_BUF_SET_BIT(conf_buffer[SPI_LL_CTRL_REG_POS + SPI_LL_CONF_BUFFER_OFFSET], SPI_FCMD_OCT_M); break;
     default: break;
     }
 
-    switch (line_mode.addr_lines)
-    {
+    switch (line_mode.addr_lines) {
     case 2: SPI_LL_CONF_BUF_SET_BIT(conf_buffer[SPI_LL_CTRL_REG_POS + SPI_LL_CONF_BUFFER_OFFSET], SPI_FADDR_DUAL_M); break;
     case 4: SPI_LL_CONF_BUF_SET_BIT(conf_buffer[SPI_LL_CTRL_REG_POS + SPI_LL_CONF_BUFFER_OFFSET], SPI_FADDR_QUAD_M); break;
-    case 8: SPI_LL_CONF_BUF_SET_BIT(conf_buffer[SPI_LL_CTRL_REG_POS + SPI_LL_CONF_BUFFER_OFFSET], SPI_FADDR_OCT_M ); break;
+    case 8: SPI_LL_CONF_BUF_SET_BIT(conf_buffer[SPI_LL_CTRL_REG_POS + SPI_LL_CONF_BUFFER_OFFSET], SPI_FADDR_OCT_M); break;
     default: break;
     }
 
-    switch (line_mode.data_lines)
-    {
-    case 2: SPI_LL_CONF_BUF_SET_BIT(conf_buffer[SPI_LL_CTRL_REG_POS + SPI_LL_CONF_BUFFER_OFFSET], SPI_FREAD_DUAL_M );
-            SPI_LL_CONF_BUF_SET_BIT(conf_buffer[SPI_LL_USER_REG_POS + SPI_LL_CONF_BUFFER_OFFSET], SPI_FWRITE_DUAL_M);
-            break;
-    case 4: SPI_LL_CONF_BUF_SET_BIT(conf_buffer[SPI_LL_CTRL_REG_POS + SPI_LL_CONF_BUFFER_OFFSET], SPI_FREAD_QUAD_M );
-            SPI_LL_CONF_BUF_SET_BIT(conf_buffer[SPI_LL_USER_REG_POS + SPI_LL_CONF_BUFFER_OFFSET], SPI_FWRITE_QUAD_M);
-            break;
-    case 8: SPI_LL_CONF_BUF_SET_BIT(conf_buffer[SPI_LL_CTRL_REG_POS + SPI_LL_CONF_BUFFER_OFFSET], SPI_FREAD_OCT_M );
-            SPI_LL_CONF_BUF_SET_BIT(conf_buffer[SPI_LL_USER_REG_POS + SPI_LL_CONF_BUFFER_OFFSET], SPI_FWRITE_OCT_M);
-            break;
+    switch (line_mode.data_lines) {
+    case 2: SPI_LL_CONF_BUF_SET_BIT(conf_buffer[SPI_LL_CTRL_REG_POS + SPI_LL_CONF_BUFFER_OFFSET], SPI_FREAD_DUAL_M);
+        SPI_LL_CONF_BUF_SET_BIT(conf_buffer[SPI_LL_USER_REG_POS + SPI_LL_CONF_BUFFER_OFFSET], SPI_FWRITE_DUAL_M);
+        break;
+    case 4: SPI_LL_CONF_BUF_SET_BIT(conf_buffer[SPI_LL_CTRL_REG_POS + SPI_LL_CONF_BUFFER_OFFSET], SPI_FREAD_QUAD_M);
+        SPI_LL_CONF_BUF_SET_BIT(conf_buffer[SPI_LL_USER_REG_POS + SPI_LL_CONF_BUFFER_OFFSET], SPI_FWRITE_QUAD_M);
+        break;
+    case 8: SPI_LL_CONF_BUF_SET_BIT(conf_buffer[SPI_LL_CTRL_REG_POS + SPI_LL_CONF_BUFFER_OFFSET], SPI_FREAD_OCT_M);
+        SPI_LL_CONF_BUF_SET_BIT(conf_buffer[SPI_LL_USER_REG_POS + SPI_LL_CONF_BUFFER_OFFSET], SPI_FWRITE_OCT_M);
+        break;
     default: break;
     }
 }
@@ -1630,7 +1665,7 @@ static inline void spi_ll_format_line_mode_conf_buff(spi_dev_t *hw, spi_line_mod
 static inline void spi_ll_format_prep_phase_conf_buffer(spi_dev_t *hw, uint8_t setup, uint32_t conf_buffer[SOC_SPI_SCT_BUFFER_NUM_MAX])
 {
     //user reg: cs_setup
-    if(setup) {
+    if (setup) {
         SPI_LL_CONF_BUF_SET_BIT(conf_buffer[SPI_LL_USER_REG_POS + SPI_LL_CONF_BUFFER_OFFSET], SPI_CS_SETUP_M);
     } else {
         SPI_LL_CONF_BUF_CLR_BIT(conf_buffer[SPI_LL_USER_REG_POS + SPI_LL_CONF_BUFFER_OFFSET], SPI_CS_SETUP_M);
@@ -1768,7 +1803,7 @@ static inline void spi_ll_format_din_phase_conf_buffer(spi_dev_t *hw, int bitlen
 static inline void spi_ll_format_done_phase_conf_buffer(spi_dev_t *hw, int hold, uint32_t conf_buffer[SOC_SPI_SCT_BUFFER_NUM_MAX])
 {
     //user reg: cs_hold
-    if(hold) {
+    if (hold) {
         SPI_LL_CONF_BUF_SET_BIT(conf_buffer[SPI_LL_USER_REG_POS + SPI_LL_CONF_BUFFER_OFFSET], SPI_CS_HOLD_M);
     } else {
         SPI_LL_CONF_BUF_CLR_BIT(conf_buffer[SPI_LL_USER_REG_POS + SPI_LL_CONF_BUFFER_OFFSET], SPI_CS_HOLD_M);
@@ -1853,8 +1888,7 @@ static inline void spi_ll_set_magic_number(spi_dev_t *hw, uint8_t magic_value)
 static inline uint8_t spi_ll_get_slave_hd_base_command(spi_command_t cmd_t)
 {
     uint8_t cmd_base = 0x00;
-    switch (cmd_t)
-    {
+    switch (cmd_t) {
     case SPI_CMD_HD_WRBUF:
         cmd_base = SPI_LL_BASE_CMD_HD_WRBUF;
         break;

@@ -3,6 +3,8 @@ USB Host
 
 :link_to_translation:`zh_CN:[中文]`
 
+{IDF_TARGET_OTG_NUM_HOST_CHAN: default="8", esp32p4="16"}
+
 The document provides information regarding the USB Host Library. This document is split into the following sections:
 
 .. contents:: Sections
@@ -25,18 +27,31 @@ Features & Limitations
 
 The Host Library has the following features:
 
-- Supports Full Speed (FS) and Low Speed (LS) Devices.
-- Supports all four transfer types, i.e., Control, Bulk, Interrupt, and Isochronous.
-- Allows multiple class drivers to run simultaneously, i.e., multiple clients of the Host Library.
-- A single device can be used by multiple clients simultaneously, e.g., composite devices.
-- The Host Library itself and the underlying Host Stack does not internally instantiate any OS tasks. The number of tasks is entirely controlled by how the Host Library interface is used. However, a general rule of thumb regarding the number of tasks is ``(the number of host class drivers running + 1)``.
+.. list::
+
+    :esp32s2 or esp32s3: - Supports Full Speed (FS) and Low Speed (LS) Devices.
+    :esp32p4: - Supports High Speed (HS), Full Speed (FS) and Low Speed (LS) Devices.
+    - Supports all four transfer types: Control, Bulk, Interrupt, and Isochronous.
+    :esp32p4: - Supports High-Bandwidth Isochronous endpoints.
+    :esp32p4: - {IDF_TARGET_NAME} includes two USB 2.0 OTG peripherals: one High-Speed and one Full-Speed. Both support USB Host functionality. However, due to a current software limitation, only one can operate as a USB Host at a time. Support for dual USB Host operation is planned for a future update.
+    - Allows multiple class drivers to run simultaneously, i.e., multiple clients of the Host Library.
+    - A single device can be used by multiple clients simultaneously, e.g., composite devices.
+    - The Host Library itself and the underlying Host Stack does not internally instantiate any OS tasks. The number of tasks is entirely controlled by how the Host Library interface is used. However, a general rule of thumb regarding the number of tasks is ``(the number of host class drivers running + 1)``.
+    - Allows single Hub support (If option :ref:`CONFIG_USB_HOST_HUBS_SUPPORTED` is enabled).
+    - Allows multiple Hubs support (If option :ref:`CONFIG_USB_HOST_HUB_MULTI_LEVEL` is enabled).
 
 Currently, the Host Library and the underlying Host Stack has the following limitations:
 
-- Only supports a single device, but the Host Library's API is designed for multiple device support.
-- Only supports Asynchronous transfers.
-- Only supports using the first configuration found. Changing to other configurations is not supported yet.
-- Transfer timeouts are not supported yet.
+.. list::
+
+    - Only supports Asynchronous transfers.
+    - Only supports using one configuration. Changing to other configurations after enumeration is not supported yet.
+    - Transfer timeouts are not supported yet.
+    - The External Hub Driver: Remote Wakeup feature is not supported (External Hubs are active, even if there are no devices inserted).
+    - The External Hub Driver: Doesn't handle error cases (overcurrent handling, errors during initialization etc. are not implemented yet).
+    - The External Hub Driver: No Interface selection. The Driver uses the first available Interface with Hub Class code (09h).
+    - The External Port Driver: No downstream port debounce mechanism (not implemented yet)
+    :esp32p4: - The External Hub Driver: No Transaction Translator layer (No FS/LS Devices support when a Hub is attached to HS Host).
 
 
 .. -------------------------------------------------- Architecture -----------------------------------------------------
@@ -89,7 +104,7 @@ Therefore, in addition to the client tasks, the Host Library also requires a tas
 Devices
 ^^^^^^^
 
-The Host Library shields clients from the details of device handling, encompassing details such as connection, memory allocation, and enumeration. The clients are provided only with a list of already connected and enumerated devices to choose from. During enumeration, each device is automatically configured to use the first configuration found, namely, the first configuration descriptor returned on a Get Configuration Descriptor request. For most standard devices, the first configuration will have a ``bConfigurationValue`` of ``1``.
+The Host Library shields clients from the details of device handling, encompassing details such as connection, memory allocation, and enumeration. The clients are provided only with a list of already connected and enumerated devices to choose from. By default during enumeration, each device is automatically configured to use the first configuration found, namely, the first configuration descriptor returned on a Get Configuration Descriptor request. For most standard devices, the first configuration will have a ``bConfigurationValue`` of ``1``. If option  :ref:`CONFIG_USB_HOST_ENABLE_ENUM_FILTER_CALLBACK` is enabled, a different ``bConfigurationValue`` can be selected, see `Multiple Configuration Support`_ for more details.
 
 It is possible for two or more clients to simultaneously communicate with the same device as long as they are not communicating to the same interface. However, multiple clients can simultaneously communicate with the same device's default endpoint (i.e., EP0), which will result in their control transfers being serialized.
 
@@ -158,8 +173,8 @@ Lifecycle
 
 The graph above illustrates the typical lifecycle of the Host Library with multiple clients and devices. Specifically, the example involves:
 
-- two registered clients (Client 1 and Client 2).
-- two connected devices (Device 1 and Device 2), where Client 1 communicates with Device 1 and Client 2 communicates with Device 2.
+- Two registered clients (Client 1 and Client 2).
+- Two connected devices (Device 1 and Device 2), where Client 1 communicates with Device 1 and Client 2 communicates with Device 2.
 
 With reference to the graph above, the typical lifecycle involves the following key stages.
 
@@ -357,7 +372,7 @@ Examples
 Host Library Examples
 ^^^^^^^^^^^^^^^^^^^^^
 
-The :example:`peripherals/usb/host/usb_host_lib` demonstrates basic usage of the USB Host Library's API to implement a pseudo-class driver.
+- :example:`peripherals/usb/host/usb_host_lib` demonstrates how to use the USB Host Library API to install and register a client, wait for a device connection, print the device's information, handle disconnection, and repeat these steps until a user quits the application.
 
 Class Driver Examples
 ^^^^^^^^^^^^^^^^^^^^^
@@ -367,28 +382,28 @@ The USB Host Stack provides a number of examples that implement host class drive
 CDC-ACM
 """""""
 
-* A host class driver for the Communication Device Class (Abstract Control Model) is distributed as a managed component via the `ESP-IDF Component Registry <https://components.espressif.com/component/espressif/usb_host_cdc_acm>`__.
-* The :example:`peripherals/usb/host/cdc/cdc_acm_host` example uses the CDC-ACM host driver component to communicate with CDC-ACM devices.
-* The :example:`peripherals/usb/host/cdc/cdc_acm_vcp` example shows how can you extend the CDC-ACM host driver to interface Virtual COM Port devices.
+* A host class driver for the Communication Device Class (Abstract Control Model) is distributed as a managed component via the `ESP Component Registry <https://components.espressif.com/component/espressif/usb_host_cdc_acm>`__.
+* :example:`peripherals/usb/host/cdc/cdc_acm_host` demonstrates how to use the CDC-ACM Host Driver to enable communication between {IDF_TARGET_NAME} and a USB CDC-ACM device.
+* :example:`peripherals/usb/host/cdc/cdc_acm_vcp` demonstrates how to extend the CDC-ACM driver for Virtual Communication Port (VCP) devices like CP210x, FTDI FT23x or CH34x devices, and how to control the device and send data using the CDC-ACM API.
 * The CDC-ACM driver is also used in `esp_modem examples <https://github.com/espressif/esp-protocols/tree/master/components/esp_modem/examples>`__, where it is used for communication with cellular modems.
 
 MSC
 """
 
-* A host class driver for the Mass Storage Class (Bulk-Only Transport) is deployed to `ESP-IDF Component Registry <https://components.espressif.com/component/espressif/usb_host_msc>`__.
-* The :example:`peripherals/usb/host/msc` example demonstrates the usage of the MSC host driver to read and write to a USB flash drive.
+* A host class driver for the Mass Storage Class (Bulk-Only Transport) is deployed to `ESP Component Registry <https://components.espressif.com/component/espressif/usb_host_msc>`__.
+* :example:`peripherals/usb/host/msc` demonstrates how to use USB Mass Storage Class to access, read, write, and perform operations on a USB flash drive, including handling USB reconnections and deinitializing the USB Host Stack.
 
 HID
 """
 
-* A host class driver for the HID (Human interface device) is distributed as a managed component via the `ESP-IDF Component Registry <https://components.espressif.com/components/espressif/usb_host_hid>`__.
-* The :example:`peripherals/usb/host/hid` example demonstrates the possibility to receive reports from a USB HID device with several interfaces.
+* A host class driver for the HID (Human interface device) is distributed as a managed component via the `ESP Component Registry <https://components.espressif.com/components/espressif/usb_host_hid>`__.
+* :example:`peripherals/usb/host/hid` demonstrates how to implement a basic USB Host HID Class Driver on {IDF_TARGET_NAME}, enabling communication with USB HID devices like keyboards and mice, and continuously scans for their connection, fetching HID reports once connected.
 
 UVC
 """
 
-* A host class driver for the USB Video Device Class is distributed as a managed component via the `ESP-IDF Component Registry <https://components.espressif.com/component/espressif/usb_host_uvc>`__.
-* The :example:`peripherals/usb/host/uvc` example demonstrates the usage of the UVC host driver to receive a video stream from a USB camera and optionally forward that stream over Wi-Fi.
+* A host class driver for the USB Video Device Class is distributed as a managed component via the `ESP Component Registry <https://components.espressif.com/component/espressif/usb_host_uvc>`__.
+* :example:`peripherals/usb/host/uvc` demonstrates how to capture video frames from a USB camera using the UVC driver.
 
 .. ---------------------------------------------- USB Host Menuconfig --------------------------------------------------
 
@@ -429,6 +444,44 @@ Configurable parameters of the USB host stack can be configured with multiple op
 * For reset hold interval, refer to :ref:`CONFIG_USB_HOST_RESET_HOLD_MS`.
 * For reset recovery interval, refer to :ref:`CONFIG_USB_HOST_RESET_RECOVERY_MS`.
 * For ``SetAddress()`` recovery interval, refer to :ref:`CONFIG_USB_HOST_SET_ADDR_RECOVERY_MS`.
+
+Downstream Port Configuration
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+When external Hubs feature is supported, there are several parameters which could be configured for the external Hubs port.
+
+Each external Hub has a Hub Descriptor which describes the device characteristics.
+
+.. note::
+
+    For detailed information about Hub Descriptor, please refer to `USB 2.0 Specification <https://www.usb.org/document-library/usb-20-specification>`_ > Chapter 11.23.2.1 *Hub Descriptor*.
+
+Configurable parameters of the downstream port can be configured with multiple options via Menuconfig.
+
+* For custom value to stabilize the power after powering on the port (PwrOn2PwrGood value), refer to :ref:`CONFIG_USB_HOST_EXT_PORT_CUSTOM_POWER_ON_DELAY_MS`.
+* For reset recovery interval, refer to :ref:`CONFIG_USB_HOST_EXT_PORT_RESET_RECOVERY_DELAY_MS`.
+
+.. note::
+
+    The specification claims, that for a hub with no power switches, PwrOn2PwrGood must be set to zero. Meanwhile, for some devices, this value could be increased to give extra time for device to power-up. To enable this feature, refer to :ref:`CONFIG_USB_HOST_EXT_PORT_CUSTOM_POWER_ON_DELAY_ENABLE`.
+
+Host Channels
+"""""""""""""
+
+When external Hubs support feature is enabled (:ref:`CONFIG_USB_HOST_HUBS_SUPPORTED`), the amount of Host channels plays important role, as each downstream device requires vacant channel.
+
+To handle each attached device, different amount of channels are required. This amount does depend on the device class (EPs number).
+
+Supported amount of channels for {IDF_TARGET_NAME} is {IDF_TARGET_OTG_NUM_HOST_CHAN}.
+
+.. note::
+
+    - One free channel is required to enumerate the device.
+
+    - From 1 to N (when N - number of EPs) free channels are required to claim the interface.
+
+    - When there are no more free Host channels available, the device could not be enumerated and its interface cannot be claimed.
+
 
 Multiple Configuration Support
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

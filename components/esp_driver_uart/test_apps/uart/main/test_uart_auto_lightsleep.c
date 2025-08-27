@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2021-2022 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2021-2024 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -27,14 +27,19 @@
 
 #if CONFIG_XTAL_FREQ_40
 #define MIN_FREQ    10
+#elif CONFIG_XTAL_FREQ_48
+#define MIN_FREQ    12
 #elif CONFIG_XTAL_FREQ_32
 #define MIN_FREQ    8
 #elif CONFIG_XTAL_FREQ_26
 #define MIN_FREQ    13
+#elif CONFIG_XTAL_FREQ_AUTO
+#if CONFIG_IDF_TARGET_ESP32C5
+/* The ESP32C5 uses Autodetect to obtain the XTAL_FREQ, and its CONFIG_XTAL_FREQ is set to 0.
+ * Its MIN_FREQ is set to 12M because it primarily uses a 48M xtal */
+#define MIN_FREQ    12
 #endif
-
-#if !TEMPORARY_DISABLED_FOR_TARGETS(ESP32P4)
-#if CONFIG_PM_ENABLE
+#endif
 
 TEST_CASE("uart tx won't be blocked by auto light sleep", "[uart]")
 {
@@ -82,10 +87,8 @@ TEST_CASE("uart tx won't be blocked by auto light sleep", "[uart]")
     uart_driver_delete(port_num);
     free(data);
 
-#if CONFIG_PM_POWER_DOWN_CPU_IN_LIGHT_SLEEP
-    //When PD_CPU enabled, retention may cause 14K memory leak. Workaround to release the memory
-    sleep_cpu_configure(false);
+#if CONFIG_FREERTOS_USE_TICKLESS_IDLE
+    pm_config.light_sleep_enable = false;
+    TEST_ESP_OK(esp_pm_configure(&pm_config));
 #endif
 }
-#endif // CONFIG_PM_ENABLE
-#endif //!TEMPORARY_DISABLED_FOR_TARGETS(ESP32P4)

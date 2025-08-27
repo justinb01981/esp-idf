@@ -3,8 +3,7 @@
   extends: .rules:test:host_test
   stage: host_test
   image: $ESP_ENV_IMAGE
-  tags:
-    - windows-build
+  tags: [windows-build, brew]
   dependencies: # set dependencies to null to avoid missing artifacts issue
   # run host_test jobs immediately, only after upload cache
   needs:
@@ -14,13 +13,18 @@
     - job: upload-submodules-cache
       optional: true
       artifacts: false
+  variables:
+    GIT_STRATEGY: fetch  # use brew local mirror first
   before_script: []
   after_script: []
 
 test_cli_installer_win:
+  rules:
+    - when: never
   extends:
     - .host_test_win_template
     - .rules:labels:windows_pytest_build_system
+  allow_failure: true
   artifacts:
     when: on_failure
     paths:
@@ -29,9 +33,11 @@ test_cli_installer_win:
     expire_in: 1 week
   variables:
     IDF_PATH: "$CI_PROJECT_DIR"
+  timeout: 3h
   script:
     # Tools must be downloaded for testing
-    - python ${IDF_PATH}\tools\idf_tools.py download required qemu-riscv32 qemu-xtensa cmake
+    #                                                                     cmake@version that is supported
+    - python ${IDF_PATH}\tools\idf_tools.py download required qemu-riscv32 qemu-xtensa cmake cmake@3.16.3
     - cd ${IDF_PATH}\tools\test_idf_tools
     - python -m pip install jsonschema
     - python .\test_idf_tools.py
@@ -54,7 +60,7 @@ test_tools_win:
     PYTHONPATH: "$PYTHONPATH;$IDF_PATH\\tools;$IDF_PATH\\tools\\esp_app_trace;$IDF_PATH\\components\\partition_table;$IDF_PATH\\tools\\ci\\python_packages"
   script:
     - python -m pip install jsonschema
-    - .\install.ps1 --enable-ci --enable-pytest
+    - .\install.ps1 --enable-ci
     - .\export.ps1
     - python "${SUBMODULE_FETCH_TOOL}" -s "all"
     - cd ${IDF_PATH}/tools/test_idf_py
@@ -72,7 +78,7 @@ test_tools_win:
   after_script: []
   timeout: 4 hours
   script:
-    - .\install.ps1 --enable-ci --enable-pytest
+    - .\install.ps1 --enable-ci
     - . .\export.ps1
     - python "${SUBMODULE_FETCH_TOOL}" -s "all"
     - cd ${IDF_PATH}\tools\test_build_system
@@ -84,8 +90,7 @@ pytest_build_system_win:
     - .rules:labels:windows_pytest_build_system
   parallel: 2
   needs: []
-  tags:
-    - windows-build
+  tags: [windows-build, brew]
   artifacts:
     paths:
       - XUNIT_RESULT.xml

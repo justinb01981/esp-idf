@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2021-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2021-2024 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -24,6 +24,7 @@
 #include "driver/gpio.h"
 #include "esp_log.h"
 #include "esp_check.h"
+#include "esp_compiler.h"
 
 static const char *TAG = "lcd_panel.nt35510";
 
@@ -42,7 +43,7 @@ static esp_err_t panel_nt35510_sleep(esp_lcd_panel_t *panel, bool sleep);
 typedef struct {
     esp_lcd_panel_t base;
     esp_lcd_panel_io_handle_t io;
-    int reset_gpio_num;
+    gpio_num_t reset_gpio_num;
     bool reset_level;
     int x_gap;
     int y_gap;
@@ -61,6 +62,8 @@ esp_lcd_new_panel_nt35510(const esp_lcd_panel_io_handle_t io, const esp_lcd_pane
     esp_err_t ret = ESP_OK;
     nt35510_panel_t *nt35510 = NULL;
     ESP_GOTO_ON_FALSE(io && panel_dev_config && ret_panel, ESP_ERR_INVALID_ARG, err, TAG, "invalid argument");
+    // leak detection of nt35510 because saving nt35510->base address
+    ESP_COMPILER_DIAGNOSTIC_PUSH_IGNORE("-Wanalyzer-malloc-leak")
     nt35510 = calloc(1, sizeof(nt35510_panel_t));
     ESP_GOTO_ON_FALSE(nt35510, ESP_ERR_NO_MEM, err, TAG, "no mem for nt35510 panel");
 
@@ -131,6 +134,7 @@ err:
         free(nt35510);
     }
     return ret;
+    ESP_COMPILER_DIAGNOSTIC_POP("-Wanalyzer-malloc-leak")
 }
 
 static esp_err_t panel_nt35510_del(esp_lcd_panel_t *panel)

@@ -46,18 +46,21 @@ const rmt_signal_conn_t rmt_periph_signals = {
 #define RMT_RETENTION_REGS_BASE (DR_REG_RMT_BASE + 0x10)
 static const uint32_t rmt_regs_map[4] = {0xffd03f, 0x0, 0x0, 0x0};
 static const regdma_entries_config_t rmt_regdma_entries[] = {
+    // backup stage: save configuration registers
+    // restore stage: restore the configuration registers
     [0] = {
         .config = REGDMA_LINK_ADDR_MAP_INIT(REGDMA_RMT_LINK(0x00),
-        RMT_RETENTION_REGS_BASE, RMT_RETENTION_REGS_BASE,
-        RMT_RETENTION_REGS_CNT, 0, 0,
-        rmt_regs_map[0], rmt_regs_map[1],
-        rmt_regs_map[2], rmt_regs_map[3]),
+                                            RMT_RETENTION_REGS_BASE, RMT_RETENTION_REGS_BASE,
+                                            RMT_RETENTION_REGS_CNT, 0, 0,
+                                            rmt_regs_map[0], rmt_regs_map[1],
+                                            rmt_regs_map[2], rmt_regs_map[3]),
         .owner = ENTRY(0) | ENTRY(2),
     },
 };
 
 const rmt_reg_retention_info_t rmt_reg_retention_info[SOC_RMT_GROUPS] = {
     [0] = {
+        .module = SLEEP_RETENTION_MODULE_RMT0,
         .regdma_entry_array = rmt_regdma_entries,
         .array_size = ARRAY_SIZE(rmt_regdma_entries)
     },

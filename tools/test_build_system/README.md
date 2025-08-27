@@ -9,7 +9,7 @@ This directory contains tests for the build system and build-related tools. Thes
 
 ## Running the tests locally
 
-1. Install pytest using `install.{sh,bat,ps1,fish} --enable-pytest`.
+1. Install pytest using `install.{sh,bat,ps1,fish} --enable-ci`.
 1. Activate the IDF shell environment using `export.{sh,bat,ps1,fish}`.
 1. To run all the tests, go to `$IDF_PATH/tools/test_build_system` directory, then run:
     ```
@@ -56,7 +56,8 @@ def test_something(test_app_copy):
     # the current working directory now contains the copy of the test app
 ```
 
-If the test case doesn't use the `test_app_copy` argument, pylint will typically warn about an unused argument, even if the fixture is actually used. To avoid the warning, use the following pattern:
+If the test case doesn't use the `test_app_copy` argument, ruff will typically warn about an unused argument, even if the fixture is actually used. To avoid the warning, use the following pattern:
+
 ```python
 @pytest.mark.usefixtures('test_app_copy')
 def test_something(idf_py):
@@ -114,6 +115,8 @@ Note, `default_idf_env` sets up the environment based on the `IDF_PATH` environm
 
 Copies IDF from `IDF_PATH` into a new temporary directory. `@pytest.mark.idf_copy('name prefix')` can be used to specify the name prefix of the temporary directory.
 
+The marker `@pytest.mark.idf_copy_with_space` can be used in combination with `idf_copy` fixture to create a temporary directory with a space in the name.
+
 For the duration of the test, `IDF_PATH` environment variable is set to the newly created copy.
 
 ```python
@@ -136,7 +139,7 @@ def test_idf_copy(idf_copy):
 @pytest.mark.usefixtures('test_app_copy')
 def test_build_jsons_updated_by_reconfigure(idf_py):
     globs = ['build/*.json']
-    
+
     idf_py('reconfigure')
     snapshot_1 = get_snapshot(globs)
     snapshot_2 = get_snapshot(globs)

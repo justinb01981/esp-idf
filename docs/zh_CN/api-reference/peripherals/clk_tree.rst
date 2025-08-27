@@ -3,15 +3,15 @@
 
 :link_to_translation:`en:[English]`
 
-{IDF_TARGET_RC_FAST_VAGUE_FREQ: default="17.5", esp32="8", esp32s2="8", esp32h2="8"}
+{IDF_TARGET_RC_FAST_VAGUE_FREQ: default="17.5", esp32="8", esp32s2="8", esp32h2="8", esp32h21="20", esp32h4="20"}
 
-{IDF_TARGET_RC_FAST_ADJUSTED_FREQ: default="17.5", esp32="8.5", esp32s2="8.5", esp32h2="8.5"}
+{IDF_TARGET_RC_FAST_ADJUSTED_FREQ: default="17.5", esp32="8.5", esp32s2="8.5", esp32h2="8.5", esp32h21="20", esp32h4="20"}
 
-{IDF_TARGET_XTAL_FREQ: default="40", esp32="2 ~ 40", esp32c2="40/26", esp32h2="32"}
+{IDF_TARGET_XTAL_FREQ: default="40", esp32="2 ~ 40", esp32c2="40/26", esp32h2="32", esp32c5="48", esp32h21="32", esp32h4="32"}
 
-{IDF_TARGET_RC_SLOW_VAGUE_FREQ: default="136", esp32="150", esp32s2="90"}
+{IDF_TARGET_RC_SLOW_VAGUE_FREQ: default="136", esp32="150", esp32s2="90", esp32h21="600", esp32h4="600"}
 
-{IDF_TARGET_OSC_SLOW_PIN: default="GPIO0", esp32c2="pin0（时钟信号频率不超过 136 kHz 时）", "esp32c6="GPIO0", esp32h2="GPIO13"}
+{IDF_TARGET_OSC_SLOW_PIN: default="GPIO0", esp32c2="pin0（时钟信号频率不超过 136 kHz 时）", "esp32c6="GPIO0", esp32h2="GPIO13", esp32h21="GPIO11", esp32h4="GPIO5"}
 
 {IDF_TARGET_NAME} 的时钟子系统用于从一系列根时钟中提取并分配系统/模块时钟。时钟树驱动程序负责维护系统时钟的基本功能，并管理模块时钟间的复杂关系。
 
@@ -78,12 +78,6 @@
             - 外部慢速时钟 - 可选 (OSC_SLOW)
 
                 将外部电路生成的时钟信号连接到 {IDF_TARGET_OSC_SLOW_PIN}，可作为 ``RTC_SLOW_CLK`` 的时钟源。通过校准，可以计算该时钟信号的实际频率。
-
-        .. only:: SOC_CLK_RC32K_SUPPORTED
-
-            - 内部 32 kHz RC 振荡器 (RC32K)
-
-                在运行时，通过校准，可以计算该时钟信号的实际频率。
 
 与晶振产生的信号相比，从 RC 振荡器电路产生的信号通常精度较低，且容易受环境影响。因此，{IDF_TARGET_NAME} 为 ``RTC_SLOW_CLK`` 提供了几种时钟源选项，可以根据对系统时间精度和对功耗的要求选择。更多详情，请参阅 :ref:`rtc-clock-source-choice`。
 

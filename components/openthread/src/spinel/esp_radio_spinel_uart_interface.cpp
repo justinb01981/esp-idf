@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2021-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2021-2024 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -11,6 +11,7 @@
 #include "esp_openthread_common_macro.h"
 #include "openthread/platform/time.h"
 #include "hdlc.hpp"
+#include "common/code_utils.hpp"
 
 namespace esp {
 namespace radio_spinel {
@@ -276,8 +277,8 @@ esp_err_t UartSpinelInterface::TryRecoverUart(void)
 otError UartSpinelInterface::HardwareReset(void)
 {
     if (mRcpFailureHandler) {
-        mRcpFailureHandler();
         TryRecoverUart();
+        mRcpFailureHandler();
     }
     return OT_ERROR_NONE;
 }

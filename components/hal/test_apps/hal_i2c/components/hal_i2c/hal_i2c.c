@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2024-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Unlicense OR CC0-1.0
  */
@@ -92,7 +92,7 @@ esp_err_t hal_i2c_init(hal_i2c_config *cfg)
     // 2. Set both SCL and SDA open-drain
     // 3. Set both SCL and SDA pullup enable and pulldown disable. (If you use external pullup, this can be ignored)
     // 4. io mux function select
-    // 5. We connect out/in signal. As I2C master, out/in signal is necessary fpr both SCL and SDA according to esp hardware.
+    // 5. We connect out/in signal. As I2C master, out/in signal is necessary for both SCL and SDA according to esp hardware.
 
     // SDA pin configurations
     if (sda_io != -1) {
@@ -101,7 +101,7 @@ esp_err_t hal_i2c_init(hal_i2c_config *cfg)
         gpio_ll_od_enable(&GPIO, sda_io);
         gpio_ll_pullup_en(&GPIO, sda_io);
         gpio_ll_pulldown_dis(&GPIO, sda_io);
-        gpio_hal_iomux_func_sel(GPIO_PIN_MUX_REG[sda_io], PIN_FUNC_GPIO);
+        gpio_ll_func_sel(&GPIO, sda_io, PIN_FUNC_GPIO);
         esp_rom_gpio_connect_out_signal(sda_io, i2c_periph_signal[cfg->i2c_port].sda_out_sig, 0, 0);
         esp_rom_gpio_connect_in_signal(sda_io, i2c_periph_signal[cfg->i2c_port].sda_in_sig, 0);
     }
@@ -112,12 +112,14 @@ esp_err_t hal_i2c_init(hal_i2c_config *cfg)
         gpio_ll_od_enable(&GPIO, scl_io);
         gpio_ll_pullup_en(&GPIO, scl_io);
         gpio_ll_pulldown_dis(&GPIO, scl_io);
-        gpio_hal_iomux_func_sel(GPIO_PIN_MUX_REG[scl_io], PIN_FUNC_GPIO);
+        gpio_ll_func_sel(&GPIO, scl_io, PIN_FUNC_GPIO);
         esp_rom_gpio_connect_out_signal(scl_io, i2c_periph_signal[cfg->i2c_port].scl_out_sig, 0, 0);
         esp_rom_gpio_connect_in_signal(scl_io, i2c_periph_signal[cfg->i2c_port].scl_out_sig, 0);
     }
     // Initialize I2C master bus. Including enable its clock, choose its mode, etc.
-    i2c_ll_master_init(dev);
+    i2c_ll_set_mode(dev, I2C_BUS_MODE_MASTER);
+    i2c_ll_enable_pins_open_drain(dev, true);
+    i2c_ll_enable_arbitration(dev, false);
     //MSB (I2C standard require the data to be sent with most MSB)
     i2c_ll_set_data_mode(dev, I2C_DATA_MODE_MSB_FIRST, I2C_DATA_MODE_MSB_FIRST);
     //Reset fifo
@@ -132,7 +134,13 @@ esp_err_t hal_i2c_init(hal_i2c_config *cfg)
     I2C_CLOCK_SRC_ATOMIC() {
         i2c_ll_set_source_clk(dev, SOC_MOD_CLK_XTAL);
     }
-    i2c_ll_master_cal_bus_clk(clk_hal_xtal_get_freq_mhz() * MHZ, freq, &clk_cal);
+    uint32_t xtal_freq = 0;
+#if SOC_CLK_TREE_SUPPORTED
+    xtal_freq = clk_hal_xtal_get_freq_mhz();
+#else
+    xtal_freq = clk_ll_xtal_get_freq_mhz();
+#endif
+    i2c_ll_master_cal_bus_clk(xtal_freq * MHZ, freq, &clk_cal);
     i2c_ll_master_set_bus_timing(dev, &clk_cal);
 
     i2c_ll_update(dev);
@@ -221,7 +229,7 @@ esp_err_t hal_i2c_write(i2c_port_t port_num, uint16_t addr, const uint8_t *txdat
         i2c_format_cmd(port_num, cmd_idx++, I2C_LL_CMD_WRITE, ACK_VALUE, 0, NOT_CHECK_ACK_VALUE, tx_len_tmp);
         i2c_format_cmd(port_num, cmd_idx++, I2C_LL_CMD_END, ACK_VALUE, 0, NOT_CHECK_ACK_VALUE, 0);
         i2c_ll_update(dev);
-        i2c_ll_master_trans_start(dev);
+        i2c_ll_start_trans(dev);
         ESP_RETURN_ON_ERROR(i2c_wait_done(port_num, cmd_idx - 1, timeout_ms), TAG, "wait done failed");
         cmd_idx = 0;
         txdata += tx_len_tmp;
@@ -230,7 +238,7 @@ esp_err_t hal_i2c_write(i2c_port_t port_num, uint16_t addr, const uint8_t *txdat
 
     i2c_format_cmd(port_num, cmd_idx++, I2C_LL_CMD_STOP, ACK_VALUE, 0, NOT_CHECK_ACK_VALUE, 0);
     i2c_ll_update(dev);
-    i2c_ll_master_trans_start(dev);
+    i2c_ll_start_trans(dev);
     ESP_RETURN_ON_ERROR(i2c_wait_done(port_num, cmd_idx - 1, timeout_ms), TAG, "wait done failed");
     return ESP_OK;
 }
@@ -270,7 +278,7 @@ esp_err_t hal_i2c_read(i2c_port_t port_num, uint16_t addr, uint8_t *rxdata, uint
         }
 
         i2c_ll_update(dev);
-        i2c_ll_master_trans_start(dev);
+        i2c_ll_start_trans(dev);
         ESP_RETURN_ON_ERROR(i2c_wait_done(port_num, cmd_idx - 1, timeout_ms), TAG, "wait done failed");
         cmd_idx = 0;
         i2c_ll_read_rxfifo(dev, &rxdata[data_idx], 1);
@@ -309,7 +317,7 @@ esp_err_t hal_i2c_write_read(i2c_port_t port_num, uint16_t addr, const uint8_t *
         i2c_format_cmd(port_num, cmd_idx++, I2C_LL_CMD_END, ACK_VALUE, 0, NOT_CHECK_ACK_VALUE, 0);
         /* Initiate I2C transfer */
         i2c_ll_update(dev);
-        i2c_ll_master_trans_start(dev);
+        i2c_ll_start_trans(dev);
         ESP_RETURN_ON_ERROR(i2c_wait_done(port_num, cmd_idx - 1, timeout_ms), TAG, "wait done failed");
         cmd_idx = 0;
         txdata += tx_len_tmp;
@@ -341,7 +349,7 @@ esp_err_t hal_i2c_write_read(i2c_port_t port_num, uint16_t addr, const uint8_t *
         }
 
         i2c_ll_update(dev);
-        i2c_ll_master_trans_start(dev);
+        i2c_ll_start_trans(dev);
         ESP_RETURN_ON_ERROR(i2c_wait_done(port_num, cmd_idx - 1, timeout_ms), TAG, "wait done failed");
         i2c_ll_read_rxfifo(dev, &rxdata[data_idx], tmp_rx_length);
         cmd_idx = 0;

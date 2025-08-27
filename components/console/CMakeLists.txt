@@ -2,13 +2,17 @@ idf_build_get_property(target IDF_TARGET)
 
 set(srcs "commands.c"
          "esp_console_common.c"
+         "esp_console_repl_internal.c"
          "split_argv.c"
          "linenoise/linenoise.c")
+
+set(requires vfs)
 
 if(${target} STREQUAL "linux")
     list(APPEND srcs "esp_console_repl_linux.c")
 else()
     list(APPEND srcs "esp_console_repl_chip.c")
+    list(APPEND requires esp_vfs_console)
 endif()
 
 set(argtable_srcs argtable3/arg_cmd.c
@@ -31,7 +35,11 @@ idf_component_register(SRCS ${srcs}
                             ${argtable_srcs}
                     INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
                     PRIV_INCLUDE_DIRS private_include
-                    REQUIRES vfs esp_vfs_console
+                    REQUIRES "${requires}"
                     PRIV_REQUIRES esp_driver_uart
                                   esp_driver_usb_serial_jtag
                     )
+
+if(CONFIG_COMPILER_STATIC_ANALYZER AND CMAKE_C_COMPILER_ID STREQUAL "GNU") # TODO IDF-10085
+    target_compile_options(${COMPONENT_LIB} PRIVATE "-fno-analyzer")
+endif()

@@ -24,7 +24,6 @@
 
 #pragma once
 
-#include "sdkconfig.h"
 #include "esp_types.h"
 #include "soc/soc_caps.h"
 #include "hal/dma_types.h"
@@ -186,7 +185,7 @@ void spi_slave_hal_store_result(spi_slave_hal_context_t *hal);
  * Get the length of last transaction, in bits. Should be called after ``spi_slave_hal_store_result``.
  *
  * Note that if last transaction is longer than configured before, the return
- * value will be truncated to the configured length.
+ * value still the actual length.
  *
  * @param hal Context of the HAL layer.
  *
@@ -194,7 +193,6 @@ void spi_slave_hal_store_result(spi_slave_hal_context_t *hal);
  */
 uint32_t spi_slave_hal_get_rcv_bitlen(spi_slave_hal_context_t *hal);
 
-#if CONFIG_IDF_TARGET_ESP32
 /**
  * Check whether we need to reset the DMA according to the status of last transactions.
  *
@@ -206,7 +204,6 @@ uint32_t spi_slave_hal_get_rcv_bitlen(spi_slave_hal_context_t *hal);
  * @return true if reset is needed, else false.
  */
 bool spi_slave_hal_dma_need_reset(const spi_slave_hal_context_t *hal);
-#endif //#if CONFIG_IDF_TARGET_ESP32
 
 #endif  //#if SOC_GPSPI_SUPPORTED
 

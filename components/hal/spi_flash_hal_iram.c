@@ -1,11 +1,11 @@
 /*
- * SPDX-FileCopyrightText: 2015-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2015-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-#include "sdkconfig.h"
-
+#include "hal/config.h"
 #include "hal/spi_flash_hal.h"
+#include "soc/soc_caps.h"
 
 #if SOC_SPI_MEM_SUPPORT_AUTO_SUSPEND
 void spi_flash_hal_setup_auto_suspend_mode(spi_flash_host_inst_t *host);
@@ -15,7 +15,7 @@ void spi_flash_hal_setup_auto_resume_mode(spi_flash_host_inst_t *host);
 #define SPI_FLASH_TSHSL2_SAFE_VAL_NS (30)
 #endif //SOC_SPI_MEM_SUPPORT_AUTO_SUSPEND
 
-#ifndef CONFIG_SPI_FLASH_ROM_IMPL
+#if !HAL_CONFIG(SPI_FLASH_USE_ROM_API)
 
 #include "spi_flash_hal_common.inc"
 
@@ -88,7 +88,7 @@ esp_err_t spi_flash_hal_set_write_protect(spi_flash_host_inst_t *host, bool wp)
     return ESP_OK;
 }
 
-#else // defined CONFIG_SPI_FLASH_ROM_IMPL
+#else
 
 static inline spi_dev_t *get_spi_dev(spi_flash_host_inst_t *host)
 {
@@ -101,7 +101,7 @@ static inline int get_host_id(spi_flash_host_inst_t* host)
     return spi_flash_ll_hw_get_id(dev);
 }
 
-#endif // !CONFIG_SPI_FLASH_ROM_IMPL
+#endif // !HAL_CONFIG_SPI_FLASH_USE_ROM_API
 
 uint32_t spi_flash_hal_check_status(spi_flash_host_inst_t *host)
 {
@@ -115,7 +115,7 @@ uint32_t spi_flash_hal_check_status(spi_flash_host_inst_t *host)
     // Not clear if this is necessary, or only necessary if
     // chip->spi == SPI1. But probably doesn't hurt...
     if ((void*) dev == spi_flash_ll_get_hw(SPI1_HOST)) {
-#if CONFIG_IDF_TARGET_ESP32
+#if SOC_IS(ESP32)
         status &= spi_flash_ll_host_idle(&SPI0);
 #endif
     }
@@ -145,7 +145,8 @@ void spi_flash_hal_setup_auto_suspend_mode(spi_flash_host_inst_t *host)
 {
     spi_mem_dev_t *dev = (spi_mem_dev_t*)spi_flash_ll_get_hw(SPI1_HOST);
     spi_flash_hal_context_t* ctx = (spi_flash_hal_context_t*)host;
-    spimem_flash_ll_auto_wait_idle_init(dev, true);
+    bool pes_waiti_delay = ctx->auto_waiti_pes ? false : true;
+    spimem_flash_ll_auto_wait_idle_init(dev, true, pes_waiti_delay);
     if (ctx->freq_mhz == 120) {
         spimem_flash_ll_set_wait_idle_dummy_phase(dev, ctx->extra_dummy);
     }
@@ -153,12 +154,18 @@ void spi_flash_hal_setup_auto_suspend_mode(spi_flash_host_inst_t *host)
     // tsus = ceil(ctx->tsus_val * ctx->freq_mhz / spimem_flash_ll_get_tsus_unit_in_cycles);
     uint32_t tsus = (ctx->tsus_val * ctx->freq_mhz / spimem_flash_ll_get_tsus_unit_in_cycles(dev)) + ((ctx->tsus_val * ctx->freq_mhz) % spimem_flash_ll_get_tsus_unit_in_cycles(dev) != 0);
     spimem_flash_ll_set_sus_delay(dev, tsus);
+#if SOC_SPI_MEM_SUPPORT_TSUS_TRES_SEPERATE_CTR
+    // trs = ceil(ctx->trs_val * ctx->freq_mhz / spimem_flash_ll_get_tsus_unit_in_cycles);
+    uint32_t trs = (ctx->trs_val * ctx->freq_mhz / spimem_flash_ll_get_tsus_unit_in_cycles(dev)) + ((ctx->trs_val * ctx->freq_mhz) % spimem_flash_ll_get_tsus_unit_in_cycles(dev) != 0);
+    spimem_flash_ll_set_rs_delay(dev, trs);
+#endif // SOC_SPI_MEM_SUPPORT_TSUS_TRES_SEPERATE_CTR
     // tshsl2 = ceil(SPI_FLASH_TSHSL2_SAFE_VAL_NS * spimem_flash_ll_get_source_freq_mhz() * 0.001);
     uint32_t tshsl2 = (SPI_FLASH_TSHSL2_SAFE_VAL_NS * spimem_flash_ll_get_source_freq_mhz() / 1000) + ((SPI_FLASH_TSHSL2_SAFE_VAL_NS * spimem_flash_ll_get_source_freq_mhz()) % 1000 != 0);
     spimem_flash_set_cs_hold_delay(dev, tshsl2);
     spimem_flash_ll_sus_set_spi0_lock_trans(dev, SPIMEM_FLASH_LL_SPI0_MAX_LOCK_VAL_MSPI_TICKS);
 #if SOC_SPI_MEM_SUPPORT_CHECK_SUS
     spimem_flash_ll_sus_check_sus_setup(dev, true);
+    spimem_flash_ll_res_check_sus_setup(dev, true);
 #endif
 }
 
@@ -166,18 +173,16 @@ void spi_flash_hal_setup_auto_resume_mode(spi_flash_host_inst_t *host)
 {
     spi_mem_dev_t *dev = (spi_mem_dev_t*)spi_flash_ll_get_hw(SPI1_HOST);
     spimem_flash_ll_auto_resume_init(dev, true);
-#if SOC_SPI_MEM_SUPPORT_CHECK_SUS
-    spimem_flash_ll_res_check_sus_setup(dev, true);
-#endif
 }
 
 void spi_flash_hal_disable_auto_suspend_mode(spi_flash_host_inst_t *host)
 {
     spi_mem_dev_t *dev = (spi_mem_dev_t *)spi_flash_ll_get_hw(SPI1_HOST);
-    spimem_flash_ll_auto_wait_idle_init(dev, false);
+    spimem_flash_ll_auto_wait_idle_init(dev, false, false);
     spimem_flash_ll_auto_suspend_init(dev, false);
 #if SOC_SPI_MEM_SUPPORT_CHECK_SUS
     spimem_flash_ll_sus_check_sus_setup(dev, false);
+    spimem_flash_ll_res_check_sus_setup(dev, false);
 #endif
 }
 
@@ -185,9 +190,6 @@ void spi_flash_hal_disable_auto_resume_mode(spi_flash_host_inst_t *host)
 {
     spi_mem_dev_t *dev = (spi_mem_dev_t*)spi_flash_ll_get_hw(SPI1_HOST);
     spimem_flash_ll_auto_resume_init(dev, false);
-#if SOC_SPI_MEM_SUPPORT_CHECK_SUS
-    spimem_flash_ll_res_check_sus_setup(dev, false);
-#endif
 }
 #endif // SOC_SPI_MEM_SUPPORT_AUTO_SUSPEND
 
@@ -195,6 +197,7 @@ void spi_flash_hal_resume(spi_flash_host_inst_t *host)
 {
 #if SOC_SPI_MEM_SUPPORT_SW_SUSPEND
     spimem_flash_ll_resume((spi_mem_dev_t*)(((spi_flash_hal_context_t *)host)->spi));
+    host->driver->poll_cmd_done(host);
 #else
     abort();
 #endif
@@ -204,6 +207,7 @@ void spi_flash_hal_suspend(spi_flash_host_inst_t *host)
 {
 #if SOC_SPI_MEM_SUPPORT_SW_SUSPEND
     spimem_flash_ll_suspend((spi_mem_dev_t *)(((spi_flash_hal_context_t *)host)->spi));
+    host->driver->poll_cmd_done(host);
 #else
     abort();
 #endif

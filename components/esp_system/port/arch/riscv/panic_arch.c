@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2020-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2020-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -14,7 +14,7 @@
 #include "esp_private/cache_err_int.h"
 #include "soc/timer_periph.h"
 
-#if CONFIG_ESP_SYSTEM_MEMPROT_FEATURE
+#if CONFIG_ESP_SYSTEM_MEMPROT && CONFIG_ESP_SYSTEM_MEMPROT_PMS
 #include "esp_private/esp_memprot_internal.h"
 #include "esp_memprot.h"
 #endif
@@ -22,6 +22,10 @@
 #if CONFIG_ESP_SYSTEM_USE_EH_FRAME
 #include "esp_private/eh_frame_parser.h"
 #include "esp_private/cache_utils.h"
+#endif
+
+#if CONFIG_ESP_SYSTEM_USE_FRAME_POINTER
+#include "esp_private/fp_unwind.h"
 #endif
 
 #if CONFIG_ESP_SYSTEM_HW_STACK_GUARD
@@ -39,15 +43,15 @@
  */
 static inline void print_cache_err_details(const void *frame)
 {
-#if !CONFIG_IDF_TARGET_ESP32P4
-    const char* cache_err_msg = esp_cache_err_panic_string();
-    if (cache_err_msg) {
-        panic_print_str(cache_err_msg);
+    esp_cache_err_info_t err_info = {};
+    esp_cache_err_get_panic_info(&err_info);
+
+    if (err_info.err_str) {
+        panic_print_str(err_info.err_str);
     } else {
         panic_print_str("Cache error active, but failed to find a corresponding error message");
     }
     panic_print_str("\r\n");
-#endif
 }
 
 #if CONFIG_ESP_SYSTEM_HW_STACK_GUARD
@@ -84,7 +88,7 @@ static inline void print_assist_debug_details(const void *frame)
  * Function called when a memory protection error occurs (PMS). It prints details such as the
  * explanation of why the panic occurred.
  */
-#if CONFIG_ESP_SYSTEM_MEMPROT_FEATURE
+#if CONFIG_ESP_SYSTEM_MEMPROT && CONFIG_ESP_SYSTEM_MEMPROT_PMS
 
 static esp_memp_intr_source_t s_memp_intr = {MEMPROT_TYPE_INVALID, -1};
 
@@ -147,7 +151,7 @@ static inline void print_memprot_err_details(const void *frame __attribute__((un
 
     panic_print_str("\r\n");
 }
-#endif
+#endif //CONFIG_ESP_SYSTEM_MEMPROT && CONFIG_ESP_SYSTEM_MEMPROT_PMS
 
 static void panic_print_register_array(const char* names[], const uint32_t* regs, int size)
 {
@@ -195,7 +199,7 @@ bool panic_soc_check_pseudo_cause(void *f, panic_info_t *info)
     /* Cache errors when reading instructions will result in an illegal instructions,
        before any cache error interrupts trigger. We override the exception cause if
        any cache errors are active to more accurately report the actual reason */
-    if (esp_cache_err_has_active_err() && (frame->mcause == MCAUSE_ILLEGAL_INSTRUCTION)) {
+    if (esp_cache_err_has_active_err() && ((frame->mcause == MCAUSE_ILLEGAL_INSTRUCTION) || (frame->mcause == MCAUSE_ILLIGAL_INSTRUCTION_ACCESS) || (frame->mcause == MCAUSE_LOAD_ACCESS_FAULT))) {
         pseudo_cause = true;
         frame->mcause = ETS_CACHEERR_INUM;
     }
@@ -252,13 +256,13 @@ void panic_soc_fill_info(void *f, panic_info_t *info)
         info->details = print_assist_debug_details;
     }
 #endif
-#if CONFIG_ESP_SYSTEM_MEMPROT_FEATURE
+#if CONFIG_ESP_SYSTEM_MEMPROT && CONFIG_ESP_SYSTEM_MEMPROT_PMS
     else if (frame->mcause == ETS_MEMPROT_ERR_INUM) {
         info->reason = "Memory protection fault";
         info->details = print_memprot_err_details;
         info->core = esp_mprot_get_active_intr(&s_memp_intr) == ESP_OK ? s_memp_intr.core : -1;
     }
-#endif
+#endif //CONFIG_ESP_SYSTEM_MEMPROT && CONFIG_ESP_SYSTEM_MEMPROT_PMS
 }
 
 void panic_arch_fill_info(void *frame, panic_info_t *info)
@@ -305,6 +309,7 @@ void panic_arch_fill_info(void *frame, panic_info_t *info)
     info->addr = (void *) regs->mepc;
 }
 
+#if !CONFIG_ESP_SYSTEM_USE_FRAME_POINTER
 static void panic_print_basic_backtrace(const void *frame, int core)
 {
     // Basic backtrace
@@ -322,6 +327,7 @@ static void panic_print_basic_backtrace(const void *frame, int core)
         }
     }
 }
+#endif
 
 void panic_print_backtrace(const void *frame, int core)
 {
@@ -333,6 +339,8 @@ void panic_print_backtrace(const void *frame, int core)
     } else {
         esp_eh_frame_print_backtrace(frame);
     }
+#elif CONFIG_ESP_SYSTEM_USE_FRAME_POINTER
+    esp_fp_print_backtrace(frame);
 #else
     panic_print_basic_backtrace(frame, core);
 #endif
@@ -351,4 +359,18 @@ uint32_t panic_get_cause(const void *f)
 void panic_set_address(void *f, uint32_t addr)
 {
     ((RvExcFrame *)f)->mepc = addr;
+}
+
+void panic_prepare_frame_from_ctx(void* frame)
+{
+    /* Cleanup the frame, status registers are not saved during context switches, so these will contain garbage
+       values from the stack.
+    */
+    ((RvExcFrame *)frame)->mstatus = RV_READ_CSR(mstatus);
+    ((RvExcFrame *)frame)->mtvec = RV_READ_CSR(mtvec);
+
+    ((RvExcFrame *)frame)->mcause = MCAUSE_INVALID_VALUE;
+    ((RvExcFrame *)frame)->mtval = MCAUSE_INVALID_VALUE;
+
+    ((RvExcFrame *)frame)->mhartid = RV_READ_CSR(mhartid);
 }

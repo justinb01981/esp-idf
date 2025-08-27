@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2021-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2021-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0 OR MIT
  */
@@ -50,14 +50,19 @@ static uint8_t *esp_apptrace_riscv_down_buffer_get(esp_apptrace_riscv_data_t *hw
 static esp_err_t esp_apptrace_riscv_down_buffer_put(esp_apptrace_riscv_data_t *hw_data, uint8_t *ptr, esp_apptrace_tmo_t *tmo);
 static bool esp_apptrace_riscv_host_is_connected(esp_apptrace_riscv_data_t *hw_data);
 static esp_err_t esp_apptrace_riscv_buffer_swap_start(uint32_t curr_block_id);
-static esp_err_t esp_apptrace_riscv_buffer_swap(uint32_t new_block_id);
+static esp_err_t esp_apptrace_riscv_buffer_swap(uint32_t new_block_id, uint32_t prev_block_len);
 static esp_err_t esp_apptrace_riscv_buffer_swap_end(uint32_t new_block_id, uint32_t prev_block_len);
 static bool esp_apptrace_riscv_host_data_pending(void);
 
-
 const static char *TAG = "esp_apptrace";
 
-static esp_apptrace_riscv_ctrl_block_t s_tracing_ctrl[CONFIG_FREERTOS_NUMBER_OF_CORES];
+#if SOC_CACHE_INTERNAL_MEM_VIA_L1CACHE
+#define APPTRACE_DRAM_ATTR TCM_DRAM_ATTR
+#else
+#define APPTRACE_DRAM_ATTR
+#endif
+
+static APPTRACE_DRAM_ATTR esp_apptrace_riscv_ctrl_block_t s_tracing_ctrl[CONFIG_FREERTOS_NUMBER_OF_CORES];
 
 esp_apptrace_hw_t *esp_apptrace_jtag_hw_get(void **data)
 {
@@ -79,7 +84,7 @@ esp_apptrace_hw_t *esp_apptrace_jtag_hw_get(void **data)
         .put_up_buffer = (esp_err_t (*)(void *, uint8_t *, esp_apptrace_tmo_t *))esp_apptrace_riscv_up_buffer_put,
         .flush_up_buffer_nolock = (esp_err_t (*)(void *, uint32_t, esp_apptrace_tmo_t *))esp_apptrace_riscv_flush_nolock,
         .flush_up_buffer = (esp_err_t (*)(void *, esp_apptrace_tmo_t *))esp_apptrace_riscv_flush,
-        .down_buffer_config = (void (*)(void *, uint8_t *, uint32_t ))esp_apptrace_riscv_down_buffer_config,
+        .down_buffer_config = (void (*)(void *, uint8_t *, uint32_t))esp_apptrace_riscv_down_buffer_config,
         .get_down_buffer = (uint8_t *(*)(void *, uint32_t *, esp_apptrace_tmo_t *))esp_apptrace_riscv_down_buffer_get,
         .put_down_buffer = (esp_err_t (*)(void *, uint8_t *, esp_apptrace_tmo_t *))esp_apptrace_riscv_down_buffer_put,
         .host_is_connected = (bool (*)(void *))esp_apptrace_riscv_host_is_connected,
@@ -92,7 +97,7 @@ esp_apptrace_hw_t *esp_apptrace_jtag_hw_get(void **data)
 }
 
 /* Advertises apptrace control block address to host.
-   This function can be overriden with custom implementation,
+   This function can be overridden with custom implementation,
    e.g. OpenOCD flasher stub use own implementation of it. */
 __attribute__((weak)) int esp_apptrace_advertise_ctrl_block(void *ctrl_block_addr)
 {
@@ -103,7 +108,7 @@ __attribute__((weak)) int esp_apptrace_advertise_ctrl_block(void *ctrl_block_add
 }
 
 /* Returns up buffers config.
-   This function can be overriden with custom implementation,
+   This function can be overridden with custom implementation,
    e.g. OpenOCD flasher stub use own implementation of it. */
 __attribute__((weak)) void esp_apptrace_get_up_buffers(esp_apptrace_mem_block_t mem_blocks_cfg[2])
 {
@@ -160,12 +165,12 @@ static esp_err_t esp_apptrace_riscv_init(esp_apptrace_riscv_data_t *hw_data)
     s_tracing_ctrl[core_id].mem_blocks = hw_data->membufs.blocks;
     for (int i = 0; i < 2; i++) {
         ESP_APPTRACE_LOGD("Mem buf[%d] %" PRIu32 " bytes @ %p (%p/%p)", i,
-            s_tracing_ctrl[core_id].mem_blocks[i].sz, s_tracing_ctrl[core_id].mem_blocks[i].start,
-            &(s_tracing_ctrl[core_id].mem_blocks[i].start), &(s_tracing_ctrl[core_id].mem_blocks[i].sz));
+                          s_tracing_ctrl[core_id].mem_blocks[i].sz, s_tracing_ctrl[core_id].mem_blocks[i].start,
+                          &(s_tracing_ctrl[core_id].mem_blocks[i].start), &(s_tracing_ctrl[core_id].mem_blocks[i].sz));
     }
     // notify host about control block address
     int res = esp_apptrace_advertise_ctrl_block(&s_tracing_ctrl[core_id]);
-    assert(res == 0 && "Falied to send config to host!");
+    assert(res == 0 && "Failed to send config to host!");
 
     return ESP_OK;
 }
@@ -308,7 +313,7 @@ static __attribute__((noinline)) void esp_apptrace_riscv_buffer_swap_unlock(void
     s_tracing_ctrl[esp_cpu_get_core_id()].stat = 0;
     // TODO: currently host sets breakpoint, use break instruction to stop;
     // it will allow to use ESP_APPTRACE_RISCV_STAT_REG for other purposes
-    asm volatile (
+    asm volatile(
         "    .global     __esp_apptrace_riscv_updated\n"
         "__esp_apptrace_riscv_updated:\n"); // host will set bp here to resolve collision at streaming start
 }
@@ -326,7 +331,7 @@ static esp_err_t esp_apptrace_riscv_buffer_swap_start(uint32_t curr_block_id)
         uint32_t host_to_read = ESP_APPTRACE_RISCV_BLOCK_LEN_GET(ctrl_reg);
         if (host_to_read != 0 || acked_block != (curr_block_id & ESP_APPTRACE_RISCV_BLOCK_ID_MSK)) {
             ESP_APPTRACE_LOGD("[%d]: Can not switch %" PRIx32 " %" PRIu32 " %" PRIx32 " %" PRIx32 "/%" PRIx32, esp_cpu_get_core_id(), ctrl_reg, host_to_read, acked_block,
-                curr_block_id & ESP_APPTRACE_RISCV_BLOCK_ID_MSK, curr_block_id);
+                              curr_block_id & ESP_APPTRACE_RISCV_BLOCK_ID_MSK, curr_block_id);
             res = ESP_ERR_NO_MEM;
             goto _on_err;
         }
@@ -342,12 +347,12 @@ static esp_err_t esp_apptrace_riscv_buffer_swap_end(uint32_t new_block_id, uint3
     uint32_t ctrl_reg = s_tracing_ctrl[esp_cpu_get_core_id()].ctrl;
     uint32_t host_connected = ESP_APPTRACE_RISCV_HOST_CONNECT & ctrl_reg;
     s_tracing_ctrl[esp_cpu_get_core_id()].ctrl = ESP_APPTRACE_RISCV_BLOCK_ID(new_block_id) |
-              host_connected | ESP_APPTRACE_RISCV_BLOCK_LEN(prev_block_len);
+                                                 host_connected | ESP_APPTRACE_RISCV_BLOCK_LEN(prev_block_len);
     esp_apptrace_riscv_buffer_swap_unlock();
     return ESP_OK;
 }
 
-static esp_err_t esp_apptrace_riscv_buffer_swap(uint32_t new_block_id)
+static esp_err_t esp_apptrace_riscv_buffer_swap(uint32_t new_block_id, uint32_t prev_block_len)
 {
     /* do nothing */
     return ESP_OK;

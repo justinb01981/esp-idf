@@ -21,6 +21,8 @@
 #include "esp_check.h"
 #include "freertos/FreeRTOS.h"
 #include "esp_heap_caps.h"
+#include "esp_compiler.h"
+
 static const char *TAG = "lcd_panel.io.i2c";
 
 #define BYTESHIFT(VAR, IDX) (((VAR) >> ((IDX) * 8)) & 0xFF)
@@ -56,6 +58,8 @@ esp_err_t esp_lcd_new_panel_io_i2c_v2(i2c_master_bus_handle_t bus, const esp_lcd
     i2c_master_dev_handle_t i2c_handle = NULL;
     ESP_GOTO_ON_FALSE(io_config && ret_io, ESP_ERR_INVALID_ARG, err, TAG, "invalid argument");
     ESP_GOTO_ON_FALSE(io_config->control_phase_bytes * 8 > io_config->dc_bit_offset, ESP_ERR_INVALID_ARG, err, TAG, "D/C bit exceeds control bytes");
+    // leak detection of i2c_panel_io because saving i2c_panel_io->base address
+    ESP_COMPILER_DIAGNOSTIC_PUSH_IGNORE("-Wanalyzer-malloc-leak")
     i2c_panel_io = calloc(1, sizeof(lcd_panel_io_i2c_t));
     ESP_GOTO_ON_FALSE(i2c_panel_io, ESP_ERR_NO_MEM, err, TAG, "no mem for i2c panel io");
 
@@ -88,6 +92,7 @@ err:
         free(i2c_panel_io);
     }
     return ret;
+    ESP_COMPILER_DIAGNOSTIC_POP("-Wanalyzer-malloc-leak")
 }
 
 static esp_err_t panel_io_i2c_del(esp_lcd_panel_io_t *io)
@@ -121,10 +126,10 @@ static esp_err_t panel_io_i2c_rx_buffer(esp_lcd_panel_io_t *io, int lcd_cmd, voi
     lcd_panel_io_i2c_t *i2c_panel_io = __containerof(io, lcd_panel_io_i2c_t, base);
     bool send_param = (lcd_cmd >= 0);
 
-    int write_size = 0;
-    uint8_t write_buffer[CONTROL_PHASE_LENGTH + CMD_LENGTH] = {0};
-
     if (send_param) {
+        int write_size = 0;
+        uint8_t write_buffer[CONTROL_PHASE_LENGTH + CMD_LENGTH] = {0};
+
         if (i2c_panel_io->control_phase_enabled) {
             write_buffer[0] = i2c_panel_io->control_phase_cmd;
             write_size += 1;
@@ -136,9 +141,12 @@ static esp_err_t panel_io_i2c_rx_buffer(esp_lcd_panel_io_t *io, int lcd_cmd, voi
             memcpy(write_buffer + write_size, cmds + (sizeof(cmds) - cmds_size), cmds_size);
             write_size += cmds_size;
         }
+
+        ESP_GOTO_ON_ERROR(i2c_master_transmit_receive(i2c_panel_io->i2c_handle, write_buffer, write_size, buffer, buffer_size, -1), err, TAG, "i2c transaction failed");
+    } else {
+        ESP_GOTO_ON_ERROR(i2c_master_receive(i2c_panel_io->i2c_handle, buffer, buffer_size, -1), err, TAG, "i2c transaction failed");
     }
 
-    ESP_GOTO_ON_ERROR(i2c_master_transmit_receive(i2c_panel_io->i2c_handle, write_buffer, write_size, buffer, buffer_size, -1), err, TAG, "i2c transaction failed");
     return ESP_OK;
 err:
     return ret;
@@ -160,8 +168,8 @@ static esp_err_t panel_io_i2c_tx_buffer(esp_lcd_panel_io_t *io, int lcd_cmd, con
     uint8_t *cmd_buffer = NULL;
     size_t cmd_buffer_size = 0;
     // some displays don't want any additional commands on data transfers
+    uint8_t cmds[4] = {BYTESHIFT(lcd_cmd, 3), BYTESHIFT(lcd_cmd, 2), BYTESHIFT(lcd_cmd, 1), BYTESHIFT(lcd_cmd, 0)};
     if (send_param) {
-        uint8_t cmds[4] = {BYTESHIFT(lcd_cmd, 3), BYTESHIFT(lcd_cmd, 2), BYTESHIFT(lcd_cmd, 1), BYTESHIFT(lcd_cmd, 0)};
         size_t cmds_size = i2c_panel_io->lcd_cmd_bits / 8;
         if (cmds_size > 0 && cmds_size <= sizeof(cmds)) {
             cmd_buffer = cmds + (sizeof(cmds) - cmds_size);

@@ -4,9 +4,16 @@ if(${target} STREQUAL "linux")
     return() # This component is not supported by the POSIX/Linux simulator
 endif()
 
-idf_component_register(SRCS "nvs_sec_provider.c"
+if(BOOTLOADER_BUILD)
+    set(srcs "nvs_bootloader_sec_provider.c")
+else()
+    set(srcs "nvs_sec_provider.c")
+endif()
+
+idf_component_register(SRCS ${srcs}
                        INCLUDE_DIRS include
-                       PRIV_REQUIRES bootloader_support efuse esp_partition nvs_flash)
+                       PRIV_REQUIRES bootloader_support efuse esp_partition nvs_flash
+                       REQUIRES esp_security)
 
 # NOTE: In a case where only the default NVS partition is to be encrypted
 # and no custom NVS partitions exist, `nvs_flash_init` is the only API that

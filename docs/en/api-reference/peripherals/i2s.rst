@@ -3,16 +3,23 @@ Inter-IC Sound (I2S)
 
 :link_to_translation:`zh_CN:[中文]`
 
-{IDF_TARGET_I2S_NUM:default="one", esp32="two", esp32s3="two"}
+{IDF_TARGET_I2S_NUM:default="one", esp32="two", esp32s3="two", esp32p4="three"}
+{IDF_TARGET_I2S_STD_TDM:default="standard and TDM", esp32="standard", esp32s2="standard"}
 
 Introduction
 ------------
 
 I2S (Inter-IC Sound) is a synchronous serial communication protocol usually used for transmitting audio data between two digital audio devices.
 
+.. only:: SOC_LP_I2S_SUPPORTED
+
+    .. note::
+
+        For LP I2S documentation, see :doc:`Low Power Inter-IC Sound <./lp_i2s>`.
+
 {IDF_TARGET_NAME} contains {IDF_TARGET_I2S_NUM} I2S peripheral(s). These peripherals can be configured to input and output sample data via the I2S driver.
 
-An I2S bus that communicates in standard or TDM mode consists of the following lines:
+An I2S bus that communicates in {IDF_TARGET_I2S_STD_TDM} mode consists of the following lines:
 
 - **MCLK:** Master clock line. It is an optional signal depending on the slave side, mainly used for offering a reference clock to the I2S slave device.
 - **BCLK:** Bit clock line. The bit clock for data line.
@@ -51,10 +58,12 @@ I2S File Structure
 
 **Public headers that need to be included in the I2S application are as follows:**
 
-- ``i2s.h``: The header file that provides legacy I2S APIs (for apps using legacy driver).
-- ``i2s_std.h``: The header file that provides standard communication mode specific APIs (for apps using new driver with standard mode).
-- ``i2s_pdm.h``: The header file that provides PDM communication mode specific APIs (for apps using new driver with PDM mode).
-- ``i2s_tdm.h``: The header file that provides TDM communication mode specific APIs (for apps using new driver with TDM mode).
+.. list::
+
+    - ``i2s.h``: The header file that provides legacy I2S APIs (for apps using legacy driver).
+    - ``i2s_std.h``: The header file that provides standard communication mode specific APIs (for apps using new driver with standard mode).
+    :SOC_I2S_SUPPORTS_PDM: - ``i2s_pdm.h``: The header file that provides PDM communication mode specific APIs (for apps using new driver with PDM mode).
+    :SOC_I2S_SUPPORTS_TDM: - ``i2s_tdm.h``: The header file that provides TDM communication mode specific APIs (for apps using new driver with TDM mode).
 
 .. note::
 
@@ -72,23 +81,14 @@ I2S Clock
 Clock Source
 ^^^^^^^^^^^^
 
-- :cpp:enumerator:`i2s_clock_src_t::I2S_CLK_SRC_DEFAULT`: Default PLL clock.
+.. list::
 
-.. only:: SOC_I2S_SUPPORTS_PLL_F160M
-
-    - :cpp:enumerator:`i2s_clock_src_t::I2S_CLK_SRC_PLL_160M`: 160 MHz PLL clock.
-
-.. only:: SOC_I2S_SUPPORTS_PLL_F96M
-
-    - :cpp:enumerator:`i2s_clock_src_t::I2S_CLK_SRC_PLL_96M`: 96 MHz PLL clock.
-
-.. only:: SOC_I2S_SUPPORTS_PLL_F240M
-
-    - :cpp:enumerator:`i2s_clock_src_t::I2S_CLK_SRC_PLL_240M`: 240 MHz PLL clock.
-
-.. only:: SOC_I2S_SUPPORTS_APLL
-
-    - :cpp:enumerator:`i2s_clock_src_t::I2S_CLK_SRC_APLL`: Audio PLL clock, which is more precise than ``I2S_CLK_SRC_PLL_160M`` in high sample rate applications. Its frequency is configurable according to the sample rate. However, if APLL has been occupied by EMAC or other channels, the APLL frequency cannot be changed, and the driver will try to work under this APLL frequency. If this frequency cannot meet the requirements of I2S, the clock configuration will fail.
+    - :cpp:enumerator:`i2s_clock_src_t::I2S_CLK_SRC_DEFAULT`: Default PLL clock.
+    :SOC_I2S_SUPPORTS_PLL_F160M: - :cpp:enumerator:`i2s_clock_src_t::I2S_CLK_SRC_PLL_160M`: 160 MHz PLL clock.
+    :SOC_I2S_SUPPORTS_PLL_F120M: - :cpp:enumerator:`i2s_clock_src_t::I2S_CLK_SRC_PLL_120M`: 120 MHz PLL clock.
+    :SOC_I2S_SUPPORTS_PLL_F96M: - :cpp:enumerator:`i2s_clock_src_t::I2S_CLK_SRC_PLL_96M`: 96 MHz PLL clock.
+    :SOC_I2S_SUPPORTS_PLL_F240M: - :cpp:enumerator:`i2s_clock_src_t::I2S_CLK_SRC_PLL_240M`: 240 MHz PLL clock.
+    :SOC_I2S_SUPPORTS_APLL: - :cpp:enumerator:`i2s_clock_src_t::I2S_CLK_SRC_APLL`: Audio PLL clock, which is more precise than ``I2S_CLK_SRC_PLL_160M`` in high sample rate applications. Its frequency is configurable according to the sample rate. However, if APLL has been occupied by EMAC or other channels, the APLL frequency cannot be changed, and the driver will try to work under this APLL frequency. If this frequency cannot meet the requirements of I2S, the clock configuration will fail.
 
 Clock Terminology
 ^^^^^^^^^^^^^^^^^
@@ -111,18 +111,23 @@ I2S Communication Mode
 Overview of All Modes
 ^^^^^^^^^^^^^^^^^^^^^
 
-=========  ========  ========  ========  ========  ========  ==========
- Target    Standard   PDM TX    PDM RX     TDM     ADC/DAC   LCD/Camera
-=========  ========  ========  ========  ========  ========  ==========
-ESP32      I2S 0/1    I2S 0     I2S 0      none     I2S 0      I2S 0
-ESP32-S2    I2S 0     none      none       none     none       I2S 0
-ESP32-C3    I2S 0     I2S 0     none      I2S 0     none       none
-ESP32-C6    I2S 0     I2S 0     none      I2S 0     none       none
-ESP32-S3   I2S 0/1    I2S 0     I2S 0    I2S 0/1    none       none
-ESP32-H2    I2S 0     I2S 0     none      I2S 0     none       none
-ESP32-P4   I2S 0~2    I2S 0     I2S 0    I2S 0~2    none       none
-ESP32-C5    I2S 0     I2S 0     none      I2S 0     none       none
-=========  ========  ========  ========  ========  ========  ==========
+=========  ========  ============  ============  =========  ========  ========  ==========
+ Target    Standard   PCM-to-PDM    PDM-to-PCM      PDM       TDM     ADC/DAC   LCD/Camera
+=========  ========  ============  ============  =========  ========  ========  ==========
+ESP32      I2S 0/1      I2S 0          I2S 0      I2S 0/1     none      I2S 0      I2S 0
+ESP32-S2    I2S 0       none           none        none       none      none       I2S 0
+ESP32-C3    I2S 0       I2S 0          none        I2S 0      I2S 0     none       none
+ESP32-C6    I2S 0       I2S 0          none        I2S 0      I2S 0     none       none
+ESP32-S3   I2S 0/1      I2S 0          I2S 0      I2S 0/1    I2S 0/1    none       none
+ESP32-H2    I2S 0       I2S 0          none        I2S 0      I2S 0     none       none
+ESP32-P4   I2S 0~2      I2S 0          I2S 0      I2S 0~2    I2S 0~2    none       none
+ESP32-C5    I2S 0       I2S 0          none        I2S 0      I2S 0     none       none
+ESP32-C61   I2S 0       I2S 0          none        I2S 0      I2S 0     none       none
+=========  ========  ============  ============  =========  ========  ========  ==========
+
+.. note::
+
+    If you are using PDM mode, note that not all I2S ports support conversion between raw PDM and PCM formats, because these ports do not have PCM-to-PDM data format converter in TX direction, or PDM-to-PCM data format converter in RX direction. Ports without the converter can only read/write raw PDM data. To read/write PCM format data on these ports, you may need an extra software filter for PDM-to-PCM conversion.
 
 Standard Mode
 ^^^^^^^^^^^^^
@@ -142,28 +147,75 @@ In standard mode, there are always two sound channels, i.e., the left and right 
 .. wavedrom:: /../_static/diagrams/i2s/std_pcm.json
 
 
-.. only:: SOC_I2S_SUPPORTS_PDM_TX
+.. only:: SOC_I2S_SUPPORTS_PDM
 
-    PDM Mode (TX)
-    ^^^^^^^^^^^^^
+    PDM Mode
+    ^^^^^^^^
 
-    PDM (Pulse-density Modulation) mode for the TX channel can convert PCM data into PDM format which always has left and right slots. PDM TX is only supported on I2S0 and it only supports 16-bit width sample data. It needs at least a CLK pin for clock signal and a DOUT pin for data signal (i.e., the WS and SD signal in the following figure; the BCK signal is an internal bit sampling clock, which is not needed between PDM devices). This mode allows users to configure the up-sampling parameters :cpp:member:`i2s_pdm_tx_clk_config_t::up_sample_fp` and :cpp:member:`i2s_pdm_tx_clk_config_t::up_sample_fs`. The up-sampling rate can be calculated by ``up_sample_rate = i2s_pdm_tx_clk_config_t::up_sample_fp / i2s_pdm_tx_clk_config_t::up_sample_fs``. There are two up-sampling modes in PDM TX:
-
-    - **Fixed Clock Frequency**: In this mode, the up-sampling rate changes according to the sample rate. Setting ``fp = 960`` and ``fs = sample_rate / 100``, then the clock frequency (Fpdm) on CLK pin will be fixed to ``128 * 48 KHz = 6.144 MHz``. Note that this frequency is not equal to the sample rate (Fpcm).
-    - **Fixed Up-sampling Rate**: In this mode, the up-sampling rate is fixed to 2. Setting ``fp = 960`` and ``fs = 480``, then the clock frequency (Fpdm) on CLK pin will be ``128 * sample_rate``.
+    PDM (Pulse-density Modulation) digitalizes the analog signal by oversampling with 1-bit resolution. It represents the analog signal by the pulse density, the higher the pulse density, the larger the corresponding analog quantity. The PDM timing diagram is shown as follow:
 
     .. wavedrom:: /../_static/diagrams/i2s/pdm.json
 
+    The PDM format data can be transferred into PCM format by the following steps:
 
-.. only:: SOC_I2S_SUPPORTS_PDM_RX
+    1. Low-pass filtering: To restore the analog wave. It is usually a FIR filter;
+    2. Down-sampling: To reduce the PDM sample rate to the expected PCM sample rate. Normally we decimate one sample every specific number of samples;
+    3. High-pass filtering: To remove the DC offset of the analog wave;
+    4. Amplifying: To adjust the final gain of the converted PCM format data. It can be done by simply amplifying a coefficient.
 
-    PDM Mode (RX)
-    ^^^^^^^^^^^^^
+    For I2S ports with a ``PCM-to-PDM`` converter, the hardware can convert PCM format data to PDM format when sending the data.
+    For I2S ports with a ``PDM-to-PCM`` converter, the hardware can convert PDM format data to PCM format when receiving the data.
+    If the hardware does not have the converters above, then the PDM mode can only read/write raw PDM format data. You need to realize a software filter to convert the raw PDM data into PCM format.
 
-    PDM (Pulse-density Modulation) mode for RX channel can receive PDM-format data and convert the data into PCM format. PDM RX is only supported on I2S0, and it only supports 16-bit width sample data. PDM RX needs at least a CLK pin for clock signal and a DIN pin for data signal. This mode allows users to configure the down-sampling parameter :cpp:member:`i2s_pdm_rx_clk_config_t::dn_sample_mode`. There are two down-sampling modes in PDM RX:
+    .. note::
 
-    - :cpp:enumerator:`i2s_pdm_dsr_t::I2S_PDM_DSR_8S`: In this mode, the clock frequency (Fpdm) on the WS pin is ``sample_rate (Fpcm) * 64``.
-    - :cpp:enumerator:`i2s_pdm_dsr_t::I2S_PDM_DSR_16S`: In this mode, the clock frequency (Fpdm) on the WS pin is ``sample_rate (Fpcm) * 128``.
+        In PDM mode, regardless of whether you are using raw PDM or PCM format, the data unit width is always 16 bits. For example, if you are sending data in raw PDM format, the data in the buffer is supposed to be arranged as follows: CH0 0x1234, CH1 0x5678, CH0 0x9abc, CH1 0xdef0. Same in the RX direction.
+
+    .. only:: SOC_I2S_SUPPORTS_PDM_TX
+
+        PDM TX Mode in Raw PDM Format
+        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+        To use the PDM TX mode in raw PDM format, set :cpp:member:`i2s_pdm_tx_slot_config_t::data_fmt` to :cpp:enumerator:`i2s_pdm_data_fmt_t::I2S_PDM_DATA_FMT_RAW`. Be cautious when setting :cpp:member:`i2s_pdm_tx_clk_config_t::sample_rate_hz`, as the PDM sample rate is normally in the MHz range, typically between 1.024 MHz and 6.144 MHz. Adjust it according to your needs.
+
+        As for the slot configuration of raw PDM format, you can use the helper macros like :c:macro:`I2S_PDM_TX_SLOT_RAW_FMT_DEFAULT_CONFIG` or :c:macro:`I2S_PDM_TX_SLOT_RAW_FMT_DAC_DEFAULT_CONFIG`.
+
+        .. only:: SOC_I2S_SUPPORTS_PCM2PDM
+
+            PDM TX Mode in PCM Format (with PCM-to-PDM Converter)
+            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+            {IDF_TARGET_NAME} supports PCM-to-PDM converter on ``I2S0``. To send PCM format data in the PDM TX mode, you need to set :cpp:member:`i2s_pdm_tx_slot_config_t::data_fmt` to :cpp:enumerator:`i2s_pdm_data_fmt_t::I2S_PDM_DATA_FMT_PCM`. And then please take care when setting the :cpp:member:`i2s_pdm_tx_clk_config_t::sample_rate_hz`, the PCM sample rate is normally below 100KHz, typically, it ranges from 16KHz to 48KHz, you can set it according to your needs.
+
+            And the up-sampling parameters can be set for the PCM-to-PDM converter, i.e., :cpp:member:`i2s_pdm_tx_clk_config_t::up_sample_fp` and :cpp:member:`i2s_pdm_tx_clk_config_t::up_sample_fs`. The up-sampling rate can be calculated by ``up_sample_rate = i2s_pdm_tx_clk_config_t::up_sample_fp / i2s_pdm_tx_clk_config_t::up_sample_fs``. There are two up-sampling modes for PCM-to-PDM converter. The relation of the PDM clock on CLK pin and the PCM sample rate that set in the driver are shown as follow:
+
+            - **Fixed Clock Frequency**: In this mode, the up-sampling rate changes according to the sample rate. Setting ``fp = 960`` and ``fs = (PCM)sample_rate / 100``, then the PDM clock frequency on the CLK pin will be fixed to ``128 * 48 KHz = 6.144 MHz``.
+            - **Fixed Up-sampling Rate**: In this mode, the up-sampling rate is fixed to 2. Setting ``fp = 960`` and ``fs = 480``, then the PDM clock frequency on CLK pin will be ``128 * (PCM)sample_rate``.
+
+            As for the slot configuration of PCM format, you can use the helper macros like :c:macro:`I2S_PDM_TX_SLOT_PCM_FMT_DEFAULT_CONFIG` or :c:macro:`I2S_PDM_TX_SLOT_PCM_FMT_DAC_DEFAULT_CONFIG`.
+
+    .. only:: SOC_I2S_SUPPORTS_PDM_RX
+
+        PDM RX Mode in Raw PDM Format
+        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+        To use the PDM RX mode in raw PDM format, you need to set :cpp:member:`i2s_pdm_rx_slot_config_t::data_fmt` to :cpp:enumerator:`i2s_pdm_data_fmt_t::I2S_PDM_DATA_FMT_RAW`. And then please take care when setting the :cpp:member:`i2s_pdm_rx_clk_config_t::sample_rate_hz`, the PDM sample rate is normally several MHz, typically, it ranges from 1.024MHz to 6.144MHz, you can set it according to your needs.
+
+        As for the slot configuration of raw PDM format, you can use the helper macro :c:macro:`I2S_PDM_RX_SLOT_RAW_FMT_DEFAULT_CONFIG`.
+
+        .. only:: SOC_I2S_SUPPORTS_PDM2PCM
+
+            PDM RX Mode in PCM Format (with PDM-to-PCM Converter)
+            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+            {IDF_TARGET_NAME} supports PDM-to-PCM converter on ``I2S0``. To receive PCM format data in the PDM RX mode, you need to set :cpp:member:`i2s_pdm_rx_slot_config_t::data_fmt` to :cpp:enumerator:`i2s_pdm_data_fmt_t::I2S_PDM_DATA_FMT_PCM`. And then please take care when setting the :cpp:member:`i2s_pdm_rx_clk_config_t::sample_rate_hz`, the PCM sample rate is normally below 100KHz, typically, it ranges from 16KHz to 48KHz, you can set it according to your needs.
+
+            The down-sampling parameter can be set to the PDM-to-PCM converter, which is :cpp:member:`i2s_pdm_rx_clk_config_t::dn_sample_mode`. There are two down-sampling modes for PDM-to-PCM converter, the relation of the PDM clock on CLK pin and the PCM sample rate that set in the driver are shown as follow:
+
+            - :cpp:enumerator:`i2s_pdm_dsr_t::I2S_PDM_DSR_8S`: In this mode, the PDM clock frequency on the CLK pin is ``(PCM) sample_rate * 64``.
+            - :cpp:enumerator:`i2s_pdm_dsr_t::I2S_PDM_DSR_16S`: In this mode, the PDM clock frequency on the CLK pin is ``(PCM) sample_rate * 128``.
+
+            As for the slot configuration of PCM format, you can use the helper macro like :c:macro:`I2S_PDM_RX_SLOT_PCM_FMT_DEFAULT_CONFIG`
 
 
 .. only:: SOC_I2S_SUPPORTS_TDM
@@ -234,6 +286,15 @@ When the power management is enabled (i.e., :ref:`CONFIG_PM_ENABLE` is on), the 
 
 The I2S driver can prevent the system from changing or stopping the source clock by acquiring a power management lock. When the source clock is generated from APB, the lock type will be set to :cpp:enumerator:`esp_pm_lock_type_t::ESP_PM_APB_FREQ_MAX` and when the source clock is APLL (if supported), it will be set to :cpp:enumerator:`esp_pm_lock_type_t::ESP_PM_NO_LIGHT_SLEEP`. Whenever the user is reading or writing via I2S (i.e., calling :cpp:func:`i2s_channel_read` or :cpp:func:`i2s_channel_write`), the driver guarantees that the power management lock is acquired. Likewise, the driver releases the lock after the reading or writing finishes.
 
+.. only:: SOC_I2S_SUPPORT_SLEEP_RETENTION
+
+    Sleep Retention
+    """""""""""""""
+
+    {IDF_TARGET_NAME} supports to retain the I2S register context before entering **light sleep** and restore them after woke up. Which means you don't have to re-init the I2S driver even the peripheral is power off during the light sleep.
+
+    This feature can be enabled by setting the flag :cpp:member:`i2s_chan_config_t::allow_pd`. It will allow the system to power down the I2S in light sleep, meanwhile save the I2S register context. It can help to save more power consumption with some extra cost of the memory.
+
 Finite State Machine
 ^^^^^^^^^^^^^^^^^^^^
 
@@ -259,6 +320,14 @@ Configuration
 
 Users can initialize a channel by calling corresponding functions (i.e., :func:`i2s_channel_init_std_mode`, :func:`i2s_channel_init_pdm_rx_mode`, :func:`i2s_channel_init_pdm_tx_mode`, or :func:`i2s_channel_init_tdm_mode`) to a specific mode. If the configurations need to be updated after initialization, users have to first call :cpp:func:`i2s_channel_disable` to ensure that the channel has stopped, and then call corresponding ``reconfig`` functions, like :cpp:func:`i2s_channel_reconfig_std_slot`, :cpp:func:`i2s_channel_reconfig_std_clock`, and :cpp:func:`i2s_channel_reconfig_std_gpio`.
 
+Advanced API
+^^^^^^^^^^^^
+
+To satisfy the high quality audio requirement, following advanced APIs are provided:
+
+- :cpp:func:`i2s_channel_preload_data`: Preloading audio data into the I2S internal cache, enabling the TX channel to immediately send data upon activation, thereby reducing the initial audio output delay.
+- :cpp:func:`i2s_channel_tune_rate`: Dynamically fine-tuning the audio rate at runtime to match the speed of the audio data producer and consumer, thereby preventing the accumulation or shortage of intermediate buffered data that caused by rate mismatches.
+
 IRAM Safe
 ^^^^^^^^^
 
@@ -281,7 +350,6 @@ Kconfig Options
 ^^^^^^^^^^^^^^^
 
 - :ref:`CONFIG_I2S_ISR_IRAM_SAFE` controls whether the default ISR handler can work when the cache is disabled. See `IRAM Safe <#iram-safe>`__ for more information.
-- :ref:`CONFIG_I2S_SUPPRESS_DEPRECATE_WARN` controls whether to suppress the compiling warning message while using the legacy I2S driver.
 - :ref:`CONFIG_I2S_ENABLE_DEBUG_LOG` is used to enable the debug log output. Enable this option increases the firmware binary size.
 
 Application Example
@@ -291,6 +359,9 @@ The examples of the I2S driver can be found in the directory :example:`periphera
 
 Standard TX/RX Usage
 ^^^^^^^^^^^^^^^^^^^^
+
+- :example:`peripherals/i2s/i2s_codec/i2s_es8311` demonstrates how to use the I2S ES8311 audio codec with {IDF_TARGET_NAME} to play music or echo sounds, featuring high performance and low power multi-bit delta-sigma audio ADC and DAC, with options to customize music and adjust mic gain and volume.
+- :example:`peripherals/i2s/i2s_basic/i2s_std` demonstrates how to use the I2S standard mode in either simplex or full-duplex mode on {IDF_TARGET_NAME}.
 
 Different slot communication formats can be generated by the following helper macros for standard mode. As described above, there are three formats in standard mode, and their helper macros are:
 
@@ -548,6 +619,8 @@ Here is the table of the data received in the buffer with different :cpp:member:
     PDM TX Usage
     ^^^^^^^^^^^^
 
+    - :example:`peripherals/i2s/i2s_basic/i2s_pdm` demonstrates how to use the PDM TX mode on {IDF_TARGET_NAME}, including the necessary hardware setup and configuration.
+
     For PDM mode in TX channel, the slot configuration helper macro is:
 
     - :c:macro:`I2S_PDM_TX_SLOT_DEFAULT_CONFIG`
@@ -644,9 +717,16 @@ Here is the table of the data received in the buffer with different :cpp:member:
     PDM RX Usage
     ^^^^^^^^^^^^
 
-    For PDM mode in RX channel, the slot configuration helper macro is:
+    - :example:`peripherals/i2s/i2s_recorder` demonstrates how to record audio from a digital MEMS microphone using the I2S peripheral in PDM data format and save it to an SD card in ``.wav`` file format on {IDF_TARGET_NAME} development boards.
+    - :example:`peripherals/i2s/i2s_basic/i2s_pdm` demonstrates how to use the PDM RX mode on {IDF_TARGET_NAME}, including the necessary hardware setup and configuration.
 
-    - :c:macro:`I2S_PDM_RX_SLOT_DEFAULT_CONFIG`
+    For PDM mode in RX channel, the slot configuration helper macro are:
+
+    - :c:macro:`I2S_PDM_RX_SLOT_RAW_FMT_DEFAULT_CONFIG` It provides some default configurations for receiving the raw PDM format data.
+
+    .. only:: SOC_I2S_SUPPORTS_PDM2PCM
+
+        - :c:macro:`I2S_PDM_RX_SLOT_PCM_FMT_DEFAULT_CONFIG` It provides some default configurations for receiving the converted PCM format data.
 
     The clock configuration helper macro is:
 
@@ -708,7 +788,9 @@ Here is the table of the data received in the buffer with different :cpp:member:
         /* Init the channel into PDM RX mode */
         i2s_pdm_rx_config_t pdm_rx_cfg = {
             .clk_cfg = I2S_PDM_RX_CLK_DEFAULT_CONFIG(36000),
-            .slot_cfg = I2S_PDM_RX_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_MONO),
+            // If PDM-to-PCM converter is not supported, please use raw PDM format
+            // .slot_cfg = I2S_PDM_RX_SLOT_RAW_FMT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_MONO),
+            .slot_cfg = I2S_PDM_RX_SLOT_PCM_FMT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_MONO),
             .gpio_cfg = {
                 .clk = GPIO_NUM_5,
                 .din = GPIO_NUM_19,
@@ -726,6 +808,9 @@ Here is the table of the data received in the buffer with different :cpp:member:
 
     TDM TX/RX Usage
     ^^^^^^^^^^^^^^^
+
+    - :example:`peripherals/i2s/i2s_codec/i2s_es7210_tdm` demonstrates how to use the I2S TDM mode on {IDF_TARGET_NAME} to record four MICs connected to ES7210 codec, with the recorded voice saved to an SD card in ``wav`` format.
+    - :example:`peripherals/i2s/i2s_basic/i2s_tdm` demonstrates how to use the TDM mode in simplex or full-duplex mode on {IDF_TARGET_NAME}.
 
     Different slot communication formats can be generated by the following helper macros for TDM mode. As described above, there are four formats in TDM mode, and their helper macros are:
 
@@ -816,7 +901,7 @@ Here is the table of the data received in the buffer with different :cpp:member:
 Full-duplex
 ^^^^^^^^^^^
 
-Full-duplex mode registers TX and RX channel in an I2S port at the same time, and the channels share the BCLK and WS signals. Currently, STD and TDM communication modes supports full-duplex mode in the following way, but PDM full-duplex is not supported because due to different PDM TX and RX clocks.
+Full-duplex mode registers TX and RX channel in an I2S port at the same time, and the channels share the BCLK and WS signals. Currently, {IDF_TARGET_I2S_STD_TDM} communication modes supports full-duplex mode in the following way, but PDM full-duplex is not supported because due to different PDM TX and RX clocks.
 
 Note that one handle can only stand for one channel. Therefore, it is still necessary to configure the slot and clock for both TX and RX channels one by one.
 
@@ -979,6 +1064,79 @@ Here is an example of how to allocate a pair of full-duplex channels:
         i2s_channel_init_std_mode(rx_handle, &std_rx_cfg);
         i2s_channel_enable(rx_handle);
 
+.. only:: SOC_I2S_SUPPORTS_ETM
+
+    I2S ETM Usage
+    ^^^^^^^^^^^^^
+
+    {IDF_TARGET_NAME} supports I2S ETM (Event Task Matrix), which allows to trigger other ETM tasks via I2S ETM events, or to control the start/stop by I2S ETM tasks.
+
+    The I2S ETM APIs can be found in ``driver/i2s_etm.h``, the following example shows how to use GPIO to start/stop I2S channel via ETM:
+
+    .. code-block:: c
+
+        #include "driver/i2s_etm.h"
+        // ...
+        i2s_chan_handle_t tx_handle;
+        // Initialize I2S channel
+        // ......
+        int ctrl_gpio = 4;
+        // Initialize GPIO
+        // ......
+        /* Register GPIO ETM events */
+        gpio_etm_event_config_t gpio_event_cfg = {
+            .edges = {GPIO_ETM_EVENT_EDGE_POS, GPIO_ETM_EVENT_EDGE_NEG},
+        };
+        esp_etm_event_handle_t gpio_pos_event_handle;
+        esp_etm_event_handle_t gpio_neg_event_handle;
+        gpio_new_etm_event(&gpio_event_cfg, &gpio_pos_event_handle, &gpio_neg_event_handle);
+        gpio_etm_event_bind_gpio(gpio_pos_event_handle, ctrl_gpio);
+        gpio_etm_event_bind_gpio(gpio_neg_event_handle, ctrl_gpio);
+        /* Register I2S ETM tasks */
+        i2s_etm_task_config_t i2s_start_task_cfg = {
+            .task_type = I2S_ETM_TASK_START,
+        };
+        esp_etm_task_handle_t i2s_start_task_handle;
+        i2s_new_etm_task(tx_handle, &i2s_start_task_cfg, &i2s_start_task_handle);
+        i2s_etm_task_config_t i2s_stop_task_cfg = {
+            .task_type = I2S_ETM_TASK_STOP,
+        };
+        esp_etm_task_handle_t i2s_stop_task_handle;
+        i2s_new_etm_task(tx_handle, &i2s_stop_task_cfg, &i2s_stop_task_handle);
+        /* Bind GPIO events to I2S ETM tasks */
+        esp_etm_channel_config_t etm_config = {};
+        esp_etm_channel_handle_t i2s_etm_start_chan = NULL;
+        esp_etm_channel_handle_t i2s_etm_stop_chan = NULL;
+        esp_etm_new_channel(&etm_config, &i2s_etm_start_chan);
+        esp_etm_new_channel(&etm_config, &i2s_etm_stop_chan);
+        esp_etm_channel_connect(i2s_etm_start_chan, gpio_pos_event_handle, i2s_start_task_handle);
+        esp_etm_channel_connect(i2s_etm_stop_chan, gpio_neg_event_handle, i2s_stop_task_handle);
+        esp_etm_channel_enable(i2s_etm_start_chan);
+        esp_etm_channel_enable(i2s_etm_stop_chan);
+        /* Enable I2S channel first before starting I2S channel */
+        i2s_channel_enable(tx_handle);
+        // (Optional) Able to load the data into the internal DMA buffer here,
+        // but tx_channel does not start yet, will timeout when the internal buffer is full
+        // i2s_channel_write(tx_handle, data, data_size, NULL, 0);
+        /* Start I2S channel by setting the GPIO to high */
+        gpio_set_level(ctrl_gpio, 1);
+        // Write data ......
+        // i2s_channel_write(tx_handle, data, data_size, NULL, 1000);
+        /* Stop I2S channel by setting the GPIO to low */
+        gpio_set_level(ctrl_gpio, 0);
+
+        /* Free resources */
+        i2s_channel_disable(tx_handle);
+        esp_etm_channel_disable(i2s_etm_start_chan);
+        esp_etm_channel_disable(i2s_etm_stop_chan);
+        esp_etm_del_event(gpio_pos_event_handle);
+        esp_etm_del_event(gpio_neg_event_handle);
+        esp_etm_del_task(i2s_start_task_handle);
+        esp_etm_del_task(i2s_stop_task_handle);
+        esp_etm_del_channel(i2s_etm_start_chan);
+        esp_etm_del_channel(i2s_etm_stop_chan);
+        // De-initialize I2S and GPIO
+        // ......
 
 Application Notes
 -----------------

@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2023-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2023-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -15,6 +15,7 @@
 #include "hal/assert.h"
 #include "soc/pmu_struct.h"
 #include "hal/pmu_types.h"
+#include "hal/misc.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -215,9 +216,11 @@ FORCE_INLINE_ATTR void pmu_ll_hp_set_regulator_sleep_logic_dbias(pmu_dev_t *hw, 
     hw->hp_sys[mode].regulator0.slp_logic_dbias = slp_dbias;
 }
 
-FORCE_INLINE_ATTR void pmu_ll_hp_set_regulator_sleep_memory_dbias(pmu_dev_t *hw, pmu_hp_mode_t mode, uint32_t slp_dbias)
+FORCE_INLINE_ATTR void pmu_ll_hp_enable_sleep_flash_ldo_channel(pmu_dev_t *hw, bool enable)
 {
-    hw->hp_sys[mode].regulator0.slp_mem_dbias = slp_dbias;
+    // slp_mem_dbias[3] is used to control the volt output of VO1 for chip_revision >= 100,
+    // and this field is not used for chip_revision < 100.
+    hw->hp_sys[PMU_MODE_HP_SLEEP].regulator0.xpd_0p1a = (enable ? 8 : 0);
 }
 
 FORCE_INLINE_ATTR void pmu_ll_hp_set_regulator_dbias(pmu_dev_t *hw, pmu_hp_mode_t mode, uint32_t dbias)
@@ -342,6 +345,17 @@ FORCE_INLINE_ATTR void pmu_ll_imm_set_lp_rootclk_sel(pmu_dev_t *hw, bool rootclk
         hw->imm.lp_icg.tie_high_lp_rootclk_sel = 1;
     } else {
         hw->imm.lp_icg.tie_low_lp_rootclk_sel = 1;
+    }
+}
+
+FORCE_INLINE_ATTR void pmu_ll_imm_set_pad_slp_sel(pmu_dev_t *hw, bool sleep_sel)
+{
+    if (sleep_sel) {
+        // Switch the pad configuration from active state to sleep state
+        hw->imm.pad_hold_all.tie_high_pad_slp_sel = 1;
+    } else {
+        // Switch the pad configuration from sleep state to active state
+        hw->imm.pad_hold_all.tie_low_pad_slp_sel = 1;
     }
 }
 
@@ -471,7 +485,7 @@ FORCE_INLINE_ATTR void pmu_ll_hp_set_sleep_protect_mode(pmu_dev_t *hw, int mode)
 
 FORCE_INLINE_ATTR void pmu_ll_hp_set_min_sleep_cycle(pmu_dev_t *hw, uint32_t slow_clk_cycle)
 {
-    hw->wakeup.cntl3.hp_min_slp_val = slow_clk_cycle;
+    HAL_FORCE_MODIFY_U32_REG_FIELD(hw->wakeup.cntl3, hp_min_slp_val, slow_clk_cycle);
 }
 
 FORCE_INLINE_ATTR void pmu_ll_hp_clear_reject_cause(pmu_dev_t *hw)
@@ -521,27 +535,27 @@ FORCE_INLINE_ATTR uint32_t pmu_ll_hp_get_lite_wakeup_cause(pmu_dev_t *hw)
 
 FORCE_INLINE_ATTR void pmu_ll_lp_set_min_sleep_cycle(pmu_dev_t *hw, uint32_t slow_clk_cycle)
 {
-    hw->wakeup.cntl3.lp_min_slp_val = slow_clk_cycle;
+    HAL_FORCE_MODIFY_U32_REG_FIELD(hw->wakeup.cntl3, lp_min_slp_val, slow_clk_cycle);
 }
 
 FORCE_INLINE_ATTR void pmu_ll_hp_set_modify_icg_cntl_wait_cycle(pmu_dev_t *hw, uint32_t cycle)
 {
-    hw->hp_ext.clk_cntl.modify_icg_cntl_wait = cycle;
+    HAL_FORCE_MODIFY_U32_REG_FIELD(hw->hp_ext.clk_cntl, modify_icg_cntl_wait, cycle);
 }
 
 FORCE_INLINE_ATTR uint32_t pmu_ll_hp_get_modify_icg_cntl_wait_cycle(pmu_dev_t *hw)
 {
-    return hw->hp_ext.clk_cntl.modify_icg_cntl_wait;
+    return HAL_FORCE_READ_U32_REG_FIELD(hw->hp_ext.clk_cntl, modify_icg_cntl_wait);
 }
 
 FORCE_INLINE_ATTR void pmu_ll_hp_set_switch_icg_cntl_wait_cycle(pmu_dev_t *hw, uint32_t cycle)
 {
-    hw->hp_ext.clk_cntl.switch_icg_cntl_wait = cycle;
+    HAL_FORCE_MODIFY_U32_REG_FIELD(hw->hp_ext.clk_cntl, switch_icg_cntl_wait, cycle);
 }
 
 FORCE_INLINE_ATTR uint32_t pmu_ll_hp_get_switch_icg_cntl_wait_cycle(pmu_dev_t *hw)
 {
-    return hw->hp_ext.clk_cntl.switch_icg_cntl_wait;
+    return HAL_FORCE_READ_U32_REG_FIELD(hw->hp_ext.clk_cntl, switch_icg_cntl_wait);
 }
 
 FORCE_INLINE_ATTR void pmu_ll_hp_set_digital_power_down_wait_cycle(pmu_dev_t *hw, uint32_t cycle)
@@ -566,32 +580,32 @@ FORCE_INLINE_ATTR uint32_t pmu_ll_lp_get_digital_power_down_wait_cycle(pmu_dev_t
 
 FORCE_INLINE_ATTR void pmu_ll_lp_set_analog_wait_target_cycle(pmu_dev_t *hw, uint32_t slow_clk_cycle)
 {
-    hw->wakeup.cntl5.lp_ana_wait_target = slow_clk_cycle;
+    HAL_FORCE_MODIFY_U32_REG_FIELD(hw->wakeup.cntl5, lp_ana_wait_target, slow_clk_cycle);
 }
 
 FORCE_INLINE_ATTR uint32_t pmu_ll_lp_get_analog_wait_target_cycle(pmu_dev_t *hw)
 {
-    return hw->wakeup.cntl5.lp_ana_wait_target;
+    return HAL_FORCE_READ_U32_REG_FIELD(hw->wakeup.cntl5, lp_ana_wait_target);
 }
 
 FORCE_INLINE_ATTR void pmu_ll_set_xtal_stable_wait_cycle(pmu_dev_t *hw, uint32_t cycle)
 {
-    hw->power.clk_wait.wait_xtal_stable = cycle;
+    HAL_FORCE_MODIFY_U32_REG_FIELD(hw->power.clk_wait, wait_xtal_stable, cycle);
 }
 
 FORCE_INLINE_ATTR uint32_t pmu_ll_get_xtal_stable_wait_cycle(pmu_dev_t *hw)
 {
-    return hw->power.clk_wait.wait_xtal_stable;
+    return HAL_FORCE_READ_U32_REG_FIELD(hw->power.clk_wait, wait_xtal_stable);
 }
 
 FORCE_INLINE_ATTR void pmu_ll_set_pll_stable_wait_cycle(pmu_dev_t *hw, uint32_t cycle)
 {
-    hw->power.clk_wait.wait_pll_stable = cycle;
+    HAL_FORCE_MODIFY_U32_REG_FIELD(hw->power.clk_wait, wait_pll_stable, cycle);
 }
 
 FORCE_INLINE_ATTR uint32_t pmu_ll_get_pll_stable_wait_cycle(pmu_dev_t *hw)
 {
-    return hw->power.clk_wait.wait_pll_stable;
+    return HAL_FORCE_READ_U32_REG_FIELD(hw->power.clk_wait, wait_pll_stable);
 }
 
 FORCE_INLINE_ATTR void pmu_ll_lp_set_digital_power_supply_wait_cycle(pmu_dev_t *hw, uint32_t cycle)
@@ -616,17 +630,17 @@ FORCE_INLINE_ATTR uint32_t pmu_ll_lp_get_digital_power_up_wait_cycle(pmu_dev_t *
 
 FORCE_INLINE_ATTR void pmu_ll_hp_set_analog_wait_target_cycle(pmu_dev_t *hw, uint32_t cycle)
 {
-    hw->wakeup.cntl7.ana_wait_target = cycle;
+    HAL_FORCE_MODIFY_U32_REG_FIELD(hw->wakeup.cntl7, ana_wait_target, cycle);
 }
 
 FORCE_INLINE_ATTR uint32_t pmu_ll_hp_get_analog_wait_target_cycle(pmu_dev_t *hw)
 {
-    return hw->wakeup.cntl7.ana_wait_target;
+    return HAL_FORCE_READ_U32_REG_FIELD(hw->wakeup.cntl7, ana_wait_target);
 }
 
-FORCE_INLINE_ATTR uint32_t pmu_ll_hp_set_lite_wakeup_enable(pmu_dev_t *hw, bool wakeup_en)
+FORCE_INLINE_ATTR void pmu_ll_hp_set_lite_wakeup_enable(pmu_dev_t *hw, bool wakeup_en)
 {
-    return hw->wakeup.cntl8.lp_lite_wakeup_ena = wakeup_en;
+    hw->wakeup.cntl8.lp_lite_wakeup_ena = wakeup_en;
 }
 
 FORCE_INLINE_ATTR void pmu_ll_hp_set_digital_power_supply_wait_cycle(pmu_dev_t *hw, uint32_t cycle)
@@ -649,14 +663,27 @@ FORCE_INLINE_ATTR uint32_t pmu_ll_hp_get_digital_power_up_wait_cycle(pmu_dev_t *
     return hw->power.wait_timer0.powerup_timer;
 }
 
-FORCE_INLINE_ATTR void pmu_ll_set_dcdc_force_power_up(pmu_dev_t *hw, bool fpu)
+FORCE_INLINE_ATTR void pmu_ll_set_dcdc_switch_force_power_up(pmu_dev_t *hw, bool fpu)
 {
+    hw->power.dcdc_switch.force_pd = 0;
     hw->power.dcdc_switch.force_pu = fpu;
 }
 
-FORCE_INLINE_ATTR void pmu_ll_set_dcdc_force_power_down(pmu_dev_t *hw, bool fpd)
+FORCE_INLINE_ATTR void pmu_ll_set_dcdc_switch_force_power_down(pmu_dev_t *hw, bool fpd)
 {
+    hw->power.dcdc_switch.force_pu = 0;
     hw->power.dcdc_switch.force_pd = fpd;
+}
+
+FORCE_INLINE_ATTR void pmu_ll_set_dcdc_en(pmu_dev_t *hw, bool en)
+{
+    if (en) {
+        hw->dcm_ctrl.done_force = 0;
+        hw->dcm_ctrl.on_req = 1;
+    } else {
+        hw->dcm_ctrl.off_req = 1;
+        hw->dcm_ctrl.done_force = 1;
+    }
 }
 
 /**
@@ -675,6 +702,7 @@ static inline  uint32_t pmu_ll_ext1_get_wakeup_status(void)
 static inline void pmu_ll_ext1_clear_wakeup_status(void)
 {
     REG_SET_BIT(PMU_EXT_WAKEUP_CNTL_REG, PMU_EXT_WAKEUP_STATUS_CLR);
+    REG_CLR_BIT(PMU_EXT_WAKEUP_CNTL_REG, PMU_EXT_WAKEUP_STATUS_CLR);
 }
 
 /**

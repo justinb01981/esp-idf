@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2023-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2023-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -72,6 +72,16 @@ typedef enum {
 } ecdsa_ll_sha_mode_t;
 
 /**
+ * @brief Get the state of ECDSA peripheral
+ *
+ * @return State of ECDSA
+ */
+static inline uint32_t ecdsa_ll_get_state(void)
+{
+    return REG_GET_FIELD(ECDSA_STATE_REG, ECDSA_BUSY);
+}
+
+/**
  * @brief Enable the bus clock for ECDSA peripheral module
  *
  * @param true to enable the module, false to disable the module
@@ -83,7 +93,10 @@ static inline void ecdsa_ll_enable_bus_clock(bool enable)
 
 /// use a macro to wrap the function, force the caller to use it in a critical section
 /// the critical section needs to declare the __DECLARE_RCC_ATOMIC_ENV variable in advance
-#define ecdsa_ll_enable_bus_clock(...) (void)__DECLARE_RCC_ATOMIC_ENV; ecdsa_ll_enable_bus_clock(__VA_ARGS__)
+#define ecdsa_ll_enable_bus_clock(...) do { \
+        (void)__DECLARE_RCC_ATOMIC_ENV; \
+        ecdsa_ll_enable_bus_clock(__VA_ARGS__); \
+    } while(0)
 
 /**
  * @brief Reset the ECDSA peripheral module
@@ -95,6 +108,10 @@ static inline void ecdsa_ll_reset_register(void)
 
     // Clear reset on parent crypto, otherwise ECDSA is held in reset
     HP_SYS_CLKRST.hp_rst_en2.reg_rst_en_crypto = 0;
+
+    while (ecdsa_ll_get_state() != ECDSA_STATE_IDLE) {
+        ;
+    }
 }
 
 /**
@@ -274,16 +291,6 @@ static inline void ecdsa_ll_set_stage(ecdsa_ll_stage_t stage)
 }
 
 /**
- * @brief Get the state of ECDSA peripheral
- *
- * @return State of ECDSA
- */
-static inline uint32_t ecdsa_ll_get_state(void)
-{
-    return REG_GET_FIELD(ECDSA_STATE_REG, ECDSA_BUSY);
-}
-
-/**
  * @brief Set the SHA type
  *
  * @param type Type of SHA
@@ -426,6 +433,22 @@ static inline int ecdsa_ll_get_operation_result(void)
 static inline int ecdsa_ll_check_k_value(void)
 {
     return REG_GET_BIT(ECDSA_RESULT_REG, ECDSA_K_VALUE_WARNING);
+}
+
+/**
+ * @brief Check if the ECDSA deterministic mode is supported
+ */
+static inline bool ecdsa_ll_is_deterministic_mode_supported(void)
+{
+    return true;
+}
+
+/**
+ * @brief Check if the ECDSA peripheral uses MPI module's memory
+ */
+static inline bool ecdsa_ll_is_mpi_required(void)
+{
+    return true;    // TODO: IDF-13523
 }
 
 #ifdef __cplusplus

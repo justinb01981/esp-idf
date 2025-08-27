@@ -13,7 +13,7 @@
 
 const static char *TAG = "efuse";
 
-#if defined(BOOTLOADER_BUILD)
+#ifdef NON_OS_BUILD
 #define EFUSE_LOCK_ACQUIRE_RECURSIVE()
 #define EFUSE_LOCK_RELEASE_RECURSIVE()
 #else
@@ -39,11 +39,11 @@ esp_err_t esp_efuse_read_field_blob(const esp_efuse_desc_t* field[], void* dst, 
         do {
             memset((uint8_t *)dst, 0, esp_efuse_utility_get_number_of_items(dst_size_bits, 8));
             err = esp_efuse_utility_process(field, dst, dst_size_bits, esp_efuse_utility_fill_buff);
-#ifndef BOOTLOADER_BUILD
+#ifndef NON_OS_BUILD
             if (err == ESP_ERR_DAMAGED_READING) {
                 vTaskDelay(1);
             }
-#endif // BOOTLOADER_BUILD
+#endif // NON_OS_BUILD
         } while (err == ESP_ERR_DAMAGED_READING);
     }
     return err;
@@ -67,11 +67,11 @@ esp_err_t esp_efuse_read_field_cnt(const esp_efuse_desc_t* field[], size_t* out_
         do {
             *out_cnt = 0;
             err = esp_efuse_utility_process(field, out_cnt, 0, esp_efuse_utility_count_once);
-#ifndef BOOTLOADER_BUILD
+#ifndef NON_OS_BUILD
             if (err == ESP_ERR_DAMAGED_READING) {
                 vTaskDelay(1);
             }
-#endif // BOOTLOADER_BUILD
+#endif // NON_OS_BUILD
         } while (err == ESP_ERR_DAMAGED_READING);
     }
     return err;
@@ -315,7 +315,8 @@ static esp_err_t destroy_block(esp_efuse_block_t block)
         }
 #endif // CONFIG_IDF_TARGET_ESP32
         uint32_t data[8 + 3]; // 8 words are data and 3 words are RS coding data
-        esp_efuse_read_block(block, data, 0, blk_len_bit);
+        esp_err_t err = esp_efuse_read_block(block, data, 0, blk_len_bit);
+        (void)err; // Suppress Coverity warning for unchecked return value
         // Inverse data to set only unset bit
         for (unsigned i = 0; i < blk_len_bit / 32; i++) {
             data[i] = ~data[i];

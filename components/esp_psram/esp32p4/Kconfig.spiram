@@ -34,6 +34,9 @@ menu "PSRAM config"
             depends on IDF_EXPERIMENTAL_FEATURES
             bool "200MHz clock speed"
 
+        config SPIRAM_SPEED_80M
+            bool "80MHz clock speed"
+
         config SPIRAM_SPEED_20M
             bool "20MHz clock speed"
     endchoice
@@ -41,6 +44,7 @@ menu "PSRAM config"
     config SPIRAM_SPEED
         int
         default 20 if SPIRAM_SPEED_20M
+        default 80 if SPIRAM_SPEED_80M
         default 100 if SPIRAM_SPEED_100M
         default 200 if SPIRAM_SPEED_200M
 
@@ -57,8 +61,9 @@ menu "PSRAM config"
             PSRAM
 
     config SPIRAM_XIP_FROM_PSRAM
-        bool "Enable Executable in place from (XiP) from PSRAM feature"
+        bool "Enable Executable in place from (XiP) from PSRAM feature (READ HELP)"
         default n
+        depends on SPIRAM_BOOT_INIT
         select SPIRAM_FETCH_INSTRUCTIONS
         select SPIRAM_RODATA
         select SPIRAM_FLASH_LOAD_TO_PSRAM
@@ -70,7 +75,12 @@ menu "PSRAM config"
             does not have to be placed in IRAM. Therefore codes that need to be executing during Flash
             operations can continue working normally.
 
-            Enabling this option will have better performance (see External RAM documentation for more details).
+            Because P4 flash and PSRAM are using two separate SPI buses, moving flash content to PSRAM will
+            actually increase the load of the PSRAM MSPI bus, so the exact impact on performance will be dependent
+            on your app usage of PSRAM. For example, as the PSRAM bus speed could be much faster than flash bus speed,
+            if the instructions and data that are used to be in flash are not accessed very frequently, you might
+            get better performance with this option enabled. We suggest doing performance profiling to determine
+            if enabling this option.
 
     config SPIRAM_FLASH_LOAD_TO_PSRAM
         bool
@@ -85,17 +95,6 @@ menu "PSRAM config"
             Enable Error-Correcting Code function when accessing PSRAM.
 
             If enabled, 1/8 of the PSRAM total size will be reserved for error-correcting code.
-
-    config SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY
-        bool "Allow external memory as an argument to xTaskCreateStatic"
-        default y
-        help
-            Accessing memory in PSRAM has certain restrictions, so task stacks allocated by xTaskCreate
-            are by default allocated from internal RAM.
-
-            This option allows for passing memory allocated from PSRAM to be passed to xTaskCreateStatic.
-            This should only be used for tasks where the stack is never accessed while the L2Cache is
-            disabled, e.g. during SPI Flash operations
 
     source "$IDF_PATH/components/esp_psram/Kconfig.spiram.common"    # insert non-chip-specific items here
 

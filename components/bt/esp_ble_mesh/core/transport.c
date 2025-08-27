@@ -2,7 +2,7 @@
 
 /*
  * SPDX-FileCopyrightText: 2017 Intel Corporation
- * SPDX-FileContributor: 2018-2021 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileContributor: 2018-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -11,6 +11,7 @@
 #include <errno.h>
 
 #include "crypto.h"
+#include "tag.h"
 #include "adv.h"
 #include "mesh.h"
 #include "lpn.h"
@@ -26,7 +27,9 @@
 #include "mesh/cfg_srv.h"
 #include "heartbeat.h"
 
+#if CONFIG_BLE_MESH_V11_SUPPORT
 #include "mesh_v1.1/utils.h"
+#endif
 
 /* The transport layer needs at least three buffers for itself to avoid
  * deadlocks. Ensure that there are a sufficient number of advertising
@@ -91,6 +94,7 @@ static struct seg_tx {
     const struct bt_mesh_send_cb *cb;
     void                  *cb_data;
     struct k_delayed_work  rtx_timer;   /* Segment Retransmission timer */
+    bt_mesh_mutex_t        lock;
 } seg_tx[CONFIG_BLE_MESH_TX_SEG_MSG_COUNT];
 
 static struct seg_rx {
@@ -117,17 +121,16 @@ static struct seg_rx {
 static uint8_t seg_rx_buf_data[(CONFIG_BLE_MESH_RX_SEG_MSG_COUNT *
                                 CONFIG_BLE_MESH_RX_SDU_MAX)];
 
-static bt_mesh_mutex_t seg_tx_lock;
 static bt_mesh_mutex_t seg_rx_lock;
 
-static inline void bt_mesh_seg_tx_lock(void)
+static inline void bt_mesh_seg_tx_lock(struct seg_tx *tx)
 {
-    bt_mesh_mutex_lock(&seg_tx_lock);
+    bt_mesh_r_mutex_lock(&tx->lock);
 }
 
-static inline void bt_mesh_seg_tx_unlock(void)
+static inline void bt_mesh_seg_tx_unlock(struct seg_tx *tx)
 {
-    bt_mesh_mutex_unlock(&seg_tx_lock);
+    bt_mesh_r_mutex_unlock(&tx->lock);
 }
 
 static inline void bt_mesh_seg_rx_lock(void)
@@ -310,7 +313,15 @@ static void seg_tx_done(struct seg_tx *tx, uint8_t seg_idx)
 {
     bt_mesh_adv_buf_ref_debug(__func__, tx->seg[seg_idx], 3U, BLE_MESH_BUF_REF_SMALL);
 
-    BLE_MESH_ADV(tx->seg[seg_idx])->busy = 0U;
+    /**
+     * When cancelling a segment that is still in the adv sending queue, `tx->seg_pending`
+     * must else be decremented by one. More detailed information
+     * can be found in BLEMESH24-26.
+     */
+    if (bt_mesh_atomic_cas(&BLE_MESH_ADV_BUSY(tx->seg[seg_idx]), 1, 0)) {
+        tx->seg_pending--;
+    }
+
     net_buf_unref(tx->seg[seg_idx]);
     tx->seg[seg_idx] = NULL;
     tx->nack_count--;
@@ -320,7 +331,7 @@ static void seg_tx_reset(struct seg_tx *tx)
 {
     int i;
 
-    bt_mesh_seg_tx_lock();
+    bt_mesh_seg_tx_lock(tx);
 
     k_delayed_work_cancel(&tx->rtx_timer);
 
@@ -340,7 +351,7 @@ static void seg_tx_reset(struct seg_tx *tx)
 
     tx->nack_count = 0U;
 
-    bt_mesh_seg_tx_unlock();
+    bt_mesh_seg_tx_unlock(tx);
 
     if (bt_mesh_atomic_test_and_clear_bit(bt_mesh.flags, BLE_MESH_IVU_PENDING)) {
         BT_DBG("Proceeding with pending IV Update");
@@ -369,17 +380,36 @@ static inline void seg_tx_complete(struct seg_tx *tx, int err)
 
 static void schedule_retransmit(struct seg_tx *tx)
 {
+    bt_mesh_seg_tx_lock(tx);
+    /* It's possible that a segment broadcast hasn't finished,
+     * but the tx are already released. Only the seg_pending
+     * of this segment remains unprocessed. So, here, we
+     * determine if the tx are released by checking if the
+     * destination (dst) is unassigned, and then process
+     * the seg_pending of this segment.
+     * See BLEMESH25-92 for details */
+    if (tx->dst == BLE_MESH_ADDR_UNASSIGNED) {
+        if (tx->seg_pending) {
+            tx->seg_pending--;
+        }
+        bt_mesh_seg_tx_unlock(tx);
+        return;
+    }
+
     if (--tx->seg_pending) {
+        bt_mesh_seg_tx_unlock(tx);
         return;
     }
 
     if (!BLE_MESH_ADDR_IS_UNICAST(tx->dst) && !tx->attempts) {
         BT_INFO("Complete tx sdu to group");
         seg_tx_complete(tx, 0);
+        bt_mesh_seg_tx_unlock(tx);
         return;
     }
 
     k_delayed_work_submit(&tx->rtx_timer, SEG_RETRANSMIT_TIMEOUT(tx));
+    bt_mesh_seg_tx_unlock(tx);
 }
 
 static void seg_first_send_start(uint16_t duration, int err, void *user_data)
@@ -425,11 +455,11 @@ static void seg_tx_send_unacked(struct seg_tx *tx)
 {
     int i, err = 0;
 
-    bt_mesh_seg_tx_lock();
+    bt_mesh_seg_tx_lock(tx);
 
     if (!(tx->attempts--)) {
         BT_WARN("Ran out of retransmit attempts");
-        bt_mesh_seg_tx_unlock();
+        bt_mesh_seg_tx_unlock(tx);
         seg_tx_complete(tx, -ETIMEDOUT);
         return;
     }
@@ -443,7 +473,7 @@ static void seg_tx_send_unacked(struct seg_tx *tx)
             continue;
         }
 
-        if (BLE_MESH_ADV(seg)->busy) {
+        if (bt_mesh_atomic_get(&BLE_MESH_ADV_BUSY(seg))) {
             BT_DBG("Skipping segment that's still advertising");
             continue;
         }
@@ -462,13 +492,13 @@ static void seg_tx_send_unacked(struct seg_tx *tx)
                                  &seg_sent_cb, tx);
         if (err) {
             BT_ERR("Sending segment failed");
-            bt_mesh_seg_tx_unlock();
+            bt_mesh_seg_tx_unlock(tx);
             seg_tx_complete(tx, -EIO);
             return;
         }
     }
 
-    bt_mesh_seg_tx_unlock();
+    bt_mesh_seg_tx_unlock(tx);
 }
 
 static void seg_retransmit(struct k_work *work)
@@ -486,6 +516,7 @@ static int send_seg(struct bt_mesh_net_tx *net_tx, struct net_buf_simple *sdu,
     uint16_t seq_zero = 0U;
     uint8_t seg_hdr = 0U;
     uint8_t seg_o = 0U;
+    int err = 0;
     int i;
 
     BT_DBG("src 0x%04x dst 0x%04x app_idx 0x%04x aszmic %u sdu_len %u",
@@ -493,7 +524,15 @@ static int send_seg(struct bt_mesh_net_tx *net_tx, struct net_buf_simple *sdu,
            net_tx->aszmic, sdu->len);
 
     for (tx = NULL, i = 0; i < ARRAY_SIZE(seg_tx); i++) {
-        if (!seg_tx[i].nack_count) {
+        if (!seg_tx[i].nack_count &&
+            /* In some critical conditions, the tx might be
+             * reset before a segment broadcast is finished.
+             * If this happens, the seg_pending of the segment
+             * hasn't been processed. To avoid assigning this
+             * uncleared tx to a new message, extra checks for
+             * seg_pending being 0 are added. See BLEMESH25-92
+             * for details.*/
+            !seg_tx[i].seg_pending) {
             tx = &seg_tx[i];
             break;
         }
@@ -550,16 +589,17 @@ static int send_seg(struct bt_mesh_net_tx *net_tx, struct net_buf_simple *sdu,
         return -ENOBUFS;
     }
 
+    bt_mesh_seg_tx_lock(tx);
+
     for (seg_o = 0U; sdu->len; seg_o++) {
         struct net_buf *seg = NULL;
         uint16_t len = 0U;
-        int err = 0;
 
         seg = bt_mesh_adv_create(BLE_MESH_ADV_DATA, BUF_TIMEOUT);
         if (!seg) {
             BT_ERR("Out of segment buffers");
-            seg_tx_reset(tx);
-            return -ENOBUFS;
+            err = -ENOBUFS;
+            break;
         }
 
         net_buf_reserve(seg, BLE_MESH_NET_HDR_LEN);
@@ -604,8 +644,7 @@ static int send_seg(struct bt_mesh_net_tx *net_tx, struct net_buf_simple *sdu,
                                tx);
         if (err) {
             BT_ERR("Sending segment failed (err %d)", err);
-            seg_tx_reset(tx);
-            return err;
+            break;
         }
 
         /* If security credentials is updated in the network layer,
@@ -615,6 +654,13 @@ static int send_seg(struct bt_mesh_net_tx *net_tx, struct net_buf_simple *sdu,
         if (tx->cred != net_tx->ctx->send_cred) {
             tx->cred = net_tx->ctx->send_cred;
         }
+    }
+
+    bt_mesh_seg_tx_unlock(tx);
+
+    if (err) {
+        seg_tx_reset(tx);
+        return err;
     }
 
     /* This can happen if segments only went into the Friend Queue */
@@ -951,9 +997,9 @@ static int trans_ack(struct bt_mesh_net_rx *rx, uint8_t hdr,
     while ((bit = find_lsb_set(ack))) {
         if (tx->seg[bit - 1]) {
             BT_INFO("Seg %u/%u acked", bit - 1, tx->seg_n);
-            bt_mesh_seg_tx_lock();
+            bt_mesh_seg_tx_lock(tx);
             seg_tx_done(tx, bit - 1);
-            bt_mesh_seg_tx_unlock();
+            bt_mesh_seg_tx_unlock(tx);
         }
 
         ack &= ~BIT(bit - 1);
@@ -1031,18 +1077,18 @@ static int ctl_recv(struct bt_mesh_net_rx *rx, uint8_t hdr,
         return 0;
     }
 
-    if (IS_ENABLED(CONFIG_BLE_MESH_DF_SRV)) {
-        switch (ctl_op) {
-        case TRANS_CTL_OP_PATH_REQ:
-        case TRANS_CTL_OP_PATH_REPLY:
-        case TRANS_CTL_OP_PATH_CFM:
-        case TRANS_CTL_OP_PATH_ECHO_REQ:
-        case TRANS_CTL_OP_PATH_ECHO_REPLY:
-        case TRANS_CTL_OP_DEP_NODE_UPDATE:
-        case TRANS_CTL_OP_PATH_REQ_SOLIC:
-            return bt_mesh_directed_forwarding_ctl_recv(ctl_op, rx, buf);
-        }
+#if CONFIG_BLE_MESH_DF_SRV
+    switch (ctl_op) {
+    case TRANS_CTL_OP_PATH_REQ:
+    case TRANS_CTL_OP_PATH_REPLY:
+    case TRANS_CTL_OP_PATH_CFM:
+    case TRANS_CTL_OP_PATH_ECHO_REQ:
+    case TRANS_CTL_OP_PATH_ECHO_REPLY:
+    case TRANS_CTL_OP_DEP_NODE_UPDATE:
+    case TRANS_CTL_OP_PATH_REQ_SOLIC:
+        return bt_mesh_directed_forwarding_ctl_recv(ctl_op, rx, buf);
     }
+#endif
 
     if (IS_ENABLED(CONFIG_BLE_MESH_FRIEND) && !bt_mesh_lpn_established()) {
         switch (ctl_op) {
@@ -1528,7 +1574,7 @@ static int trans_seg(struct net_buf_simple *buf, struct bt_mesh_net_rx *net_rx,
          * eventually be freed up and we'll be able to process
          * this one.
          */
-        BT_WARN("No free slots for new incoming segmented messages");
+        BT_WARN("No free slots for new incoming segmented messages, src: %04x", net_rx->ctx.addr);
         return -ENOMEM;
     }
 
@@ -1751,10 +1797,9 @@ void bt_mesh_trans_init(void)
 {
     int i;
 
-    bt_mesh_sar_init();
-
     for (i = 0; i < ARRAY_SIZE(seg_tx); i++) {
         k_delayed_work_init(&seg_tx[i].rtx_timer, seg_retransmit);
+        bt_mesh_r_mutex_create(&seg_tx[i].lock);
     }
 
     for (i = 0; i < ARRAY_SIZE(seg_rx); i++) {
@@ -1764,7 +1809,6 @@ void bt_mesh_trans_init(void)
         seg_rx[i].buf.data = seg_rx[i].buf.__buf;
     }
 
-    bt_mesh_mutex_create(&seg_tx_lock);
     bt_mesh_mutex_create(&seg_rx_lock);
 }
 
@@ -1779,13 +1823,13 @@ void bt_mesh_trans_deinit(bool erase)
 
     for (i = 0; i < ARRAY_SIZE(seg_tx); i++) {
         k_delayed_work_free(&seg_tx[i].rtx_timer);
+        bt_mesh_r_mutex_free(&seg_tx[i].lock);
     }
 
     for (i = 0; i < ARRAY_SIZE(seg_rx); i++) {
         k_delayed_work_free(&seg_rx[i].ack_timer);
     }
 
-    bt_mesh_mutex_free(&seg_tx_lock);
     bt_mesh_mutex_free(&seg_rx_lock);
 }
 #endif /* CONFIG_BLE_MESH_DEINIT */

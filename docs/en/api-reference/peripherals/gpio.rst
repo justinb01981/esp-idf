@@ -29,6 +29,18 @@ GPIO Summary
         - Analog functions such as ADC/DAC/etc are in use
         :SOC_LP_PERIPHERALS_SUPPORTED: - LP peripherals, such as LP_UART, LP_I2C, are in use
 
+IO Configuration
+----------------
+
+An IO can be used in two ways:
+
+- As a simple GPIO input to read the level on the pin, or as a simple GPIO output to output the desired level on the pin.
+- As a peripheral signal input/output.
+
+IDF peripheral drivers always take care of the necessary IO configurations that need to be applied onto the pins, so that they can be used as the peripheral signal inputs or outputs. This means the users usually only need to be responsible for configuring the IOs as simple inputs or outputs. :cpp:func:`gpio_config` is an all-in-one API that can be used to configure the I/O mode, internal pull-up/pull-down resistors, etc. for pins.
+
+In some applications, an IO pin can serve dual purposes. For example, the IO, which outputs a LEDC PWM signal, can also act as a GPIO input to generate interrupts or GPIO ETM events. Careful handling on the configuration step is necessary for such dual use of IO pins cases. :cpp:func:`gpio_config` is an API that overwrites all the current configurations, so it must be called to set the pin mode to :cpp:enumerator:`gpio_mode_t::GPIO_MODE_INPUT` before calling the LEDC driver API which connects the output signal to the pin. As an alternative, if no other configuration is needed other than making the pin input enabled, :cpp:func:`gpio_input_enable` can be the one to call at any time to achieve the same purpose.
+
 Check Current Configuration of IOs
 ----------------------------------
 
@@ -69,13 +81,13 @@ In addition, if you would like to dump the configurations of all IOs, you can us
 
 ::
 
-    gpio_dump_all_io_configuration(stdout, SOC_GPIO_VALID_GPIO_MASK);
+    gpio_dump_io_configuration(stdout, SOC_GPIO_VALID_GPIO_MASK);
 
 If an IO pin is routed to a peripheral signal through the GPIO matrix, the signal ID printed in the dump information is defined in the :component_file:`soc/{IDF_TARGET_PATH_NAME}/include/soc/gpio_sig_map.h` header file. The word ``**RESERVED**`` indicates the IO is occupied by either SPI flash or PSRAM. It is strongly not recommended to reconfigure them for other application purposes.
 
 Do not rely on the default configurations values in the Technical Reference Manual, because it may be changed in the bootloader or application startup code before app_main.
 
-.. only:: esp32c3 or esp32c6 or esp32h2 or esp32p4 or esp32s2 or esp32s3 or esp32c5
+.. only:: esp32c3 or esp32c6 or esp32h2 or esp32p4 or esp32s2 or esp32s3 or esp32c5 or esp32c61
 
     Configure USB PHY Pins to GPIO
     -------------------------------
@@ -87,8 +99,8 @@ Do not rely on the default configurations values in the Technical Reference Manu
         gpio_config_t usb_phy_conf = {
             .pin_bit_mask = (1ULL << USB_PHY_DP_PIN) | (1ULL << USB_PHY_DM_PIN),
             .mode = GPIO_MODE_INPUT_OUTPUT,
-            .pull_up_en = 0,
-            .pull_down_en = 0,
+            .pull_up_en = GPIO_PULLUP_DISABLE,
+            .pull_down_en = GPIO_PULLDOWN_DISABLE,
             .intr_type = GPIO_INTR_DISABLE,
         };
         gpio_config(&usb_phy_conf);
@@ -145,7 +157,11 @@ Do not rely on the default configurations values in the Technical Reference Manu
 Application Example
 -------------------
 
-* GPIO output and input interrupt example: :example:`peripherals/gpio/generic_gpio`.
+.. list::
+
+    * :example:`peripherals/gpio/generic_gpio` demonstrates how to configure GPIO to generate pulses and use it with interruption.
+    :esp32s2: * :example:`peripherals/gpio/matrix_keyboard` demonstrates how to drive a common matrix keyboard using the dedicated GPIO APIs, including manipulating the level on a group of GPIOs, triggering edge interrupt, and reading level on a group of GPIOs.
+
 
 API Reference - Normal GPIO
 ---------------------------

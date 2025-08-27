@@ -1,11 +1,12 @@
 /*
- * SPDX-FileCopyrightText: 2015-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2015-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
 
 #include <string.h>
 #include <stdbool.h>
+#include <sys/param.h>
 #include "esp_log.h"
 #include "esp_private/log_util.h"
 
@@ -37,13 +38,21 @@ static void log_buffer_char_line(uintptr_t orig_buff, const void *ptr_line, char
 static void log_buffer_hexdump_line(uintptr_t orig_buff, const void *ptr_line, char *output_str, int buff_len);
 static void print_buffer(const char *tag, const void *buffer, uint16_t buff_len, esp_log_level_t log_level, char *output_str, print_line_t print_line_func);
 
+__attribute__((unused)) const char __ESP_BUFFER_HEX_FORMAT__[] = "__ESP_BUFFER_HEX_FORMAT__ len %d, array %s, address %p";
+__attribute__((unused)) const char __ESP_BUFFER_CHAR_FORMAT__[] = "__ESP_BUFFER_CHAR_FORMAT__ len %d, array %s, address %p";
+__attribute__((unused)) const char __ESP_BUFFER_HEXDUMP_FORMAT__[] = "__ESP_BUFFER_HEXDUMP_FORMAT__ len %d, array %s, address %p";
+
 void esp_log_buffer_hex_internal(const char *tag, const void *buffer, uint16_t buff_len, esp_log_level_t log_level)
 {
     // I (954) log_example: 54 68 65 20 77 61 79 20 74 6f 20 67 65 74 20 73
     // I (962) log_example: 74 61 72 74 65 64 20 69 73 20 74 6f 20 71 75 69
     //                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+#if ESP_LOG_MODE_BINARY_EN
+    esp_log(ESP_LOG_CONFIG_INIT(log_level | ESP_LOG_CONFIGS_DEFAULT), tag, __ESP_BUFFER_HEX_FORMAT__ ESP_LOG_ARGS(buff_len, (const char *)buffer, (void *)buffer));
+#else
     char output_str[3 * BYTES_PER_LINE];
     print_buffer(tag, buffer, buff_len, log_level, output_str, log_buffer_hex_line);
+#endif
 }
 
 void esp_log_buffer_char_internal(const char *tag, const void *buffer, uint16_t buff_len, esp_log_level_t log_level)
@@ -51,8 +60,12 @@ void esp_log_buffer_char_internal(const char *tag, const void *buffer, uint16_t 
     // I (980) log_example: The way to get s
     // I (985) log_example: tarted is to qui
     //                      ^^^^^^^^^^^^^^^^^
+#if ESP_LOG_MODE_BINARY_EN
+    esp_log(ESP_LOG_CONFIG_INIT(log_level | ESP_LOG_CONFIGS_DEFAULT), tag, __ESP_BUFFER_CHAR_FORMAT__ ESP_LOG_ARGS(buff_len, (const char *)buffer, (void *)buffer));
+#else
     char output_str[BYTES_PER_LINE + 1];
     print_buffer(tag, buffer, buff_len, log_level, output_str, log_buffer_char_line);
+#endif
 }
 
 void esp_log_buffer_hexdump_internal(const char *tag, const void *buffer, uint16_t buff_len, esp_log_level_t log_level)
@@ -60,11 +73,15 @@ void esp_log_buffer_hexdump_internal(const char *tag, const void *buffer, uint16
     // I (1013) log_example: 0x3ffb5bc0   54 68 65 20 77 61 79 20  74 6f 20 67 65 74 20 73  |The way to get s|
     // I (1024) log_example: 0x3ffb5bd0   74 61 72 74 65 64 20 69  73 20 74 6f 20 71 75 69  |tarted is to qui|
     //                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+#if ESP_LOG_MODE_BINARY_EN
+    esp_log(ESP_LOG_CONFIG_INIT(log_level | ESP_LOG_CONFIGS_DEFAULT), tag, __ESP_BUFFER_HEXDUMP_FORMAT__ ESP_LOG_ARGS(buff_len, (const char *)buffer, (void *)buffer));
+#else
     char output_str[(2 + sizeof(void *) * 2) + 3 + (BYTES_PER_LINE * 3) + 2 + (1 + BYTES_PER_LINE + 1) + 1];
     print_buffer(tag, buffer, buff_len, log_level, output_str, log_buffer_hexdump_line);
+#endif
 }
 
-static void print_buffer(const char *tag, const void *buffer, uint16_t buff_len, esp_log_level_t log_level, char *output_str, print_line_t print_line_func)
+__attribute__((unused)) static void print_buffer(const char *tag, const void *buffer, uint16_t buff_len, esp_log_level_t log_level, char *output_str, print_line_t print_line_func)
 {
     if (buff_len == 0) {
         return;
@@ -73,7 +90,7 @@ static void print_buffer(const char *tag, const void *buffer, uint16_t buff_len,
 
     do {
         const char *ptr_line = buffer;
-        int bytes_cur_line = (buff_len > BYTES_PER_LINE) ? BYTES_PER_LINE : buff_len;
+        int bytes_cur_line = MIN(BYTES_PER_LINE, buff_len);
         if (!esp_ptr_byte_accessible(buffer)) {
             //use memcpy to get around alignment issue
             memcpy(temp_buffer, buffer, (bytes_cur_line + 3) / 4 * 4);
@@ -88,18 +105,20 @@ static void print_buffer(const char *tag, const void *buffer, uint16_t buff_len,
     } while (buff_len);
 }
 
-static void log_buffer_hex_line(uintptr_t orig_buff, const void *ptr_line, char *output_str, int buff_len)
+__attribute__((unused)) static void log_buffer_hex_line(uintptr_t orig_buff, const void *ptr_line, char *output_str, int buff_len)
 {
     (void) orig_buff;
     const unsigned char *ptr = (unsigned char *)ptr_line;
-    for (int i = 0; i < buff_len; i++) {
+    int i;
+    for (i = 0; i < buff_len - 1; i++) {
         output_str += esp_log_util_cvt_hex(ptr[i], 2, output_str);
         *output_str++ = ' ';
     }
-    *--output_str = 0;
+    output_str += esp_log_util_cvt_hex(ptr[i], 2, output_str);
+    *output_str = '\0';
 }
 
-static void log_buffer_char_line(uintptr_t orig_buff, const void *ptr_line, char *output_str, int buff_len)
+__attribute__((unused)) static void log_buffer_char_line(uintptr_t orig_buff, const void *ptr_line, char *output_str, int buff_len)
 {
     (void) orig_buff;
     const char *ptr = (char *)ptr_line;
@@ -107,7 +126,7 @@ static void log_buffer_char_line(uintptr_t orig_buff, const void *ptr_line, char
     output_str[buff_len] = 0;
 }
 
-static void log_buffer_hexdump_line(uintptr_t orig_buff, const void *ptr_line, char *output_str, int buff_len)
+__attribute__((unused)) static void log_buffer_hexdump_line(uintptr_t orig_buff, const void *ptr_line, char *output_str, int buff_len)
 {
     const unsigned char *ptr = (unsigned char *)ptr_line;
     *output_str++ = '0';

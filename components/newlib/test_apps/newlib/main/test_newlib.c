@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2022-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2022-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Unlicense OR CC0-1.0
  */
@@ -10,7 +10,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <signal.h>
 #include <sys/time.h>
+#include <wchar.h>
+#include <unistd.h>
+#include <fcntl.h>
 #include "unity.h"
 #include "sdkconfig.h"
 #include "soc/soc.h"
@@ -131,23 +135,25 @@ static bool fn_in_rom(void *fn)
 /* Older chips have newlib nano in rom as well, but this is not linked in due to us now using 64 bit time_t
    and the ROM code was compiled for 32 bit.
  */
-#define PRINTF_NANO_IN_ROM (CONFIG_NEWLIB_NANO_FORMAT && (CONFIG_IDF_TARGET_ESP32C2 || CONFIG_IDF_TARGET_ESP32H2 || CONFIG_IDF_TARGET_ESP32P4))
+#define PRINTF_NANO_IN_ROM (CONFIG_NEWLIB_NANO_FORMAT && ESP_ROM_HAS_NEWLIB_NANO_FORMAT && !ESP_ROM_HAS_NEWLIB_32BIT_TIME && !ESP_ROM_HAS_NEWLIB_NANO_PRINTF_FLOAT_BUG)
+
 #define SSCANF_NANO_IN_ROM (CONFIG_NEWLIB_NANO_FORMAT && CONFIG_IDF_TARGET_ESP32C2)
 
 TEST_CASE("check if ROM or Flash is used for functions", "[newlib]")
 {
-#if PRINTF_NANO_IN_ROM || (ESP_ROM_HAS_NEWLIB_NORMAL_FORMAT  && !CONFIG_NEWLIB_NANO_FORMAT)
+#if CONFIG_LIBC_NEWLIB && (PRINTF_NANO_IN_ROM || (ESP_ROM_HAS_NEWLIB_NORMAL_FORMAT  && !CONFIG_NEWLIB_NANO_FORMAT))
     TEST_ASSERT(fn_in_rom(vfprintf));
 #else
     TEST_ASSERT_FALSE(fn_in_rom(vfprintf));
-#endif // PRINTF_NANO_IN_ROM || (ESP_ROM_HAS_NEWLIB_NORMAL_FORMAT  && !CONFIG_NEWLIB_NANO_FORMAT)
+#endif // CONFIG_LIBC_NEWLIB && (PRINTF_NANO_IN_ROM || (ESP_ROM_HAS_NEWLIB_NORMAL_FORMAT  && !CONFIG_NEWLIB_NANO_FORMAT))
 
-#if SSCANF_NANO_IN_ROM || (ESP_ROM_HAS_NEWLIB_NORMAL_FORMAT && !CONFIG_NEWLIB_NANO_FORMAT)
+#if CONFIG_LIBC_NEWLIB && (SSCANF_NANO_IN_ROM || (ESP_ROM_HAS_NEWLIB_NORMAL_FORMAT && !CONFIG_NEWLIB_NANO_FORMAT))
     TEST_ASSERT(fn_in_rom(sscanf));
 #else
     TEST_ASSERT_FALSE(fn_in_rom(sscanf));
-#endif //  SSCANF_NANO_IN_ROM || (ESP_ROM_HAS_NEWLIB_NORMAL_FORMAT && !CONFIG_NEWLIB_NANO_FORMAT)
+#endif // CONFIG_LIBC_NEWLIB && (SSCANF_NANO_IN_ROM || (ESP_ROM_HAS_NEWLIB_NORMAL_FORMAT && !CONFIG_NEWLIB_NANO_FORMAT))
 
+#if CONFIG_LIBC_NEWLIB
 #if defined(CONFIG_IDF_TARGET_ESP32)
 
 #if defined(CONFIG_SPIRAM_CACHE_WORKAROUND)
@@ -162,10 +168,15 @@ TEST_CASE("check if ROM or Flash is used for functions", "[newlib]")
     /* S2 do not have these in ROM */
     TEST_ASSERT_FALSE(fn_in_rom(atoi));
     TEST_ASSERT_FALSE(fn_in_rom(strtol));
-#else
+#else // defined(CONFIG_IDF_TARGET_ESP32)
     TEST_ASSERT(fn_in_rom(atoi));
     TEST_ASSERT(fn_in_rom(strtol));
 #endif // defined(CONFIG_IDF_TARGET_ESP32)
+#else // CONFIG_LIBC_NEWLIB
+    /* picolobc uses it's own implementation without using struct reent */
+    TEST_ASSERT_FALSE(fn_in_rom(atoi));
+    TEST_ASSERT_FALSE(fn_in_rom(strtol));
+#endif // CONFIG_LIBC_NEWLIB
 }
 
 #ifndef CONFIG_NEWLIB_NANO_FORMAT
@@ -186,6 +197,112 @@ TEST_CASE("test 64bit int formats", "[newlib]")
     TEST_ASSERT_EQUAL(val, sval);
 }
 #else // CONFIG_NEWLIB_NANO_FORMAT
+
+#if CONFIG_SPIRAM_CACHE_WORKAROUND
+static bool fn_in_iram(void *fn)
+{
+    const uintptr_t fnaddr = (int)fn;
+    return (fnaddr >= SOC_IRAM_LOW && fnaddr < SOC_IRAM_HIGH);
+}
+
+TEST_CASE("Libc_nano in IRAM", "[newlib_nano]")
+{
+    TEST_ASSERT_TRUE(fn_in_iram(itoa));
+    TEST_ASSERT_TRUE(fn_in_iram(memcmp));
+    TEST_ASSERT_TRUE(fn_in_iram(memcpy));
+    TEST_ASSERT_TRUE(fn_in_iram(memset));
+    TEST_ASSERT_TRUE(fn_in_iram(strcat));
+    TEST_ASSERT_TRUE(fn_in_iram(strcmp));
+    TEST_ASSERT_TRUE(fn_in_iram(strlen));
+    TEST_ASSERT_TRUE(fn_in_iram(longjmp));
+    TEST_ASSERT_TRUE(fn_in_iram(abs));
+    TEST_ASSERT_TRUE(fn_in_iram(div));
+    TEST_ASSERT_TRUE(fn_in_iram(labs));
+    TEST_ASSERT_TRUE(fn_in_iram(ldiv));
+    TEST_ASSERT_TRUE(fn_in_iram(__fpclassifyd));
+    TEST_ASSERT_TRUE(fn_in_iram(nanf));
+    TEST_ASSERT_TRUE(fn_in_iram(utoa));
+    TEST_ASSERT_TRUE(fn_in_iram(atoi));
+    TEST_ASSERT_TRUE(fn_in_iram(atol));
+    TEST_ASSERT_TRUE(fn_in_iram(strtol));
+    TEST_ASSERT_TRUE(fn_in_iram(strtoul));
+    TEST_ASSERT_TRUE(fn_in_iram(wcrtomb));
+    TEST_ASSERT_TRUE(fn_in_iram(_fwrite_r));
+    TEST_ASSERT_TRUE(fn_in_iram(__swbuf_r));
+    TEST_ASSERT_TRUE(fn_in_iram(fputwc));
+    TEST_ASSERT_TRUE(fn_in_iram(_wctomb_r));
+    TEST_ASSERT_TRUE(fn_in_iram(ungetc));
+    TEST_ASSERT_TRUE(fn_in_iram(fflush));
+    TEST_ASSERT_TRUE(fn_in_iram(asctime));
+    TEST_ASSERT_TRUE(fn_in_iram(asctime_r));
+    TEST_ASSERT_TRUE(fn_in_iram(ctime));
+    TEST_ASSERT_TRUE(fn_in_iram(ctime_r));
+    TEST_ASSERT_TRUE(fn_in_iram(localtime));
+    TEST_ASSERT_TRUE(fn_in_iram(gmtime));
+    TEST_ASSERT_TRUE(fn_in_iram(gmtime_r));
+    TEST_ASSERT_TRUE(fn_in_iram(strftime));
+    TEST_ASSERT_TRUE(fn_in_iram(mktime));
+    TEST_ASSERT_TRUE(fn_in_iram(_tzset_r));
+    TEST_ASSERT_TRUE(fn_in_iram(time));
+    TEST_ASSERT_TRUE(fn_in_iram(strptime));
+    TEST_ASSERT_TRUE(fn_in_iram(toupper));
+    TEST_ASSERT_TRUE(fn_in_iram(tolower));
+    TEST_ASSERT_TRUE(fn_in_iram(toascii));
+    TEST_ASSERT_TRUE(fn_in_iram(strupr));
+    TEST_ASSERT_TRUE(fn_in_iram(bzero));
+    TEST_ASSERT_TRUE(fn_in_iram(isalnum));
+    TEST_ASSERT_TRUE(fn_in_iram(isalpha));
+    TEST_ASSERT_TRUE(fn_in_iram(isascii));
+    TEST_ASSERT_TRUE(fn_in_iram(isblank));
+    TEST_ASSERT_TRUE(fn_in_iram(iscntrl));
+    TEST_ASSERT_TRUE(fn_in_iram(isdigit));
+    TEST_ASSERT_TRUE(fn_in_iram(isgraph));
+    TEST_ASSERT_TRUE(fn_in_iram(islower));
+    TEST_ASSERT_TRUE(fn_in_iram(isprint));
+    TEST_ASSERT_TRUE(fn_in_iram(ispunct));
+    TEST_ASSERT_TRUE(fn_in_iram(isspace));
+    TEST_ASSERT_TRUE(fn_in_iram(isupper));
+    TEST_ASSERT_TRUE(fn_in_iram(memccpy));
+    TEST_ASSERT_TRUE(fn_in_iram(memchr));
+    TEST_ASSERT_TRUE(fn_in_iram(memmove));
+    TEST_ASSERT_TRUE(fn_in_iram(memrchr));
+    TEST_ASSERT_TRUE(fn_in_iram(strcasecmp));
+    TEST_ASSERT_TRUE(fn_in_iram(strcasestr));
+    TEST_ASSERT_TRUE(fn_in_iram(strchr));
+    TEST_ASSERT_TRUE(fn_in_iram(strcoll));
+    TEST_ASSERT_TRUE(fn_in_iram(strcpy));
+    TEST_ASSERT_TRUE(fn_in_iram(strcspn));
+    TEST_ASSERT_TRUE(fn_in_iram(strdup));
+    TEST_ASSERT_TRUE(fn_in_iram(_strdup_r));
+    TEST_ASSERT_TRUE(fn_in_iram(strlcat));
+    TEST_ASSERT_TRUE(fn_in_iram(strlcpy));
+    TEST_ASSERT_TRUE(fn_in_iram(strlwr));
+    TEST_ASSERT_TRUE(fn_in_iram(strncasecmp));
+    TEST_ASSERT_TRUE(fn_in_iram(strncat));
+    TEST_ASSERT_TRUE(fn_in_iram(strncmp));
+    TEST_ASSERT_TRUE(fn_in_iram(strncpy));
+    TEST_ASSERT_TRUE(fn_in_iram(strndup));
+    TEST_ASSERT_TRUE(fn_in_iram(_strndup_r));
+    TEST_ASSERT_TRUE(fn_in_iram(strnlen));
+    TEST_ASSERT_TRUE(fn_in_iram(strrchr));
+    TEST_ASSERT_TRUE(fn_in_iram(strsep));
+    TEST_ASSERT_TRUE(fn_in_iram(strspn));
+    TEST_ASSERT_TRUE(fn_in_iram(strstr));
+    TEST_ASSERT_TRUE(fn_in_iram(strtok_r));
+    TEST_ASSERT_TRUE(fn_in_iram(strupr));
+    TEST_ASSERT_TRUE(fn_in_iram(srand));
+    TEST_ASSERT_TRUE(fn_in_iram(rand));
+    TEST_ASSERT_TRUE(fn_in_iram(rand_r));
+    TEST_ASSERT_TRUE(fn_in_iram(_getenv_r));
+    TEST_ASSERT_TRUE(fn_in_iram(isatty));
+    TEST_ASSERT_TRUE(fn_in_iram(fclose));
+    TEST_ASSERT_TRUE(fn_in_iram(creat));
+    TEST_ASSERT_TRUE(fn_in_iram(_fwalk_sglue));
+    TEST_ASSERT_TRUE(fn_in_iram(__sinit));
+    TEST_ASSERT_TRUE(fn_in_iram(raise));
+    TEST_ASSERT_TRUE(fn_in_iram(system));
+}
+#endif // SPIRAM_CACHE_WORKAROUND
 TEST_CASE("test 64bit int formats", "[newlib]")
 {
     char* res = NULL;
@@ -229,4 +346,11 @@ TEST_CASE("newlib: rom and toolchain localtime func gives the same result", "[ne
     sprintf(test_result, "%s (tm_isdst = %d)", buf, tm->tm_isdst);
     printf("%s\n", test_result);
     TEST_ASSERT_EQUAL_STRING("2020-03-12 15:00:00 EDT (tm_isdst = 1)", test_result);
+}
+
+TEST_CASE("newlib: printf float as expected", "[newlib]")
+{
+    const float val = 1.23;
+    int len = printf("test printf float val is %1.2f\n", val);
+    TEST_ASSERT_EQUAL_INT(30, len);
 }

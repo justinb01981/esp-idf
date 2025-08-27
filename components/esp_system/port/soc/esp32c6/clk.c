@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2022-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2022-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -45,9 +45,8 @@
 #include "esp_private/periph_ctrl.h"
 #include "esp_private/esp_clk.h"
 #include "esp_private/esp_pmu.h"
-#include "esp_rom_uart.h"
+#include "esp_rom_serial_output.h"
 #include "esp_rom_sys.h"
-#include "ocode_init.h"
 
 /* Number of cycles to wait from the 32k XTAL oscillator to consider it running.
  * Larger values increase startup delay. Smaller values may cause false positive
@@ -58,17 +57,26 @@
 #define MHZ (1000000)
 
 static void select_rtc_slow_clk(soc_rtc_slow_clk_src_t rtc_slow_clk_src);
+static __attribute__((unused)) void recalib_bbpll(void);
 
 static const char *TAG = "clk";
+
+void esp_rtc_init(void)
+{
+#if CONFIG_ESP_SYSTEM_BBPLL_RECALIB
+    // In earlier version of ESP-IDF, the PLL provided by bootloader is not stable enough.
+    // Do calibration again here so that we can use better clock for the timing tuning.
+    recalib_bbpll();
+#endif
+
+#if !CONFIG_IDF_ENV_FPGA
+    pmu_init();
+#endif
+}
 
 __attribute__((weak)) void esp_clk_init(void)
 {
 #if !CONFIG_IDF_ENV_FPGA
-    pmu_init();
-    if (esp_rom_get_reset_reason(0) == RESET_REASON_CHIP_POWER_ON) {
-        esp_ocode_calib_init();
-    }
-
     assert(rtc_clk_xtal_freq_get() == SOC_XTAL_FREQ_40M);
 
     rtc_clk_8m_enable(true);
@@ -90,12 +98,11 @@ __attribute__((weak)) void esp_clk_init(void)
     wdt_hal_write_protect_enable(&rtc_wdt_ctx);
 #endif
 
+    modem_clock_deselect_all_module_lp_clock_source();
 #if defined(CONFIG_RTC_CLK_SRC_EXT_CRYS)
     select_rtc_slow_clk(SOC_RTC_SLOW_CLK_SRC_XTAL32K);
 #elif defined(CONFIG_RTC_CLK_SRC_EXT_OSC)
     select_rtc_slow_clk(SOC_RTC_SLOW_CLK_SRC_OSC_SLOW);
-#elif defined(CONFIG_RTC_CLK_SRC_INT_RC32K)
-    select_rtc_slow_clk(SOC_RTC_SLOW_CLK_SRC_RC32K);
 #else
     select_rtc_slow_clk(SOC_RTC_SLOW_CLK_SRC_RC_SLOW);
 #endif
@@ -149,13 +156,13 @@ static void select_rtc_slow_clk(soc_rtc_slow_clk_src_t rtc_slow_clk_src)
              * will time out, returning 0.
              */
             ESP_EARLY_LOGD(TAG, "waiting for 32k oscillator to start up");
-            rtc_cal_sel_t cal_sel = 0;
+            soc_clk_freq_calculation_src_t cal_sel = -1;
             if (rtc_slow_clk_src == SOC_RTC_SLOW_CLK_SRC_XTAL32K) {
                 rtc_clk_32k_enable(true);
-                cal_sel = RTC_CAL_32K_XTAL;
+                cal_sel = CLK_CAL_32K_XTAL;
             } else if (rtc_slow_clk_src == SOC_RTC_SLOW_CLK_SRC_OSC_SLOW) {
                 rtc_clk_32k_enable_external();
-                cal_sel = RTC_CAL_32K_OSC_SLOW;
+                cal_sel = CLK_CAL_32K_OSC_SLOW;
             }
             // When SLOW_CLK_CAL_CYCLES is set to 0, clock calibration will not be performed at startup.
             if (SLOW_CLK_CAL_CYCLES > 0) {
@@ -172,12 +179,21 @@ static void select_rtc_slow_clk(soc_rtc_slow_clk_src_t rtc_slow_clk_src)
             rtc_clk_rc32k_enable(true);
         }
         rtc_clk_slow_src_set(rtc_slow_clk_src);
+        // Disable unused clock sources after clock source switching is complete.
+        // Regardless of the clock source selection, the internal 136K clock source will always keep on.
+        if ((rtc_slow_clk_src != SOC_RTC_SLOW_CLK_SRC_XTAL32K) && (rtc_slow_clk_src != SOC_RTC_SLOW_CLK_SRC_OSC_SLOW)) {
+            rtc_clk_32k_enable(false);
+            rtc_clk_32k_disable_external();
+        }
+        if (rtc_slow_clk_src != SOC_RTC_SLOW_CLK_SRC_RC32K) {
+            rtc_clk_rc32k_enable(false);
+        }
 
         if (SLOW_CLK_CAL_CYCLES > 0) {
             /* TODO: 32k XTAL oscillator has some frequency drift at startup.
              * Improve calibration routine to wait until the frequency is stable.
              */
-            cal_val = rtc_clk_cal(RTC_CAL_RTC_MUX, SLOW_CLK_CAL_CYCLES);
+            cal_val = rtc_clk_cal(CLK_CAL_RTC_SLOW, SLOW_CLK_CAL_CYCLES);
         } else {
             const uint64_t cal_dividend = (1ULL << RTC_CLK_CAL_FRACT) * 1000000ULL;
             cal_val = (uint32_t)(cal_dividend / rtc_clk_slow_freq_get_hz());
@@ -206,14 +222,14 @@ __attribute__((weak)) void esp_perip_clk_init(void)
      * precision sleep clock (for example, the BLE needs to use the main XTAL
      * oscillator (40 MHz) to provide the clock during the sleep process in some
      * scenarios), the module needs to switch to the required clock source by
-     * itself. */ //TODO - WIFI-5233
+     * itself. */
     soc_rtc_slow_clk_src_t rtc_slow_clk_src = rtc_clk_slow_src_get();
     modem_clock_lpclk_src_t modem_lpclk_src = (modem_clock_lpclk_src_t)(\
                                                                         (rtc_slow_clk_src == SOC_RTC_SLOW_CLK_SRC_RC_SLOW)  ? MODEM_CLOCK_LPCLK_SRC_RC_SLOW \
                                                                         : (rtc_slow_clk_src == SOC_RTC_SLOW_CLK_SRC_XTAL32K)  ? MODEM_CLOCK_LPCLK_SRC_XTAL32K  \
                                                                         : (rtc_slow_clk_src == SOC_RTC_SLOW_CLK_SRC_RC32K)    ? MODEM_CLOCK_LPCLK_SRC_RC32K    \
                                                                         : (rtc_slow_clk_src == SOC_RTC_SLOW_CLK_SRC_OSC_SLOW) ? MODEM_CLOCK_LPCLK_SRC_EXT32K   \
-                                                                        : SOC_RTC_SLOW_CLK_SRC_RC_SLOW);
+                                                                        : MODEM_CLOCK_LPCLK_SRC_RC_SLOW);
     modem_clock_select_lp_clock_source(PERIPH_WIFI_MODULE, modem_lpclk_src, 0);
 
     soc_reset_reason_t rst_reason = esp_rom_get_reset_reason(0);
@@ -222,7 +238,9 @@ __attribute__((weak)) void esp_perip_clk_init(void)
             && (rst_reason != RESET_REASON_CPU0_JTAG)) {
 #if CONFIG_ESP_CONSOLE_UART_NUM != 0
         uart_ll_enable_bus_clock(UART_NUM_0, false);
+        uart_ll_sclk_disable(&UART0);
 #elif CONFIG_ESP_CONSOLE_UART_NUM != 1
+        uart_ll_sclk_disable(&UART1);
         uart_ll_enable_bus_clock(UART_NUM_1, false);
 #endif
         i2c_ll_enable_bus_clock(0, false);
@@ -231,8 +249,8 @@ __attribute__((weak)) void esp_perip_clk_init(void)
         rmt_ll_enable_group_clock(0, false);
         ledc_ll_enable_clock(&LEDC, false);
         ledc_ll_enable_bus_clock(false);
-        timer_ll_enable_clock(&TIMERG0, 0, false);
-        timer_ll_enable_clock(&TIMERG1, 0, false);
+        timer_ll_enable_clock(0, 0, false);
+        timer_ll_enable_clock(1, 0, false);
         _timer_ll_enable_bus_clock(0, false);
         _timer_ll_enable_bus_clock(1, false);
         twai_ll_enable_clock(0, false);
@@ -250,7 +268,7 @@ __attribute__((weak)) void esp_perip_clk_init(void)
         parlio_ll_tx_enable_clock(&PARL_IO, false);
         parlio_ll_enable_bus_clock(0, false);
         gdma_ll_force_enable_reg_clock(&GDMA, false);
-        gdma_ll_enable_bus_clock(0, false);
+        _gdma_ll_enable_bus_clock(0, false);
 #if CONFIG_APP_BUILD_TYPE_PURE_RAM_APP
         spi_ll_enable_bus_clock(SPI1_HOST, false);
 #endif
@@ -267,11 +285,14 @@ __attribute__((weak)) void esp_perip_clk_init(void)
         periph_ll_disable_clk_set_rst(PERIPH_ASSIST_DEBUG_MODULE);
 #endif
         periph_ll_disable_clk_set_rst(PERIPH_RSA_MODULE);
+#if !CONFIG_SECURE_ENABLE_TEE
+        // NOTE: [ESP-TEE] The TEE is responsible for the AES and SHA peripherals
         periph_ll_disable_clk_set_rst(PERIPH_AES_MODULE);
         periph_ll_disable_clk_set_rst(PERIPH_SHA_MODULE);
-        periph_ll_disable_clk_set_rst(PERIPH_ECC_MODULE);
         periph_ll_disable_clk_set_rst(PERIPH_HMAC_MODULE);
         periph_ll_disable_clk_set_rst(PERIPH_DS_MODULE);
+        periph_ll_disable_clk_set_rst(PERIPH_ECC_MODULE);
+#endif
 
         // TODO: Replace with hal implementation
         REG_CLR_BIT(PCR_CTRL_TICK_CONF_REG, PCR_TICK_ENABLE);
@@ -292,6 +313,7 @@ __attribute__((weak)) void esp_perip_clk_init(void)
     if ((rst_reason == RESET_REASON_CHIP_POWER_ON) || (rst_reason == RESET_REASON_CHIP_BROWN_OUT) \
             || (rst_reason == RESET_REASON_SYS_RTC_WDT) || (rst_reason == RESET_REASON_SYS_SUPER_WDT)) {
         _lp_i2c_ll_enable_bus_clock(0, false);
+        lp_uart_ll_sclk_disable(0);
         _lp_uart_ll_enable_bus_clock(0, false);
         lp_core_ll_enable_bus_clock(false);
         _lp_clkrst_ll_enable_rng_clock(false);
@@ -300,5 +322,23 @@ __attribute__((weak)) void esp_perip_clk_init(void)
         CLEAR_PERI_REG_MASK(LPPERI_CLK_EN_REG, LPPERI_LP_ANA_I2C_CK_EN);
         CLEAR_PERI_REG_MASK(LPPERI_CLK_EN_REG, LPPERI_LP_IO_CK_EN);
         WRITE_PERI_REG(LP_CLKRST_LP_CLK_PO_EN_REG, 0);
+    }
+}
+
+// Workaround for bootloader not calibrated well issue.
+// Placed in IRAM because disabling BBPLL may influence the cache.
+static void IRAM_ATTR NOINLINE_ATTR recalib_bbpll(void)
+{
+    rtc_cpu_freq_config_t old_config;
+    rtc_clk_cpu_freq_get_config(&old_config);
+
+    // There are two paths we arrive here: 1. CPU reset. 2. Other reset reasons.
+    // - For other reasons, the bootloader will set CPU source to BBPLL and enable it. But there are calibration issues.
+    //   Turn off the BBPLL and do calibration again to fix the issue.
+    // - For CPU reset, the CPU source will be set to XTAL, while the BBPLL is kept to meet USB Serial JTAG's
+    //   requirements. In this case, we don't touch BBPLL to avoid USJ disconnection.
+    if (old_config.source == SOC_CPU_CLK_SRC_PLL) {
+        rtc_clk_cpu_freq_set_xtal();
+        rtc_clk_cpu_freq_set_config(&old_config);
     }
 }

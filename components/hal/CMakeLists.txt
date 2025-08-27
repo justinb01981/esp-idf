@@ -1,4 +1,5 @@
 idf_build_get_property(target IDF_TARGET)
+idf_build_get_property(esp_tee_build ESP_TEE_BUILD)
 
 set(srcs "hal_utils.c")
 set(includes "platform_port/include")
@@ -6,12 +7,6 @@ set(includes "platform_port/include")
 # target specific include must be added before the generic one
 # because of the "include_next" directive used by the efuse_hal.h
 list(APPEND includes "${target}/include")
-
-if(CONFIG_IDF_TARGET_ESP32C5_BETA3_VERSION)
-    list(APPEND includes "${target}/beta3/include")
-elseif(CONFIG_IDF_TARGET_ESP32C5_MP_VERSION)
-    list(APPEND includes "${target}/mp/include")
-endif()
 
 list(APPEND includes "include")
 
@@ -48,9 +43,26 @@ if(NOT CONFIG_APP_BUILD_TYPE_PURE_RAM_APP)
     elseif(NOT ${target} STREQUAL "linux")
         list(APPEND srcs "cache_hal.c")
     endif()
+else()
+    if(CONFIG_SOC_CACHE_INTERNAL_MEM_VIA_L1CACHE)
+        list(APPEND srcs "cache_hal.c")
+    endif()
 endif()
 
-if(NOT BOOTLOADER_BUILD)
+if(esp_tee_build)
+    list(APPEND srcs "apm_hal.c"
+                     "brownout_hal.c"
+                     "wdt_hal_iram.c"
+                     "aes_hal.c"
+                     "sha_hal.c"
+                     "hmac_hal.c"
+                     "ds_hal.c"
+                     "ecc_hal.c")
+
+    if(CONFIG_SECURE_TEE_EXT_FLASH_MEMPROT_SPI1)
+        list(APPEND srcs "spi_flash_hal.c")
+    endif()
+elseif(NOT BOOTLOADER_BUILD)
     list(APPEND srcs "color_hal.c")
 
     if(NOT CONFIG_APP_BUILD_TYPE_PURE_RAM_APP)
@@ -94,8 +106,16 @@ if(NOT BOOTLOADER_BUILD)
         list(APPEND srcs "i2c_hal.c" "i2c_hal_iram.c")
     endif()
 
+    if(CONFIG_SOC_I3C_MASTER_SUPPORTED)
+        list(APPEND srcs "i3c_master_hal.c")
+    endif()
+
     if(CONFIG_SOC_ISP_SUPPORTED)
         list(APPEND srcs "isp_hal.c")
+    endif()
+
+    if(CONFIG_SOC_LP_I2S_SUPPORTED)
+        list(APPEND srcs "lp_i2s_hal.c")
     endif()
 
     if(CONFIG_SOC_RMT_SUPPORTED)
@@ -110,8 +130,16 @@ if(NOT BOOTLOADER_BUILD)
         list(APPEND srcs "mcpwm_hal.c")
     endif()
 
+    if(CONFIG_SOC_UHCI_SUPPORTED)
+        list(APPEND srcs "uhci_hal.c")
+    endif()
+
     if(CONFIG_SOC_TWAI_SUPPORTED)
-        list(APPEND srcs "twai_hal.c" "twai_hal_iram.c")
+        if(CONFIG_SOC_TWAI_SUPPORT_FD)
+            list(APPEND srcs "twai_hal_ctufd.c")
+        else()
+            list(APPEND srcs "twai_hal_sja1000.c")
+        endif()
     endif()
 
     if(CONFIG_SOC_GDMA_SUPPORTED)
@@ -218,6 +246,10 @@ if(NOT BOOTLOADER_BUILD)
         list(APPEND srcs "brownout_hal.c")
     endif()
 
+    if(CONFIG_SOC_VBAT_SUPPORTED)
+        list(APPEND srcs "vbat_hal.c")
+    endif()
+
     if(CONFIG_SOC_JPEG_CODEC_SUPPORTED)
         list(APPEND srcs "jpeg_hal.c")
     endif()
@@ -265,8 +297,16 @@ if(NOT BOOTLOADER_BUILD)
         list(APPEND srcs "ds_hal.c")
     endif()
 
+    if(CONFIG_SOC_LCDCAM_CAM_SUPPORTED)
+        list(APPEND srcs "cam_hal.c")
+    endif()
+
     if(CONFIG_SOC_USB_SERIAL_JTAG_SUPPORTED)
         list(APPEND srcs "usb_serial_jtag_hal.c")
+    endif()
+
+    if(CONFIG_SOC_USB_UTMI_PHY_NUM GREATER 0)
+        list(APPEND srcs "usb_utmi_hal.c")
     endif()
 
     if(CONFIG_SOC_USB_OTG_SUPPORTED)
@@ -275,45 +315,41 @@ if(NOT BOOTLOADER_BUILD)
                     "usb_wrap_hal.c")
     endif()
 
-    if(${target} STREQUAL "esp32")
-        list(APPEND srcs
-            "touch_sensor_hal.c"
-            "esp32/touch_sensor_hal.c"
-            "esp32/gpio_hal_workaround.c")
+    if(CONFIG_SOC_TOUCH_SENSOR_SUPPORTED)
+        # Source files for the legacy touch hal driver
+        if(CONFIG_SOC_TOUCH_SENSOR_VERSION LESS 3)
+            list(APPEND srcs "${target}/touch_sensor_hal.c")
+            list(APPEND srcs "touch_sensor_hal.c")
+        endif()
+        # Source files for the new touch hal driver
+        list(APPEND srcs "touch_sens_hal.c")
+    endif()
+
+    if(CONFIG_SOC_TEMP_SENSOR_SUPPORTED)
+        list(APPEND srcs "temperature_sensor_hal.c")
     endif()
 
     if(${target} STREQUAL "esp32s2")
         list(APPEND srcs
-                    "touch_sensor_hal.c"
                     "xt_wdt_hal.c"
-                    "esp32s2/cp_dma_hal.c"
-                    "esp32s2/touch_sensor_hal.c")
+                    "esp32s2/cp_dma_hal.c")
     endif()
 
     if(${target} STREQUAL "esp32s3")
         list(APPEND srcs
-            "touch_sensor_hal.c"
-            "xt_wdt_hal.c"
-            "esp32s3/touch_sensor_hal.c"
-            "esp32s3/rtc_cntl_hal.c")
+            "xt_wdt_hal.c")
     endif()
 
     if(${target} STREQUAL "esp32c3")
         list(APPEND srcs
-              "xt_wdt_hal.c"
-              "esp32c3/rtc_cntl_hal.c")
+            "xt_wdt_hal.c")
     endif()
 
-    if(${target} STREQUAL "esp32c2")
-        list(APPEND srcs
-              "esp32c2/rtc_cntl_hal.c")
+
+    if(EXISTS "${CMAKE_CURRENT_LIST_DIR}/${target}/rtc_cntl_hal.c")
+        list(APPEND srcs "${target}/rtc_cntl_hal.c")
     endif()
 
-    if(${target} STREQUAL "esp32h2")
-        list(REMOVE_ITEM srcs
-                "esp32h2/rtc_cntl_hal.c"
-                )
-    endif()
 endif()
 
 idf_component_register(SRCS ${srcs}

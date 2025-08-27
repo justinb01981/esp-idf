@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2021-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2021-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -16,6 +16,7 @@
 #include "esp_log.h"
 #include "esp_netif.h"
 #include "esp_openthread.h"
+#include "esp_openthread_border_router.h"
 #include "esp_openthread_common_macro.h"
 #include "esp_openthread_lock.h"
 #include "esp_openthread_netif_glue_priv.h"
@@ -33,6 +34,7 @@
 #include "openthread/ip6.h"
 #include "openthread/link.h"
 #include "openthread/message.h"
+#include "openthread/platform/infra_if.h"
 #include "openthread/thread.h"
 
 typedef struct {
@@ -104,9 +106,13 @@ static void process_thread_address(const otIp6AddressInfo *address_info, bool is
         } else {
             ip_event_add_ip6_t add_addr;
             add_addr.addr = addr;
-            // if an address is not mesh local or link local, we set preferred for this address.
-            add_addr.preferred =
-                is_mesh_local_addr(address_info->mAddress) || is_link_local_addr(address_info->mAddress) ? 0 : 1;
+            // Only mark the address as preferred if
+            // it is marked preferred by OpenThread and it is neither a mesh-local nor a link-local address.
+            if (address_info->mPreferred == 0 || is_mesh_local_addr(address_info->mAddress) || is_link_local_addr(address_info->mAddress)) {
+                add_addr.preferred = 0;
+            } else {
+                add_addr.preferred = 1;
+            }
             if (esp_event_post(OPENTHREAD_EVENT, OPENTHREAD_EVENT_GOT_IP6, &add_addr, sizeof(add_addr), 0) != ESP_OK) {
                 ESP_LOGE(OT_PLAT_LOG_TAG, "Failed to post OpenThread got ip6 address event");
             }
@@ -320,7 +326,7 @@ void *esp_openthread_netif_glue_init(const esp_openthread_platform_config_t *con
     otIp6SetAddressCallback(instance, process_thread_address, instance);
     otIp6SetReceiveCallback(instance, process_thread_receive, instance);
     otIp6SetReceiveFilterEnabled(instance, true);
-    otIcmp6SetEchoMode(instance, OT_ICMP6_ECHO_HANDLER_DISABLED);
+    otIcmp6SetEchoMode(instance, OT_ICMP6_ECHO_HANDLER_RLOC_ALOC_ONLY);
 
     s_openthread_netif_glue.event_fd = eventfd(0, 0);
     if (s_openthread_netif_glue.event_fd < 0) {
@@ -380,4 +386,17 @@ esp_err_t esp_openthread_netif_glue_process(otInstance *instance, const esp_open
 esp_netif_t *esp_openthread_get_netif(void)
 {
     return s_openthread_netif;
+}
+
+otError otPlatGetInfraIfLinkLayerAddress(otInstance *aInstance, uint32_t aIfIndex, otPlatInfraIfLinkLayerAddress *aInfraIfLinkLayerAddress)
+{
+    esp_netif_t *backbone_netif = esp_openthread_get_backbone_netif();
+    if (esp_netif_get_netif_impl_index(backbone_netif) != aIfIndex) {
+        ESP_LOGE(OT_PLAT_LOG_TAG, "Failed to get LL address, error: Invalid If index");
+        return OT_ERROR_FAILED;
+    } else {
+        esp_netif_get_mac(backbone_netif, aInfraIfLinkLayerAddress->mAddress);
+        aInfraIfLinkLayerAddress->mLength = 6;
+        return OT_ERROR_NONE;
+    }
 }

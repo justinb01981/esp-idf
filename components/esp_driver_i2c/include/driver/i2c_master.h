@@ -33,15 +33,20 @@ typedef struct {
     size_t trans_queue_depth;             /*!< Depth of internal transfer queue, increase this value can support more transfers pending in the background, only valid in asynchronous transaction. (Typically max_device_num * per_transaction)*/
     struct {
         uint32_t enable_internal_pullup: 1;  /*!< Enable internal pullups. Note: This is not strong enough to pullup buses under high-speed frequency. Recommend proper external pull-up if possible */
+        uint32_t allow_pd:               1;  /*!< If set, the driver will backup/restore the I2C registers before/after entering/exist sleep mode.
+                                              By this approach, the system can power off I2C's power domain.
+                                              This can save power, but at the expense of more RAM being consumed */
     } flags;                              /*!< I2C master config flags */
 } i2c_master_bus_config_t;
+
+#define I2C_DEVICE_ADDRESS_NOT_USED    (0xffff) /*!< Skip carry address bit in driver transmit and receive */
 
 /**
  * @brief I2C device configuration
  */
 typedef struct {
     i2c_addr_bit_len_t dev_addr_length;         /*!< Select the address length of the slave device. */
-    uint16_t device_address;                    /*!< I2C device raw address. (The 7/10 bit address without read/write bit) */
+    uint16_t device_address;                    /*!< I2C device raw address. (The 7/10 bit address without read/write bit). Macro I2C_DEVICE_ADDRESS_NOT_USED (0xFFFF) stands for skip the address config inside driver. */
     uint32_t scl_speed_hz;                      /*!< I2C SCL line frequency. */
     uint32_t scl_wait_us;                      /*!< Timeout value. (unit: us). Please note this value should not be so small that it can handle stretch/disturbance properly. If 0 is set, that means use the default reg value*/
     struct {
@@ -50,10 +55,42 @@ typedef struct {
 } i2c_device_config_t;
 
 /**
+ * @brief Structure representing an I2C operation job
+ *
+ * This structure is used to define individual I2C operations (write or read)
+ * within a sequence of I2C master transactions.
+ */
+typedef struct {
+    i2c_master_command_t command; /**< I2C command indicating the type of operation (START, WRITE, READ, or STOP) */
+    union {
+        /**
+         * @brief Structure for WRITE command
+         *
+         * Used when the `command` is set to `I2C_MASTER_CMD_WRITE`.
+         */
+        struct {
+            bool ack_check;        /**< Whether to enable ACK check during WRITE operation */
+            uint8_t *data;         /**< Pointer to the data to be written */
+            size_t total_bytes;    /**< Total number of bytes to write */
+        } write;
+        /**
+         * @brief Structure for READ command
+         *
+         * Used when the `command` is set to `I2C_MASTER_CMD_READ`.
+         */
+        struct {
+            i2c_ack_value_t ack_value; /**< ACK value to send after the read (ACK or NACK) */
+            uint8_t *data;                    /**< Pointer to the buffer for storing the data read from the bus */
+            size_t total_bytes;               /**< Total number of bytes to read */
+        } read;
+    };
+} i2c_operation_job_t;
+
+/**
  * @brief I2C master transmit buffer information structure
  */
 typedef struct {
-    uint8_t *write_buffer;               /*!< Pointer to buffer to be written. */
+    const uint8_t *write_buffer;         /*!< Pointer to buffer to be written. */
     size_t buffer_size;                  /*!< Size of data to be written. */
 } i2c_master_transmit_multi_buffer_info_t;
 
@@ -216,6 +253,30 @@ esp_err_t i2c_master_receive(i2c_master_dev_handle_t i2c_dev, uint8_t *read_buff
 esp_err_t i2c_master_probe(i2c_master_bus_handle_t bus_handle, uint16_t address, int xfer_timeout_ms);
 
 /**
+ * @brief Execute a series of pre-defined I2C operations.
+ *
+ * This function processes a list of I2C operations, such as start, write, read, and stop,
+ * according to the user-defined `i2c_operation_job_t` array. It performs these operations
+ * sequentially on the specified I2C master device.
+ *
+ * @param[in] i2c_dev           Handle to the I2C master device.
+ * @param[in] i2c_operation     Pointer to an array of user-defined I2C operation jobs.
+ *                              Each job specifies a command and associated parameters.
+ * @param[in] operation_list_num The number of operations in the `i2c_operation` array.
+ * @param[in] xfer_timeout_ms   Timeout for the transaction, in milliseconds.
+ *
+ * @return
+ *  - ESP_OK: Transaction completed successfully.
+ *  - ESP_ERR_INVALID_ARG: One or more arguments are invalid.
+ *  - ESP_ERR_TIMEOUT: Transaction timed out.
+ *  - ESP_FAIL: Other error during transaction.
+ *
+ * @note The `ack_value` field in the READ operation must be set to `I2C_NACK_VAL` if the next
+ *       operation is a STOP command.
+ */
+esp_err_t i2c_master_execute_defined_operations(i2c_master_dev_handle_t i2c_dev, i2c_operation_job_t *i2c_operation, size_t operation_list_num, int xfer_timeout_ms);
+
+/**
  * @brief Register I2C transaction callbacks for a master device
  *
  * @note User can deregister a previously registered callback by calling this function and setting the callback member in the `cbs` structure to NULL.
@@ -245,6 +306,29 @@ esp_err_t i2c_master_register_event_callbacks(i2c_master_dev_handle_t i2c_dev, c
 esp_err_t i2c_master_bus_reset(i2c_master_bus_handle_t bus_handle);
 
 /**
+ * @brief Change the I2C device address at runtime.
+ *
+ * This function updates the device address of an existing I2C device handle.
+ * It is useful for devices that support dynamic address assignment or when
+ * switching communication to a device with a different address on the same bus.
+ *
+ * @param[in] i2c_dev           I2C device handle.
+ * @param[in] new_device_address The new device address.
+ * @param[in] timeout_ms        Timeout for the address change operation, in milliseconds.
+ *
+ * @return
+ *      - ESP_OK: Address successfully changed.
+ *      - ESP_ERR_INVALID_ARG: Invalid arguments (e.g., NULL handle or invalid address).
+ *      - ESP_ERR_TIMEOUT: Operation timed out.
+ *
+ * @note
+ *      - This function does not send commands to the I2C device. It only updates
+ *        the address used in subsequent transactions through the I2C handle.
+ *      - Ensure that the new address is valid and does not conflict with other devices on the bus.
+ */
+esp_err_t i2c_master_device_change_address(i2c_master_dev_handle_t i2c_dev, uint16_t new_device_address, int timeout_ms);
+
+/**
  * @brief Wait for all pending I2C transactions done
  *
  * @param[in] bus_handle I2C bus handle
@@ -256,6 +340,22 @@ esp_err_t i2c_master_bus_reset(i2c_master_bus_handle_t bus_handle);
  *      - ESP_FAIL: Flush transactions failed because of other error
  */
 esp_err_t i2c_master_bus_wait_all_done(i2c_master_bus_handle_t bus_handle, int timeout_ms);
+
+/**
+ * @brief Retrieves the I2C master bus handle for a specified I2C port number.
+ *
+ * This function retrieves the I2C master bus handle for the
+ * given I2C port number. Please make sure the handle has already been initialized, and this
+ * function would simply returns the existing handle. Note that the returned handle still can't be used concurrently
+ *
+ * @param port_num I2C port number for which the handle is to be retrieved.
+ * @param ret_handle Pointer to a variable where the retrieved handle will be stored.
+ * @return
+ *     - ESP_OK: Success. The handle is retrieved successfully.
+ *     - ESP_ERR_INVALID_ARG: Invalid argument, such as invalid port number
+ *     - ESP_ERR_INVALID_STATE: Invalid state, such as the I2C port is not initialized.
+ */
+esp_err_t i2c_master_get_bus_handle(i2c_port_num_t port_num, i2c_master_bus_handle_t *ret_handle);
 
 #ifdef __cplusplus
 }

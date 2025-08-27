@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2021-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2021-2024 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -19,6 +19,9 @@
 extern "C" {
 #endif
 
+// size of the internal buffer to transform the data into a proper format (e.g. data endian)
+#define LCD_I80_IO_FORMAT_BUF_SIZE  32
+
 #define LCD_I80_INTR_ALLOC_FLAGS     ESP_INTR_FLAG_INTRDISABLED
 #define LCD_I80_MEM_ALLOC_CAPS       MALLOC_CAP_DEFAULT
 
@@ -29,6 +32,8 @@ extern "C" {
 #else
 #define LCD_CLOCK_SRC_ATOMIC()
 #endif
+
+#define LCD_DMA_DESCRIPTOR_BUFFER_MAX_SIZE 4095
 
 #if SOC_LCDCAM_SUPPORTED
 
@@ -54,15 +59,6 @@ int lcd_com_register_device(lcd_com_device_type_t device_type, void *device_obj)
  */
 void lcd_com_remove_device(lcd_com_device_type_t device_type, int member_id);
 #endif // SOC_LCDCAM_SUPPORTED
-
-/**
- * @brief Mount data to DMA descriptors
- *
- * @param desc_head Point to the head of DMA descriptor chain
- * @param buffer Data buffer
- * @param len Size of the data buffer, in bytes
- */
-void lcd_com_mount_dma_data(dma_descriptor_t *desc_head, const void *buffer, size_t len);
 
 /**
  * @brief Reverse the bytes in the buffer

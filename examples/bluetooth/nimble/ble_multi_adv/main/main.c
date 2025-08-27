@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2017-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2017-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -104,6 +104,8 @@ ble_multi_adv_set_addr(uint16_t instance)
     if (rc != 0) {
         return rc;
     }
+
+    print_addr(addr.val);
 
     memcpy(&ble_instance_cb[instance].addr, &addr, sizeof(addr));
     return 0;
@@ -302,7 +304,7 @@ ble_multi_advertise(ble_addr_t addr)
 static void
 ble_multi_perform_gatt_proc(ble_addr_t addr)
 {
-    /* GATT procedures like notify, indicate can be perfomed now */
+    /* GATT procedures like notify, indicate can be performed now */
     for (int i = 0; i < BLE_ADV_INSTANCES; i++) {
         if (memcmp(&addr, &ble_instance_cb[i].addr, sizeof(addr)) == 0) {
             if (ble_instance_cb[i].cb) {
@@ -496,9 +498,11 @@ app_main(void)
     rc = gatt_svr_init();
     assert(rc == 0);
 
+#if CONFIG_BT_NIMBLE_GAP_SERVICE
     /* Set the default device name. */
     rc = ble_svc_gap_device_name_set("nimble-multi-adv");
     assert(rc == 0);
+#endif
 
     /* XXX Need to have template for store */
     ble_store_config_init();

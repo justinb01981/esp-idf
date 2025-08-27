@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2021-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2021-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Unlicense OR CC0-1.0
  */
@@ -26,7 +26,7 @@
 #include "esp_avrc_api.h"
 
 /* device name */
-#define LOCAL_DEVICE_NAME    "ESP_SPEAKER"
+static const char local_device_name[] = CONFIG_EXAMPLE_LOCAL_DEVICE_NAME;
 
 /* event for stack up */
 enum {
@@ -47,6 +47,17 @@ static void bt_av_hdl_stack_evt(uint16_t event, void *p_param);
 /*******************************
  * STATIC FUNCTION DEFINITIONS
  ******************************/
+static char *bda2str(uint8_t * bda, char *str, size_t size)
+{
+    if (bda == NULL || str == NULL || size < 18) {
+        return NULL;
+    }
+
+    uint8_t *p = bda;
+    sprintf(str, "%02x:%02x:%02x:%02x:%02x:%02x",
+            p[0], p[1], p[2], p[3], p[4], p[5]);
+    return str;
+}
 
 static void bt_app_dev_cb(esp_bt_dev_cb_event_t event, esp_bt_dev_cb_param_t *param)
 {
@@ -93,12 +104,12 @@ static void bt_app_gap_cb(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *pa
 #if (CONFIG_EXAMPLE_A2DP_SINK_SSP_ENABLED == true)
     /* when Security Simple Pairing user confirmation requested, this event comes */
     case ESP_BT_GAP_CFM_REQ_EVT:
-        ESP_LOGI(BT_AV_TAG, "ESP_BT_GAP_CFM_REQ_EVT Please compare the numeric value: %"PRIu32, param->cfm_req.num_val);
+        ESP_LOGI(BT_AV_TAG, "ESP_BT_GAP_CFM_REQ_EVT Please compare the numeric value: %06"PRIu32, param->cfm_req.num_val);
         esp_bt_gap_ssp_confirm_reply(param->cfm_req.bda, true);
         break;
     /* when Security Simple Pairing passkey notified, this event comes */
     case ESP_BT_GAP_KEY_NOTIF_EVT:
-        ESP_LOGI(BT_AV_TAG, "ESP_BT_GAP_KEY_NOTIF_EVT passkey: %"PRIu32, param->key_notif.passkey);
+        ESP_LOGI(BT_AV_TAG, "ESP_BT_GAP_KEY_NOTIF_EVT passkey: %06"PRIu32, param->key_notif.passkey);
         break;
     /* when Security Simple Pairing passkey requested, this event comes */
     case ESP_BT_GAP_KEY_REQ_EVT:
@@ -108,7 +119,8 @@ static void bt_app_gap_cb(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *pa
 
     /* when GAP mode changed, this event comes */
     case ESP_BT_GAP_MODE_CHG_EVT:
-        ESP_LOGI(BT_AV_TAG, "ESP_BT_GAP_MODE_CHG_EVT mode: %d", param->mode_chg.mode);
+        ESP_LOGI(BT_AV_TAG, "ESP_BT_GAP_MODE_CHG_EVT mode: %d, interval: %.2f ms",
+                 param->mode_chg.mode, param->mode_chg.interval * 0.625);
         break;
     /* when ACL connection completed, this event comes */
     case ESP_BT_GAP_ACL_CONN_CMPL_STAT_EVT:
@@ -137,23 +149,38 @@ static void bt_av_hdl_stack_evt(uint16_t event, void *p_param)
     switch (event) {
     /* when do the stack up, this event comes */
     case BT_APP_EVT_STACK_UP: {
-        esp_bt_gap_set_device_name(LOCAL_DEVICE_NAME);
+        esp_bt_gap_set_device_name(local_device_name);
         esp_bt_dev_register_callback(bt_app_dev_cb);
         esp_bt_gap_register_callback(bt_app_gap_cb);
 
-        assert(esp_avrc_ct_init() == ESP_OK);
         esp_avrc_ct_register_callback(bt_app_rc_ct_cb);
-        assert(esp_avrc_tg_init() == ESP_OK);
+        assert(esp_avrc_ct_init() == ESP_OK);
         esp_avrc_tg_register_callback(bt_app_rc_tg_cb);
+        assert(esp_avrc_tg_init() == ESP_OK);
 
         esp_avrc_rn_evt_cap_mask_t evt_set = {0};
         esp_avrc_rn_evt_bit_mask_operation(ESP_AVRC_BIT_MASK_OP_SET, &evt_set, ESP_AVRC_RN_VOLUME_CHANGE);
         assert(esp_avrc_tg_set_rn_evt_cap(&evt_set) == ESP_OK);
 
-        assert(esp_a2d_sink_init() == ESP_OK);
         esp_a2d_register_callback(&bt_app_a2d_cb);
-        esp_a2d_sink_register_data_callback(bt_app_a2d_data_cb);
+        assert(esp_a2d_sink_init() == ESP_OK);
 
+#if CONFIG_EXAMPLE_A2DP_SINK_USE_EXTERNAL_CODEC == FALSE
+        esp_a2d_sink_register_data_callback(bt_app_a2d_data_cb);
+#else
+        esp_a2d_mcc_t mcc = {0};
+        mcc.type = ESP_A2D_MCT_SBC;
+        mcc.cie.sbc_info.samp_freq = 0xf;
+        mcc.cie.sbc_info.ch_mode = 0xf;
+        mcc.cie.sbc_info.block_len = 0xf;
+        mcc.cie.sbc_info.num_subbands = 0x3;
+        mcc.cie.sbc_info.alloc_mthd = 0x3;
+        mcc.cie.sbc_info.max_bitpool = 250;
+        mcc.cie.sbc_info.min_bitpool = 2;
+        /* register stream end point, only support mSBC currently */
+        esp_a2d_sink_register_stream_endpoint(0, &mcc);
+        esp_a2d_sink_register_audio_data_callback(bt_app_a2d_audio_data_cb);
+#endif
         /* Get the default value of the delay value */
         esp_a2d_sink_get_delay_value();
         /* Get local device name */
@@ -176,6 +203,7 @@ static void bt_av_hdl_stack_evt(uint16_t event, void *p_param)
 
 void app_main(void)
 {
+    char bda_str[18] = {0};
     /* initialize NVS — it is used to store PHY calibration data */
     esp_err_t err = nvs_flash_init();
     if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
@@ -230,6 +258,7 @@ void app_main(void)
     pin_code[3] = '4';
     esp_bt_gap_set_pin(pin_type, 4, pin_code);
 
+    ESP_LOGI(BT_AV_TAG, "Own address:[%s]", bda2str((uint8_t *)esp_bt_dev_get_address(), bda_str, sizeof(bda_str)));
     bt_app_task_start_up();
     /* bluetooth device name, connection mode and profile set up */
     bt_app_work_dispatch(bt_av_hdl_stack_evt, BT_APP_EVT_STACK_UP, NULL, 0, NULL);

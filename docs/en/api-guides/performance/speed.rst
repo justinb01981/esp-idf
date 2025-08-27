@@ -4,7 +4,7 @@ Speed Optimization
 :link_to_translation:`zh_CN:[中文]`
 
 {IDF_TARGET_CONTROLLER_CORE_CONFIG:default="CONFIG_BT_CTRL_PINNED_TO_CORE", esp32="CONFIG_BTDM_CTRL_PINNED_TO_CORE_CHOICE", esp32s3="CONFIG_BT_CTRL_PINNED_TO_CORE_CHOICE"}
-{IDF_TARGET_RF_TYPE:default="Wi-Fi/Bluetooth", esp32s2="Wi-Fi", esp32c6="Wi-Fi/Bluetooth/802.15.4", esp32h2="Bluetooth/802.15.4, esp32c5="Wi-Fi/Bluetooth/802.15.4"}
+{IDF_TARGET_RF_TYPE:default="Wi-Fi/Bluetooth", esp32s2="Wi-Fi", esp32c6="Wi-Fi/Bluetooth/802.15.4", esp32c61="Wi-Fi/Bluetooth", esp32h2="Bluetooth/802.15.4", esp32h21="Bluetooth/802.15.4", esp32h4="Bluetooth/802.15.4", esp32c5="Wi-Fi/Bluetooth/802.15.4"}
 
 Overview
 --------
@@ -87,6 +87,7 @@ The following optimizations improve the execution of nearly all code, including 
     :SOC_CPU_HAS_FPU: - Avoid using floating point arithmetic ``float``. Even though {IDF_TARGET_NAME} has a single precision hardware floating point unit, floating point calculations are always slower than integer calculations. If possible then use fixed point representations, a different method of integer representation, or convert part of the calculation to be integer only before switching to floating point.
     :not SOC_CPU_HAS_FPU: - Avoid using floating point arithmetic ``float``. On {IDF_TARGET_NAME} these calculations are emulated in software and are very slow. If possible, use fixed point representations, a different method of integer representation, or convert part of the calculation to be integer only before switching to floating point.
     - Avoid using double precision floating point arithmetic ``double``. These calculations are emulated in software and are very slow. If possible then use an integer-based representation, or single-precision floating point.
+    :CONFIG_ESP_ROM_HAS_SUBOPTIMAL_NEWLIB_ON_MISALIGNED_MEMORY: - Avoid misaligned 4-byte memory accesses in performance-critical code sections. For potential performance improvements, consider enabling :ref:`CONFIG_LIBC_OPTIMIZED_MISALIGNED_ACCESS`, which requires approximately 190 bytes of IRAM and 870 bytes of flash memory. Note that properly aligned memory operations will always execute at full speed without performance penalties.
 
 
 .. only:: esp32s2 or esp32s3 or esp32p4
@@ -128,7 +129,7 @@ Although standard output is buffered, it is possible for an application to be li
     - Reduce the volume of log output by lowering the app :ref:`CONFIG_LOG_DEFAULT_LEVEL` (the equivalent bootloader setting is :ref:`CONFIG_BOOTLOADER_LOG_LEVEL`). This also reduces the binary size, and saves some CPU time spent on string formatting.
     :not SOC_USB_OTG_SUPPORTED: - Increase the speed of logging output by increasing the :ref:`CONFIG_ESP_CONSOLE_UART_BAUDRATE`.
     :SOC_USB_OTG_SUPPORTED: - Increase the speed of logging output by increasing the :ref:`CONFIG_ESP_CONSOLE_UART_BAUDRATE`. However, if you are using internal USB-CDC, the serial throughput is not dependent on the configured baud rate.
-    - If your application doesn't require dynamic log level changes and you do not need to control logs per module using tags, consider disabling :ref:`CONFIG_LOG_DYNAMIC_LEVEL_CONTROL` and changing :ref:`CONFIG_LOG_TAG_LEVEL_IMPL`. It helps to reduce memory usage and also contributes to speeding up log operations in your application about 10 times.
+    - If your application does not require dynamic log level changes and you do not need to control logs per module using tags, consider disabling :ref:`CONFIG_LOG_DYNAMIC_LEVEL_CONTROL` and changing :ref:`CONFIG_LOG_TAG_LEVEL_IMPL`. It helps to reduce memory usage and also contributes to speeding up log operations in your application about 10 times.
 
 Not Recommended
 ^^^^^^^^^^^^^^^
@@ -155,6 +156,8 @@ The following changes increase the speed of a chosen part of the firmware applic
 
     -  Jump table optimizations can be re-enabled for individual source files that do not need to be placed in IRAM. For hot paths in large ``switch cases``, this improves performance. For instructions on how to add the ``-fjump-tables`` and ``-ftree-switch-conversion`` options when compiling individual source files, see :ref:`component_build_control`
 
+    - Many ESP-IDF components and drivers provide configuration options to place performance-critical functions in IRAM for reduced latency and improved speed. These options typically have names like ``CONFIG_*_IN_IRAM``, ``CONFIG_*_ISR_IN_IRAM``, or ``CONFIG_*_IRAM_OPT``. Some examples are :ref:`CONFIG_FREERTOS_IN_IRAM` for FreeRTOS functions, :ref:`CONFIG_ESP_WIFI_IRAM_OPT` for Wi-Fi operations, :ref:`CONFIG_UART_ISR_IN_IRAM` for UART interrupt handling, and :ref:`CONFIG_SPI_MASTER_ISR_IN_IRAM` for SPI operations. These options trade IRAM usage for speed, so they should be used selectively based on your application's performance requirements and available IRAM space.
+
 Improving Startup Time
 ----------------------
 
@@ -174,7 +177,7 @@ The example project :example:`system/startup_time` is pre-configured to optimize
 Task Priorities
 ---------------
 
-As ESP-IDF FreeRTOS is a real-time operating system, it is necessary to ensure that high-throughput or low-slatency tasks are granted a high priority in order to run immediately. Priority is set when calling :cpp:func:`xTaskCreate` or :cpp:func:`xTaskCreatePinnedToCore` and can be changed at runtime by calling :cpp:func:`vTaskPrioritySet`.
+As ESP-IDF FreeRTOS is a real-time operating system, it is necessary to ensure that high-throughput or low-latency tasks are granted a high priority in order to run immediately. Priority is set when calling :cpp:func:`xTaskCreate` or :cpp:func:`xTaskCreatePinnedToCore` and can be changed at runtime by calling :cpp:func:`vTaskPrioritySet`.
 
 It is also necessary to ensure that tasks yield CPU (by calling :cpp:func:`vTaskDelay`, ``sleep()``, or by blocking on semaphores, queues, task notifications, etc) in order to not starve lower-priority tasks and cause problems for the overall system. The :ref:`task-watchdog-timer` provides a mechanism to automatically detect if task starvation happens. However, note that a TWDT timeout does not always indicate a problem, because sometimes the correct operation of the firmware requires some long-running computation. In these cases, tweaking the TWDT timeout or even disabling the TWDT may be necessary.
 
@@ -232,7 +235,7 @@ Common priorities are:
 
         - The Ethernet driver creates a task for the MAC to receive Ethernet frames. If using the default config ``ETH_MAC_DEFAULT_CONFIG`` then the priority is medium-high (15) and the task is not pinned to any core. These settings can be changed by passing a custom :cpp:class:`eth_mac_config_t` struct when initializing the Ethernet MAC.
         - If using the :doc:`/api-reference/protocols/mqtt` component, it creates a task with default priority 5 (:ref:`configurable <CONFIG_MQTT_TASK_PRIORITY>`, depending on :ref:`CONFIG_MQTT_USE_CUSTOM_CONFIG`) and not pinned to any core (:ref:`configurable <CONFIG_MQTT_TASK_CORE_SELECTION_ENABLED>`).
-        - To see what is the task priority for ``mDNS`` service, please check `Performance Optimization <https://espressif.github.io/esp-protocols/mdns/en/index.html#performance-optimization>`__.
+        - To see what is the task priority for ``mDNS`` service, please check `Performance Optimization <https://docs.espressif.com/projects/esp-protocols/mdns/docs/latest/en/index.html#performance-optimization>`__.
 
 
 Choosing Task Priorities of the Application
@@ -299,15 +302,20 @@ Improving Network Speed
 Improving I/O Performance
 -------------------------
 
-Using standard C library functions like ``fread`` and ``fwrite`` instead of platform specific unbuffered syscalls such as ``read`` and ``write`` can be slow.These functions are designed to be portable, so they are not necessarily optimized for speed, have a certain overhead and are buffered.
+Using standard C library functions like ``fread`` and ``fwrite`` instead of platform-specific unbuffered syscalls such as ``read`` and ``write``, may result in slower performance.
 
-:doc:`/api-reference/storage/fatfs` specific information and tips:
+The ``fread`` and ``fwrite`` functions are designed for portability rather than speed, introducing some overhead due to their buffered nature. Check the example :example:`storage/fatfs/getting_started` to see how to use these two functions.
+
+In contrast, the ``read`` and ``write`` functions are standard POSIX APIs that can be used directly when working with FatFs through VFS, with ESP-IDF handling the underlying implementation. Check the example :example:`storage/fatfs/fs_operations` to see how to use the two functions.
+
+Additional tips are provided below, and further details can be found in :doc:`/api-reference/storage/fatfs`.
 
 .. list::
 
-    - Maximum size of the R/W request = FatFS cluster size (allocation unit size).
-    - Use ``read`` and ``write`` instead of ``fread`` and ``fwrite``.
-    - To increase speed of buffered reading functions like ``fread`` and ``fgets``, you can increase a size of the file buffer (Newlib's default is 128 bytes) to a higher number like 4096, 8192 or 16384. This can be done locally via the ``setvbuf`` function used on a certain file pointer or globally applied to all files via modifying :ref:`CONFIG_FATFS_VFS_FSTAT_BLKSIZE`.
+    - The maximum size of a read/write request is equal to the FatFS cluster size (allocation unit size).
+    - For better performance, prefer using ``read`` and ``write`` over ``fread`` and ``fwrite``.
+    - To improve the speed of buffered reading functions like ``fread`` and ``fgets``, consider increasing the file buffer size. The default size in Newlib is 128 bytes, but you can increase it to 4096, 8192, or 16384 bytes. This can be made locally using the ``setvbuf`` function for a specific file pointer or globally by modifying the ``CONFIG_FATFS_VFS_FSTAT_BLKSIZE`` setting.
 
         .. note::
-            Setting a bigger buffer size also increases the heap memory usage.
+
+            Increasing the buffer size will also increase heap memory usage.

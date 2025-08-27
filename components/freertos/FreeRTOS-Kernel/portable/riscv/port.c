@@ -6,7 +6,7 @@
  *
  * SPDX-License-Identifier: MIT
  *
- * SPDX-FileContributor: 2023-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileContributor: 2023-2025 Espressif Systems (Shanghai) CO LTD
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy of
  * this software and associated documentation files (the "Software"), to deal in
@@ -56,9 +56,6 @@
 #include "portmacro.h"
 #include "port_systick.h"
 #include "esp_memory_utils.h"
-#if CONFIG_IDF_TARGET_ESP32P4
-#include "soc/hp_system_reg.h"
-#endif
 
 #if SOC_CPU_HAS_HWLOOP
 #include "riscv/csr.h"
@@ -139,7 +136,11 @@ BaseType_t xPortStartScheduler(void)
 #if SOC_CPU_HAS_PIE
     /* Similarly, disable PIE */
     rv_utils_disable_pie();
-#endif /* SOC_CPU_HAS_FPU */
+#endif /* SOC_CPU_HAS_PIE */
+
+#if SOC_CPU_HAS_DSP
+    rv_utils_disable_dsp();
+#endif /* SOC_CPU_HAS_DSP */
 
 #if SOC_CPU_HAS_HWLOOP
     /* Initialize the Hardware loop feature */
@@ -297,15 +298,19 @@ static void vPortCleanUpCoprocArea(void *pvTCB)
     const UBaseType_t bottomstack = (UBaseType_t) task->pxDummy8;
     RvCoprocSaveArea* sa = pxRetrieveCoprocSaveAreaFromStackPointer(bottomstack);
 
-    /* If the Task used any coprocessor, check if it is the actual owner of any.
-     * If yes, reset the owner. */
-    if (sa->sa_enable != 0) {
+    /* If the Task ever saved the original stack pointer, restore it before returning */
+    if (sa->sa_allocator != 0) {
         /* Restore the original lowest address of the stack in the TCB */
         task->pxDummy6 = sa->sa_tcbstack;
 
         /* Get the core the task is pinned on */
         #if ( configNUM_CORES > 1 )
             const BaseType_t coreID = task->xDummyCoreID;
+            /* If the task is not pinned on any core, it didn't use any coprocessor than need to be freed (FPU or PIE).
+             * If it used the HWLP coprocessor, it has nothing to clear since there is no "owner" for it. */
+            if (coreID == tskNO_AFFINITY) {
+                return;
+            }
         #else /* configNUM_CORES > 1 */
             const BaseType_t coreID = 0;
         #endif /* configNUM_CORES > 1 */
@@ -462,7 +467,13 @@ BaseType_t xPortInIsrContext(void)
 #endif /* (configNUM_CORES > 1) */
 }
 
-BaseType_t IRAM_ATTR xPortInterruptedFromISRContext(void)
+void vPortAssertIfInISR(void)
+{
+    /* Assert if the interrupt nesting count is > 0 */
+    configASSERT(xPortInIsrContext() == 0);
+}
+
+BaseType_t xPortInterruptedFromISRContext(void)
 {
     /* Return the interrupt nesting counter for this core */
     return port_uxInterruptNesting[xPortGetCoreID()];
@@ -470,38 +481,20 @@ BaseType_t IRAM_ATTR xPortInterruptedFromISRContext(void)
 
 UBaseType_t xPortSetInterruptMaskFromISR(void)
 {
-    UBaseType_t prev_int_level = 0;
-
+    UBaseType_t prev_int_level = 0, int_level = 0;
 #if !SOC_INT_CLIC_SUPPORTED
-    unsigned old_mstatus = RV_CLEAR_CSR(mstatus, MSTATUS_MIE);
-    prev_int_level = REG_READ(INTERRUPT_CURRENT_CORE_INT_THRESH_REG);
-    REG_WRITE(INTERRUPT_CURRENT_CORE_INT_THRESH_REG, RVHAL_EXCM_LEVEL);
-    RV_SET_CSR(mstatus, old_mstatus & MSTATUS_MIE);
+    int_level = RVHAL_EXCM_LEVEL;
 #else
-    /* When CLIC is supported, all interrupt priority levels less than or equal to the threshold level are masked. */
-    prev_int_level = rv_utils_set_intlevel_regval(RVHAL_EXCM_LEVEL_CLIC);
-#endif /* !SOC_INIT_CLIC_SUPPORTED */
-    /**
-     * In theory, this function should not return immediately as there is a
-     * delay between the moment we mask the interrupt threshold register and
-     * the moment a potential lower-priority interrupt is triggered (as said
-     * above), it should have a delay of 2 machine cycles/instructions.
-     *
-     * However, in practice, this function has an epilogue of one instruction,
-     * thus the instruction masking the interrupt threshold register is
-     * followed by two instructions: `ret` and `csrrs` (RV_SET_CSR).
-     * That's why we don't need any additional nop instructions here.
-     */
+    int_level = RVHAL_EXCM_LEVEL_CLIC;
+#endif
+
+    prev_int_level = rv_utils_set_intlevel_regval(int_level);
     return prev_int_level;
 }
 
 void vPortClearInterruptMaskFromISR(UBaseType_t prev_int_level)
 {
-#if !SOC_INT_CLIC_SUPPORTED
-    REG_WRITE(INTERRUPT_CURRENT_CORE_INT_THRESH_REG, prev_int_level);
-#else
     rv_utils_restore_intlevel_regval(prev_int_level);
-#endif /* SOC_INIT_CLIC_SUPPORTED */
     /**
      * The delay between the moment we unmask the interrupt threshold register
      * and the moment the potential requested interrupt is triggered is not
@@ -562,9 +555,13 @@ void __attribute__((optimize("-O3"))) vPortExitCriticalMultiCore(portMUX_TYPE *m
     BaseType_t coreID = xPortGetCoreID();
     BaseType_t nesting = port_uxCriticalNesting[coreID];
 
+    /* Critical section nesting count must never be negative */
+    configASSERT( nesting > 0 );
+
     if (nesting > 0) {
         nesting--;
         port_uxCriticalNesting[coreID] = nesting;
+
         //This is the last exit call, restore the saved interrupt level
         if ( nesting == 0 ) {
             portCLEAR_INTERRUPT_MASK_FROM_ISR(port_uxOldInterruptState[coreID]);
@@ -617,8 +614,13 @@ void vPortExitCritical(void)
         esp_rom_printf("vPortExitCritical(void) is not supported on single-core targets. Please use vPortExitCriticalMultiCore(portMUX_TYPE *mux) instead.\n");
         abort();
 #endif /* (configNUM_CORES > 1) */
+
+    /* Critical section nesting count must never be negative */
+    configASSERT( port_uxCriticalNesting[0] > 0 );
+
     if (port_uxCriticalNesting[0] > 0) {
         port_uxCriticalNesting[0]--;
+
         if (port_uxCriticalNesting[0] == 0) {
             portCLEAR_INTERRUPT_MASK_FROM_ISR(port_uxOldInterruptState[0]);
         }
@@ -716,7 +718,7 @@ static void vPortTLSPointersDelCb( void *pxTCB )
         if ( pvThreadLocalStoragePointersDelCallback[ x ] != NULL ) {  //If del cb is set
             /* In case the TLSP deletion callback has been overwritten by a TLS pointer, gracefully abort. */
             if ( !esp_ptr_executable( pvThreadLocalStoragePointersDelCallback[ x ] ) ) {
-                ESP_LOGE("FreeRTOS", "Fatal error: TLSP deletion callback at index %d overwritten with non-excutable pointer %p", x, pvThreadLocalStoragePointersDelCallback[ x ]);
+                ESP_EARLY_LOGE("FreeRTOS", "Fatal error: TLSP deletion callback at index %d overwritten with non-excutable pointer %p", x, pvThreadLocalStoragePointersDelCallback[ x ]);
                 abort();
             }
 

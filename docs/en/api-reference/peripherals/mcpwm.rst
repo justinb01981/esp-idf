@@ -50,6 +50,7 @@ Description of the MCPWM functionality is divided into the following sections:
     - :ref:`mcpwm-capture` - describes how to use the MCPWM capture module to measure the pulse width of a signal.
     :SOC_MCPWM_SUPPORT_ETM: - :ref:`mcpwm-etm-event-and-task` - describes what the events and tasks can be connected to the ETM channel.
     - :ref:`mcpwm-power-management` - describes how different source clocks affects power consumption.
+    - :ref:`mcpwm-resolution-config` - describes the resolution configuration rules for the MCPWM submodule.
     - :ref:`mcpwm-iram-safe` - describes tips on how to make the RMT interrupt work better along with a disabled cache.
     - :ref:`mcpwm-thread-safety` - lists which APIs are guaranteed to be thread-safe by the driver.
     - :ref:`mcpwm-kconfig-options` - lists the supported Kconfig options that can bring different effects to the driver.
@@ -78,6 +79,10 @@ You can allocate a MCPWM timer object by calling :cpp:func:`mcpwm_new_timer` fun
 The :cpp:func:`mcpwm_new_timer` will return a pointer to the allocated timer object if the allocation succeeds. Otherwise, it will return an error code. Specifically, when there are no more free timers in the MCPWM group, this function will return the :c:macro:`ESP_ERR_NOT_FOUND` error. [1]_
 
 On the contrary, calling the :cpp:func:`mcpwm_del_timer` function will free the allocated timer object.
+
+.. note::
+
+    The prescale for the MCPWM group will be calculated with the resolution of the first timer, and the driver will find the appropriate prescale from low to high. If there is a prescale conflict when allocating multiple timers, allocate timers in order of their target resolution, either from highest to lowest or lowest to highest. For more information, please refer to :ref:`mcpwm-resolution-config`.
 
 MCPWM Operators
 ~~~~~~~~~~~~~~~
@@ -111,7 +116,7 @@ The :cpp:func:`mcpwm_new_comparator` will return a pointer to the allocated comp
 
 On the contrary, calling the :cpp:func:`mcpwm_del_comparator` function will free the allocated comparator object.
 
-.. only:: SOC_MCPWM_SUPPORT_EVENT_COMPARATOR
+.. only:: SOC_MCPWM_SUPPORT_EVENT_COMPARATOR and SOC_MCPWM_SUPPORT_ETM
 
     There's another kind of comparator called "Event Comparator", which **can not** control the final PWM directly but only generates the ETM events at a configurable time stamp. You can allocate an event comparator by calling the :cpp:func:`mcpwm_new_event_comparator` function. This function will return the same handle type as :cpp:func:`mcpwm_new_comparator`, but with a different configuration structure :cpp:type:`mcpwm_event_comparator_config_t`. For more information, please refer to :ref:`mcpwm-etm-event-and-task`.
 
@@ -122,8 +127,6 @@ You can allocate a MCPWM generator object by calling the :cpp:func:`mcpwm_new_ge
 
 - :cpp:member:`mcpwm_generator_config_t::gen_gpio_num` sets the GPIO number used by the generator.
 - :cpp:member:`mcpwm_generator_config_t::invert_pwm` sets whether to invert the PWM signal.
-- :cpp:member:`mcpwm_generator_config_t::io_loop_back` sets whether to enable the Loop-back mode. It is for debugging purposes only. It enables both the GPIO's input and output ability through the GPIO matrix peripheral.
-- :cpp:member:`mcpwm_generator_config_t::io_od_mode` configures the PWM GPIO as open-drain output.
 - :cpp:member:`mcpwm_generator_config_t::pull_up` and :cpp:member:`mcpwm_generator_config_t::pull_down` controls whether to enable the internal pull-up and pull-down resistors accordingly.
 
 The :cpp:func:`mcpwm_new_generator` will return a pointer to the allocated generator object if the allocation succeeds. Otherwise, it will return an error code. Specifically, when there are no more free generators in the MCPWM operator, this function will return the :c:macro:`ESP_ERR_NOT_FOUND` error. [1]_
@@ -142,7 +145,6 @@ To allocate a GPIO fault object, you can call the :cpp:func:`mcpwm_new_gpio_faul
 - :cpp:member:`mcpwm_gpio_fault_config_t::gpio_num` sets the GPIO number used by the fault.
 - :cpp:member:`mcpwm_gpio_fault_config_t::active_level` sets the active level of the fault signal.
 - :cpp:member:`mcpwm_gpio_fault_config_t::pull_up` and :cpp:member:`mcpwm_gpio_fault_config_t::pull_down` set whether to pull up and/or pull down the GPIO internally.
-- :cpp:member:`mcpwm_gpio_fault_config_t::io_loop_back` sets whether to enable the loopback mode. It is for debugging purposes only. It enables both the GPIO's input and output ability through the GPIO matrix peripheral.
 
 The :cpp:func:`mcpwm_new_gpio_fault` will return a pointer to the allocated fault object if the allocation succeeds. Otherwise, it will return an error code. Specifically, when there are no more free GPIO faults in the MCPWM group, this function will return the :c:macro:`ESP_ERR_NOT_FOUND` error. [1]_
 
@@ -163,7 +165,6 @@ To allocate a GPIO sync source, you can call the :cpp:func:`mcpwm_new_gpio_sync_
 - :cpp:member:`mcpwm_gpio_sync_src_config_t::gpio_num` sets the GPIO number used by the sync source.
 - :cpp:member:`mcpwm_gpio_sync_src_config_t::active_neg` sets whether the sync signal is active on falling edges.
 - :cpp:member:`mcpwm_gpio_sync_src_config_t::pull_up` and :cpp:member:`mcpwm_gpio_sync_src_config_t::pull_down` set whether to pull up and/or pull down the GPIO internally.
-- :cpp:member:`mcpwm_gpio_sync_src_config_t::io_loop_back` sets whether to enable the Loop-back mode. It is for debugging purposes only. It enables both the GPIO's input and output ability through the GPIO matrix peripheral.
 
 The :cpp:func:`mcpwm_new_gpio_sync_src` will return a pointer to the allocated sync source object if the allocation succeeds. Otherwise, it will return an error code. Specifically, when there are no more free GPIO sync sources in the MCPWM group, this function will return the :c:macro:`ESP_ERR_NOT_FOUND` error. [1]_
 
@@ -197,6 +198,12 @@ To allocate a capture timer, you can call the :cpp:func:`mcpwm_new_capture_timer
 
         In {IDF_TARGET_NAME}, :cpp:member:`mcpwm_capture_timer_config_t::resolution_hz` parameter is invalid, the capture timer resolution is always equal to the :cpp:enumerator:`MCPWM_CAPTURE_CLK_SRC_APB`.
 
+.. only:: SOC_MCPWM_CAPTURE_CLK_FROM_GROUP
+
+    .. note::
+
+        Timers and capture timers share the MCPWM group clock source. The prescale for the MCPWM group will be calculated with the resolution of the first allocated (capture)timer. The driver will search for the appropriate prescale from low to high. If there is a prescale conflict when allocating multiple (capture)timers, allocate (capture)timers in order of their target resolution, either from highest to lowest or lowest to highest. For more information, please refer to :ref:`mcpwm-resolution-config`.
+
 The :cpp:func:`mcpwm_new_capture_timer` will return a pointer to the allocated capture timer object if the allocation succeeds. Otherwise, it will return an error code. Specifically, when there is no free capture timer left in the MCPWM group, this function will return the :c:macro:`ESP_ERR_NOT_FOUND` error. [1]_
 
 Next, to allocate a capture channel, you can call the :cpp:func:`mcpwm_new_capture_channel` function, with a capture timer handle and configuration structure :cpp:type:`mcpwm_capture_channel_config_t` as the parameter. The configuration structure is defined as:
@@ -204,11 +211,9 @@ Next, to allocate a capture channel, you can call the :cpp:func:`mcpwm_new_captu
 - :cpp:member:`mcpwm_capture_channel_config_t::intr_priority` sets the priority of the interrupt. If it is set to ``0``, the driver will allocate an interrupt with a default priority. Otherwise, the driver will use the given priority.
 - :cpp:member:`mcpwm_capture_channel_config_t::gpio_num` sets the GPIO number used by the capture channel.
 - :cpp:member:`mcpwm_capture_channel_config_t::prescale` sets the prescaler of the input signal.
-- :cpp:member:`mcpwm_capture_channel_config_t::extra_flags::pos_edge` and :cpp:member:`mcpwm_capture_channel_config_t::extra_flags::neg_edge` set whether to capture on the positive and/or falling edge of the input signal.
-- :cpp:member:`mcpwm_capture_channel_config_t::extra_flags::pull_up` and :cpp:member:`mcpwm_capture_channel_config_t::extra_flags::pull_down` set whether to pull up and/or pull down the GPIO internally.
-- :cpp:member:`mcpwm_capture_channel_config_t::extra_flags::invert_cap_signal` sets whether to invert the capture signal.
-- :cpp:member:`mcpwm_capture_channel_config_t::extra_flags::io_loop_back` sets whether to enable the Loop-back mode. It is for debugging purposes only. It enables both the GPIO's input and output ability through the GPIO matrix peripheral.
-- :cpp:member:`mcpwm_capture_channel_config_t::extra_flags::keep_io_conf_at_exit` sets whether to keep the GPIO configuration when the capture channel is deleted.
+- :cpp:member:`mcpwm_capture_channel_config_t::extra_capture_channel_flags::pos_edge` and :cpp:member:`mcpwm_capture_channel_config_t::extra_capture_channel_flags::neg_edge` set whether to capture on the positive and/or falling edge of the input signal.
+- :cpp:member:`mcpwm_capture_channel_config_t::extra_capture_channel_flags::pull_up` and :cpp:member:`mcpwm_capture_channel_config_t::extra_capture_channel_flags::pull_down` set whether to pull up and/or pull down the GPIO internally.
+- :cpp:member:`mcpwm_capture_channel_config_t::extra_capture_channel_flags::invert_cap_signal` sets whether to invert the capture signal.
 
 The :cpp:func:`mcpwm_new_capture_channel` will return a pointer to the allocated capture channel object if the allocation succeeds. Otherwise, it will return an error code. Specifically, when there is no free capture channel left in the capture timer, this function will return the :c:macro:`ESP_ERR_NOT_FOUND` error.
 
@@ -529,7 +534,7 @@ Dead time specific configuration is listed in the :cpp:type:`mcpwm_dead_time_con
         // NOTE: This is invalid, you can not apply the posedge delay to another generator
         mcpwm_generator_set_dead_time(mcpwm_gen_b, mcpwm_gen_b, &dt_config);
 
-    However, you can apply ``posedge delay`` to generator A and ``negedge delay`` to generator B. You can also set both ``posedge delay`` and ``negedge delay`` for generator A, while letting generator B bypass the dead time module.
+    However, you can apply ``posedge delay`` to generator A and ``negedge delay`` to generator B. You can also set both ``posedge delay`` and ``negedge delay`` for generator B, while letting generator A bypass the dead time module. Note that if ``negedge delay`` and ``posedge delay`` are both set for generator A, generator B will not be available. Where generator A is the first generator requested through the operator handle and generator B is the second generator requested through an operator handle.
 
 .. note::
 
@@ -764,8 +769,8 @@ The MCPWM operator has a carrier submodule that can be used if galvanic isolatio
 To configure the carrier submodule, you can call :cpp:func:`mcpwm_operator_apply_carrier`, and provide configuration structure :cpp:type:`mcpwm_carrier_config_t`:
 
 - :cpp:member:`mcpwm_carrier_config_t::clk_src` sets the clock source of the carrier.
-- :cpp:member:`mcpwm_carrier_config_t::frequency_hz` indicates carrier frequency in Hz.
-- :cpp:member:`mcpwm_carrier_config_t::duty_cycle` indicates the duty cycle of the carrier. Note that, the supported choices of the duty cycle are discrete, the driver searches for the nearest one based on your configuration.
+- :cpp:member:`mcpwm_carrier_config_t::frequency_hz` indicates carrier frequency in Hz. For more information, please refer to :ref:`mcpwm-resolution-config`.
+- :cpp:member:`mcpwm_carrier_config_t::duty_cycle` indicates the duty cycle of the carrier. Note that, there are only 7 supported duty cycles: 0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875.
 - :cpp:member:`mcpwm_carrier_config_t::first_pulse_duration_us` indicates the duration of the first pulse in microseconds. The resolution of the first pulse duration is determined by the carrier frequency you set in the :cpp:member:`mcpwm_carrier_config_t::frequency_hz`. The first pulse duration can not be zero, and it has to be at least one period of the carrier. A longer pulse width can help conduct the inductance quicker.
 - :cpp:member:`mcpwm_carrier_config_t::invert_before_modulate` and :cpp:member:`mcpwm_carrier_config_t::invert_after_modulate` set whether to invert the carrier output before and after modulation.
 
@@ -885,7 +890,6 @@ Sync Timers by GPIO
         mcpwm_gpio_sync_src_config_t gpio_sync_config = {
             .group_id = 0,              // GPIO fault should be in the same group of the above timers
             .gpio_num = EXAMPLE_SYNC_GPIO,
-            .flags.pull_down = true,
             .flags.active_neg = false,  // By default, a posedge pulse can trigger a sync event
         };
         ESP_ERROR_CHECK(mcpwm_new_gpio_sync_src(&gpio_sync_config, &gpio_sync_source));
@@ -956,6 +960,11 @@ Trigger a Software Capture Event
 
 Sometimes, the software also wants to trigger a "fake" capture event. The :cpp:func:`mcpwm_capture_channel_trigger_soft_catch` is provided for that purpose. Please note that, even though it is a "fake" capture event, it can still cause an interrupt, thus your capture event callback function gets invoked as well.
 
+Get the Last Captured Value
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+If you don't want to process the captured value in the capture event callback function, but want to process it in other places, you can call :cpp:func:`mcpwm_capture_get_latched_value` to get the last captured value.
+
 .. only:: SOC_MCPWM_SUPPORT_ETM
 
     .. _mcpwm-etm-event-and-task:
@@ -978,10 +987,27 @@ Power Management
 
 When power management is enabled (i.e., :ref:`CONFIG_PM_ENABLE` is on), the system will adjust the PLL and APB frequency before going into Light-sleep, thus potentially changing the period of an MCPWM timers' counting step and leading to inaccurate time-keeping.
 
-However, the driver can prevent the system from changing APB frequency by acquiring a power management lock of type :cpp:enumerator:`ESP_PM_APB_FREQ_MAX`. Whenever the driver creates an MCPWM timer instance that has selected :cpp:enumerator:`MCPWM_TIMER_CLK_SRC_PLL160M` as its clock source, the driver guarantees that the power management lock is acquired when enabling the timer by :cpp:func:`mcpwm_timer_enable`. On the contrary, the driver releases the lock when :cpp:func:`mcpwm_timer_disable` is called for that timer.
+However, the driver can prevent the system from going into Light-sleep by acquiring a power management lock of type :cpp:enumerator:`ESP_PM_NO_LIGHT_SLEEP`. Whenever the driver creates an MCPWM timer instance that has selected PLL as its clock source, the driver guarantees that the power management lock is acquired when enabling the timer by :cpp:func:`mcpwm_timer_enable`. On the contrary, the driver releases the lock when :cpp:func:`mcpwm_timer_disable` is called for that timer.
 
-Likewise, whenever the driver creates an MCPWM capture timer instance that has selected :cpp:enumerator:`MCPWM_CAPTURE_CLK_SRC_APB` as its clock source, the driver guarantees that the power management lock is acquired when enabling the timer by :cpp:func:`mcpwm_capture_timer_enable`. And releases the lock in  :cpp:func:`mcpwm_capture_timer_disable`.
+Likewise, whenever the driver creates an MCPWM capture timer instance, the driver guarantees that the power management lock is acquired when enabling the timer by :cpp:func:`mcpwm_capture_timer_enable`. And releases the lock in  :cpp:func:`mcpwm_capture_timer_disable`.
 
+.. only:: SOC_MCPWM_SUPPORT_SLEEP_RETENTION
+
+    {IDF_TARGET_NAME} supports to retain the MCPWM register context before entering **Light-sleep** and restore them after woke up. Which means you don't have to re-init the MCPWM driver after the **Light-sleep**.
+
+    This feature can be enabled by setting the flag :cpp:member:`mcpwm_timer_config_t::allow_pd` or :cpp:member:`mcpwm_capture_timer_config_t::allow_pd`. It will allow the system to power down the MCPWM in Light-sleep, meanwhile save the MCPWM register context. It can help to save more power consumption with some extra cost of the memory.
+
+.. _mcpwm-resolution-config:
+
+Resolution Configuration
+^^^^^^^^^^^^^^^^^^^^^^^^
+
+The MCPWM group has clock dividers and some sub-modules will have their own clock dividers. The final clock frequency of the sub-module depends on the group clock divider and its own divider (if any). The group clock divider affects all submodules. When configuring the clock frequency (also called resolution) of an MCPWM submodule, the driver sets the divider according to the following rules:
+
+1. If the clock frequency of the submodule can be divisible by the clock source, the frequency of the submodule is prioritized to ensure the accuracy of the submodule.
+2. If it cannot be divisible by the clock source, the group clock is guaranteed to have the highest frequency possible, and the submodule frequency is adjusted to the closest frequency that can be divisible by the clock source.
+
+When multiple MCPWM submodules coexist, you need to consider whether there is a clock divider conflict. When there is a group clock divider conflict, try adjusting the submodule allocation order. See [`TRM <{IDF_TARGET_TRM_EN_URL}#mcpwm>`__] for details on group frequency divider and submodule frequency divider ranges.
 
 .. _mcpwm-iram-safe:
 
@@ -990,7 +1016,7 @@ IRAM Safe
 
 By default, the MCPWM interrupt will be deferred when the Cache is disabled for reasons like writing/erasing Flash. Thus the event callback functions will not get executed in time, which is not expected in a real-time application.
 
-There is a Kconfig option :ref:`CONFIG_MCPWM_ISR_IRAM_SAFE` that:
+There is a Kconfig option :ref:`CONFIG_MCPWM_ISR_CACHE_SAFE` that:
 
 * enables the interrupt to be serviced even when the cache is disabled
 * places all functions used by the ISR into IRAM [2]_
@@ -1024,18 +1050,19 @@ Other functions that are not related to `Resource Allocation and Initialization 
 Kconfig Options
 ^^^^^^^^^^^^^^^
 
-- :ref:`CONFIG_MCPWM_ISR_IRAM_SAFE` controls whether the default ISR handler can work when the cache is disabled, see :ref:`mcpwm-iram-safe` for more information.
+- :ref:`CONFIG_MCPWM_ISR_CACHE_SAFE` controls whether the default ISR handler can work when the cache is disabled, see :ref:`mcpwm-iram-safe` for more information.
 - :ref:`CONFIG_MCPWM_CTRL_FUNC_IN_IRAM` controls where to place the MCPWM control functions (IRAM or flash), see :ref:`mcpwm-iram-safe` for more information.
 - :ref:`CONFIG_MCPWM_ENABLE_DEBUG_LOG` is used to enable the debug log output. Enabling this option will increase the firmware binary size.
 
 Application Examples
 --------------------
 
-* Brushed DC motor speed control by PID algorithm: :example:`peripherals/mcpwm/mcpwm_bdc_speed_control`
-* BLDC motor control with hall sensor feedback: :example:`peripherals/mcpwm/mcpwm_bldc_hall_control`
-* Ultrasonic sensor (HC-SR04) distance measurement: :example:`peripherals/mcpwm/mcpwm_capture_hc_sr04`
-* Servo motor angle control: :example:`peripherals/mcpwm/mcpwm_servo_control`
-* MCPWM synchronization between timers: :example:`peripherals/mcpwm/mcpwm_sync`
+* :example:`peripherals/mcpwm/mcpwm_bdc_speed_control` demonstrates how to drive a brushed DC motor using two specific PWM signals, measure the motor speed with a photoelectric encoder, and maintain a stable motor speed using a simple PID algorithm.
+* :example:`peripherals/mcpwm/mcpwm_bldc_hall_control` demonstrates how to use the MCPWM peripheral to control a BLDC motor using a six-step commutation scheme, with the motor's spin direction and speed being adjusted based on the readings from a Hall sensor.
+* :example:`peripherals/mcpwm/mcpwm_capture_hc_sr04` demonstrates how to use the MCPWM peripheral's capture module to decode the pulse width signals from an HC-SR04 sonar sensor, which can measure distance based on the width of the pulse.
+* :example:`peripherals/mcpwm/mcpwm_foc_svpwm_open_loop` demonstrates how to use the MCPWM peripheral to generate three pairs of PWM signals for Field-Oriented Control (FOC), which can be used to drive a BLDC or PMSM motor, or a three-phase power inverter, using an open-loop FOC algorithm.
+* :example:`peripherals/mcpwm/mcpwm_servo_control` demonstrates how to control a typical RC Servo by sending a PWM signal using the MCPWM driver, with the servo rotating from -60° to 60° and then turning back again.
+* :example:`peripherals/mcpwm/mcpwm_sync` demonstrates how to generate three PWMs in perfect synchronization using MCPWM timers, with options to synchronize the timers via GPIO, Timer TEZ, or software.
 
 
 API Reference

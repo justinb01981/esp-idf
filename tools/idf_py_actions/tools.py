@@ -64,7 +64,7 @@ def _set_build_context(args: 'PropertyDict') -> None:
 
     proj_desc_fn = f'{args.build_dir}/project_description.json'
     try:
-        with open(proj_desc_fn, 'r') as f:
+        with open(proj_desc_fn, 'r', encoding='utf-8') as f:
             ctx['proj_desc'] = json.load(f)
     except (OSError, ValueError) as e:
         raise FatalError(f'Cannot load {proj_desc_fn}: {e}')
@@ -80,11 +80,12 @@ def executable_exists(args: List) -> bool:
 
 
 def _idf_version_from_cmake() -> Optional[str]:
+    """Acquires version of ESP-IDF from version.cmake"""
     version_path = os.path.join(os.environ['IDF_PATH'], 'tools/cmake/version.cmake')
     regex = re.compile(r'^\s*set\s*\(\s*IDF_VERSION_([A-Z]{5})\s+(\d+)')
     ver = {}
     try:
-        with open(version_path) as f:
+        with open(version_path, encoding='utf-8') as f:
             for line in f:
                 m = regex.match(line)
 
@@ -113,7 +114,7 @@ def idf_version() -> Optional[str]:
             '--work-tree=%s' % os.environ['IDF_PATH'],
             'describe', '--tags', '--dirty', '--match', 'v*.*',
         ]).decode('utf-8', 'ignore').strip()
-    except (subprocess.CalledProcessError, UnicodeError):
+    except Exception:
         # if failed, then try to parse cmake.version file
         sys.stderr.write('WARNING: Git version unavailable, reading from source\n')
         version = _idf_version_from_cmake()
@@ -128,6 +129,12 @@ def get_default_serial_port() -> Any:
         import esptool
         import serial.tools.list_ports
         ports = list(sorted(p.device for p in serial.tools.list_ports.comports()))
+        if sys.platform == 'darwin':
+            ports = [
+                port
+                for port in ports
+                if not port.endswith(('Bluetooth-Incoming-Port', 'wlan-debug'))
+            ]
         # high baud rate could cause the failure of creation of the connection
         esp = esptool.get_default_connected_device(serial_list=ports, port=None, connect_attempts=4,
                                                    initial_baud=115200)
@@ -148,7 +155,7 @@ def get_default_serial_port() -> Any:
 
 # function prints warning when autocompletion is not being performed
 # set argument stream to sys.stderr for errors and exceptions
-def print_warning(message: str, stream: TextIO=None) -> None:
+def print_warning(message: str, stream: Optional[TextIO]=None) -> None:
     if not SHELL_COMPLETE_RUN:
         print(message, file=stream or sys.stderr)
 
@@ -182,7 +189,7 @@ def load_hints() -> Dict:
     }
 
     current_module_dir = os.path.dirname(__file__)
-    with open(os.path.join(current_module_dir, 'hints.yml'), 'r') as file:
+    with open(os.path.join(current_module_dir, 'hints.yml'), 'r', encoding='utf-8') as file:
         hints['yml'] = yaml.safe_load(file)
 
     hint_modules_dir = os.path.join(current_module_dir, 'hint_modules')
@@ -256,7 +263,7 @@ def generate_hints(*filenames: str) -> Generator:
     """Getting output files and printing hints on how to resolve errors based on the output."""
     hints = load_hints()
     for file_name in filenames:
-        with open(file_name, 'r') as file:
+        with open(file_name, 'r', encoding='utf-8') as file:
             yield from generate_hints_buffer(file.read(), hints)
 
 
@@ -277,8 +284,9 @@ def fit_text_in_terminal(out: str) -> str:
 
 
 class RunTool:
-    def __init__(self, tool_name: str, args: List, cwd: str, env: Dict=None, custom_error_handler: FunctionType=None, build_dir: str=None,
-                 hints: bool=True, force_progression: bool=False, interactive: bool=False, convert_output: bool=False) -> None:
+    def __init__(self, tool_name: str, args: List, cwd: str, env: Optional[Dict]=None, custom_error_handler: Optional[FunctionType]=None,
+                 build_dir: Optional[str]=None, hints: bool=True, force_progression: bool=False, interactive: bool=False, convert_output: bool=False
+                 ) -> None:
         self.tool_name = tool_name
         self.args = args
         self.cwd = cwd
@@ -426,6 +434,8 @@ class RunTool:
             # contains CRLF. Use "newline=''" to prevent python to convert CRLF into CRCRLF.
             # Please see "newline" description at https://docs.python.org/3/library/functions.html#open
             with open(output_filename, 'w', encoding='utf8', newline='') as output_file:
+                # Log the command arguments.
+                output_file.write('Command: {}\n'.format(' '.join(self.args)))
                 while True:
                     if self.interactive:
                         output = await read_interactive_stream()
@@ -471,7 +481,7 @@ def run_tool(*args: Any, **kwargs: Any) -> None:
 
 
 def run_target(target_name: str, args: 'PropertyDict', env: Optional[Dict]=None,
-               custom_error_handler: FunctionType=None, force_progression: bool=False, interactive: bool=False) -> None:
+               custom_error_handler: Optional[FunctionType]=None, force_progression: bool=False, interactive: bool=False) -> None:
     """Run target in build directory."""
     if env is None:
         env = {}
@@ -554,7 +564,7 @@ def _detect_cmake_generator(prog_name: str) -> Any:
 
 
 def ensure_build_directory(args: 'PropertyDict', prog_name: str, always_run_cmake: bool=False,
-                           env: Dict=None) -> None:
+                           env: Optional[Dict]=None) -> None:
     """Check the build directory exists and that cmake has been run there.
 
     If this isn't the case, create the build directory (if necessary) and
@@ -671,7 +681,7 @@ def merge_action_lists(*action_lists: Dict) -> Dict:
     return merged_actions
 
 
-def get_sdkconfig_filename(args: 'PropertyDict', cache_cmdl: Dict=None) -> str:
+def get_sdkconfig_filename(args: 'PropertyDict', cache_cmdl: Optional[Dict]=None) -> str:
     """
     Get project's sdkconfig file name.
     """
@@ -683,7 +693,7 @@ def get_sdkconfig_filename(args: 'PropertyDict', cache_cmdl: Dict=None) -> str:
 
     proj_desc_path = os.path.join(args.build_dir, 'project_description.json')
     try:
-        with open(proj_desc_path, 'r') as f:
+        with open(proj_desc_path, 'r', encoding='utf-8') as f:
             proj_desc = json.load(f)
         return str(proj_desc['config_file'])
     except (OSError, KeyError):
@@ -704,7 +714,7 @@ def get_sdkconfig_value(sdkconfig_file: str, key: str) -> Optional[str]:
     value = None
     # if the value is quoted, this excludes the quotes from the value
     pattern = re.compile(r"^{}=\"?([^\"]*)\"?$".format(key))
-    with open(sdkconfig_file, 'r') as f:
+    with open(sdkconfig_file, 'r', encoding='utf-8') as f:
         for line in f:
             match = re.match(pattern, line)
             if match:
@@ -720,7 +730,7 @@ def is_target_supported(project_path: str, supported_targets: List) -> bool:
 
 
 def _check_idf_target(args: 'PropertyDict', prog_name: str, cache: Dict,
-                      cache_cmdl: Dict, env: Dict=None) -> None:
+                      cache_cmdl: Dict, env: Optional[Dict]=None) -> None:
     """
     Cross-check the three settings (sdkconfig, CMakeCache, environment) and if there is
     mismatch, fail with instructions on how to fix this.

@@ -13,12 +13,10 @@
  * You can also change this to another pin.
  */
 #if CONFIG_IDF_TARGET_ESP32C3 || CONFIG_IDF_TARGET_ESP32C2 || CONFIG_IDF_TARGET_ESP32H2 \
-    || CONFIG_IDF_TARGET_ESP32C6
+    || CONFIG_IDF_TARGET_ESP32C6 || CONFIG_IDF_TARGET_ESP32C61
 #define BOOT_BUTTON_NUM         9
-#elif CONFIG_IDF_TARGET_ESP32C5_MP_VERSION
+#elif CONFIG_IDF_TARGET_ESP32C5
 #define BOOT_BUTTON_NUM         28
-#elif CONFIG_IDF_TARGET_ESP32C5_BETA3_VERSION
-#define BOOT_BUTTON_NUM         7
 #elif CONFIG_IDF_TARGET_ESP32P4
 #define BOOT_BUTTON_NUM         35
 #else
@@ -46,8 +44,8 @@ esp_err_t example_register_gpio_wakeup(void)
     gpio_config_t config = {
             .pin_bit_mask = BIT64(GPIO_WAKEUP_NUM),
             .mode = GPIO_MODE_INPUT,
-            .pull_down_en = false,
-            .pull_up_en = false,
+            .pull_down_en = GPIO_PULLDOWN_DISABLE,
+            .pull_up_en = GPIO_PULLUP_DISABLE,
             .intr_type = GPIO_INTR_DISABLE
     };
     ESP_RETURN_ON_ERROR(gpio_config(&config), TAG, "Initialize GPIO%d failed", GPIO_WAKEUP_NUM);

@@ -3,7 +3,7 @@ Minimizing RAM Usage
 
 :link_to_translation:`zh_CN:[中文]`
 
-{IDF_TARGET_STATIC_MEANS_HEAP:default="Wi-Fi library, Bluetooth controller", esp32s2="Wi-Fi library", esp32c6="Wi-Fi library, Bluetooth controller, IEEE 802.15.4 library", esp32h2="Bluetooth controller, IEEE 802.15.4 library"}
+{IDF_TARGET_STATIC_MEANS_HEAP:default="Wi-Fi library, Bluetooth controller", esp32s2="Wi-Fi library", esp32c6="Wi-Fi library, Bluetooth controller, IEEE 802.15.4 library", esp32c61="Wi-Fi library, Bluetooth controller", esp32h2="Bluetooth controller, IEEE 802.15.4 library", esp32h21="Bluetooth controller, IEEE 802.15.4 library", esp32h4="Bluetooth controller, IEEE 802.15.4 library"}
 
 In some cases, a firmware application's available RAM may run low or run out entirely. In these cases, it is necessary to tune the memory usage of the firmware application.
 
@@ -57,10 +57,10 @@ Configuration Options for Stack Overflow Detection
 
 .. only:: SOC_ASSIST_DEBUG_SUPPORTED
 
-    Hardware Stack Guard
-    ~~~~~~~~~~~~~~~~~~~~
+   Hardware Stack Guard
+   ~~~~~~~~~~~~~~~~~~~~
 
-    The Hardware Stack Guard is a reliable method for detecting stack overflow. This method uses the hardware's Debug Assistant module to monitor the CPU's stack pointer register. A panic is immediately triggered if the stack pointer register goes beyond the bounds of the current stack (see :ref:`Hardware-Stack-Guard` for more details). The Hardware Stack Guard can be enabled via the :ref:`CONFIG_ESP_SYSTEM_HW_STACK_GUARD` option.
+   The Hardware Stack Guard is a reliable method for detecting stack overflow. This method uses the hardware's Debug Assistant module to monitor the CPU's stack pointer register. A panic is immediately triggered if the stack pointer register goes beyond the bounds of the current stack (see :ref:`Hardware-Stack-Guard` for more details). The Hardware Stack Guard can be enabled via the :ref:`CONFIG_ESP_SYSTEM_HW_STACK_GUARD` option.
 
 End of Stack Watchpoint
 ~~~~~~~~~~~~~~~~~~~~~~~
@@ -74,11 +74,11 @@ The Stack Canary Bytes feature adds a set of magic bytes at the end of each task
 
 .. note::
 
-    When using the End of Stack Watchpoint or Stack Canary Bytes, it is possible that a stack pointer skips over the watchpoint or canary bytes on a stack overflow and corrupts another region of RAM instead. Thus, these methods cannot detect all stack overflows.
+   When using the End of Stack Watchpoint or Stack Canary Bytes, it is possible that a stack pointer skips over the watchpoint or canary bytes on a stack overflow and corrupts another region of RAM instead. Thus, these methods cannot detect all stack overflows.
 
-    .. only:: SOC_ASSIST_DEBUG_SUPPORTED
+   .. only:: SOC_ASSIST_DEBUG_SUPPORTED
 
-        Recommended and default option is :ref:`CONFIG_ESP_SYSTEM_HW_STACK_GUARD` which avoids this disadvantage.
+      Recommended and default option is :ref:`CONFIG_ESP_SYSTEM_HW_STACK_GUARD` which avoids this disadvantage.
 
 Run-time Methods to Determine Stack Size
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -96,6 +96,7 @@ Reducing Stack Sizes
 
 - Avoid stack heavy functions. String formatting functions (like ``printf()``) are particularly heavy users of the stack, so any task which does not ever call these can usually have its stack size reduced.
 
+  - Using experimental :ref:`picolibc-instead-of-newlib` reduces the stack usage of ``printf()`` calls significantly.
   - Enabling :ref:`newlib-nano-formatting` reduces the stack usage of any task that calls ``printf()`` or other C string formatting functions.
 
 - Avoid allocating large variables on the stack. In C, any large structures or arrays allocated as an automatic variable (i.e., default scope of a C declaration) uses space on the stack. To minimize the sizes of these, allocate them statically and/or see if you can save memory by dynamically allocating them from the heap only when they are needed.
@@ -178,8 +179,8 @@ The following options will reduce IRAM usage of some ESP-IDF features:
 
 .. list::
 
-    - Enable :ref:`CONFIG_FREERTOS_PLACE_FUNCTIONS_INTO_FLASH`. Provided these functions are not incorrectly used from ISRs, this option is safe to enable in all configurations.
-    - Enable :ref:`CONFIG_RINGBUF_PLACE_FUNCTIONS_INTO_FLASH`. Provided these functions are not incorrectly used from ISRs, this option is safe to enable in all configurations.
+    - Disable :ref:`CONFIG_FREERTOS_IN_IRAM` if enabled to place FreeRTOS functions in Flash instead of IRAM. By default, FreeRTOS functions are already placed in Flash to save IRAM.
+    - Disable :ref:`CONFIG_RINGBUF_IN_IRAM` if enabled to place ring buffer functions in Flash instead of IRAM. By default, ring buffer functions are already placed in Flash to save IRAM.
     - Enable :ref:`CONFIG_RINGBUF_PLACE_ISR_FUNCTIONS_INTO_FLASH`. This option is not safe to use if the ISR ringbuf functions are used from an IRAM interrupt context, e.g., if :ref:`CONFIG_UART_ISR_IN_IRAM` is enabled. For the ESP-IDF drivers where this is the case, you can get an error at run-time when installing the driver in question.
     :SOC_WIFI_SUPPORTED: - Disabling Wi-Fi options :ref:`CONFIG_ESP_WIFI_IRAM_OPT` and/or :ref:`CONFIG_ESP_WIFI_RX_IRAM_OPT` options frees available IRAM at the cost of Wi-Fi performance.
     :CONFIG_ESP_ROM_HAS_SPI_FLASH: - Enabling :ref:`CONFIG_SPI_FLASH_ROM_IMPL` frees some IRAM but means that esp_flash bugfixes and new flash chip support are not available, see :doc:`/api-reference/peripherals/spi_flash/spi_flash_idf_vs_rom` for details.
@@ -192,17 +193,18 @@ The following options will reduce IRAM usage of some ESP-IDF features:
     - Refer to the sdkconfig menu ``Auto-detect Flash chips``, and you can disable flash drivers which you do not need to save some IRAM.
     :SOC_GPSPI_SUPPORTED: - Enable :ref:`CONFIG_HEAP_PLACE_FUNCTION_INTO_FLASH`. Provided that :ref:`CONFIG_SPI_MASTER_ISR_IN_IRAM` is not enabled and the heap functions are not incorrectly used from ISRs, this option is safe to enable in all configurations.
     :esp32c2: - Enable :ref:`CONFIG_BT_RELEASE_IRAM`. Release BT text section and merge BT data, bss & text into a large free heap region when ``esp_bt_mem_release`` is called. This makes Bluetooth unavailable until the next restart, but saving ~22 KB or more of IRAM.
+    - Disable :ref:`CONFIG_LIBC_LOCKS_PLACE_IN_IRAM` if no ISRs that run while cache is disabled (i.e. IRAM ISRs) use libc lock APIs.
 
 .. only:: esp32
 
    Using SRAM1 for IRAM
    ^^^^^^^^^^^^^^^^^^^^
 
-   The SRAM1 memory area is normally used for DRAM, but it is possible to use parts of it for IRAM with :ref:`CONFIG_ESP_SYSTEM_ESP32_SRAM1_REGION_AS_IRAM`. This memory would previously be reserved for DRAM data usage (e.g., ``.bss``) by the software bootloader and later added to the heap. After this option was introduced, the bootloader DRAM size was reduced to a value closer to what it normally actually needs.
+   The SRAM1 memory area is normally used for DRAM, but it is possible to use parts of it for IRAM with :ref:`CONFIG_ESP_SYSTEM_ESP32_SRAM1_REGION_AS_IRAM`. This memory would previously be reserved for DRAM data usage (e.g., ``.bss``) by the ESP-IDF second stage bootloader and later added to the heap. After this option was introduced, the bootloader DRAM size was reduced to a value closer to what it normally actually needs.
 
-   To use this option, ESP-IDF should be able to recognize that the new SRAM1 area is also a valid load address for an image segment. If the software bootloader was compiled before this option existed, then the bootloader will not be able to load the app that has code placed in this new extended IRAM area. This would typically happen if you are doing an OTA update, where only the app would be updated.
+   To use this option, ESP-IDF should be able to recognize that the new SRAM1 area is also a valid load address for an image segment. If the second stage bootloader was compiled before this option existed, then the bootloader will not be able to load the app that has code placed in this new extended IRAM area. This would typically happen if you are doing an OTA update, where only the app would be updated.
 
-   If the IRAM section were to be placed in an invalid area, then this would be detected during the bootup process, and result in a failed boot:
+   If the IRAM section were to be placed in an invalid area, then this would be detected during the boot up process, and result in a failed boot:
 
    .. code-block:: text
 
@@ -210,12 +212,12 @@ The following options will reduce IRAM usage of some ESP-IDF features:
 
    .. warning::
 
-      Apps compiled with :ref:`CONFIG_ESP_SYSTEM_ESP32_SRAM1_REGION_AS_IRAM` may fail to boot, if used together with a software bootloader that was compiled before this config option was introduced. If you are using an older bootloader and updating over OTA, please test carefully before pushing any updates.
+      Apps compiled with :ref:`CONFIG_ESP_SYSTEM_ESP32_SRAM1_REGION_AS_IRAM` may fail to boot, if used together with a second stage bootloader that was compiled before this config option was introduced. If you are using an older bootloader and updating over OTA, please test carefully before pushing any updates.
 
    Any memory that ends up unused for static IRAM will be added to the heap.
 
 
-.. only:: esp32c3
+.. only:: SOC_SPI_MEM_SUPPORT_AUTO_SUSPEND
 
     Flash Suspend Feature
     ^^^^^^^^^^^^^^^^^^^^^
@@ -230,6 +232,8 @@ The following options will reduce IRAM usage of some ESP-IDF features:
     User ISR callbacks and involved variables have to be in internal RAM if they are also used in interrupt contexts.
 
     Placing additional code into IRAM will exacerbate IRAM usage. For this reason, there is :ref:`CONFIG_SPI_FLASH_AUTO_SUSPEND`, which can alleviate the aforementioned kinds of IRAM usage. By enabling this feature, the Cache will not be disabled when SPI flash driver APIs and SPI flash driver-based APIs are used. Therefore, code and data in flash can be executed or accessed normally, but with some minor delay. See :ref:`auto-suspend` for more details about this feature.
+
+    IRAM usage for flash driver can be declined with :ref:`CONFIG_SPI_FLASH_AUTO_SUSPEND` enabled. Please refer to :ref:`internal_memory_saving_for_flash_driver` for more detailed information.
 
     Regarding the flash suspend feature usage, and corresponding response time delay, please also see this example :example:`system/flash_suspend`.
 

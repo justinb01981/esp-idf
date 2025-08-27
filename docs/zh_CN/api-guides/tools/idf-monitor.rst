@@ -61,9 +61,25 @@ IDF 监视器是一个串行终端程序，使用了 esp-idf-monitor_ 包，用�
      -
    * - Ctrl + C
      - 中断正在运行的应用程序
-     - 暂停 IDF 监视器并运行 GDB_ 项目调试器，从而在运行时调试应用程序。这需要启用 :ref: `CONFIG_ESP_SYSTEM_GDBSTUB_RUNTIME` 选项。
+     - 暂停 IDF 监视器并运行 GDB_ 项目调试器，从而在运行时调试应用程序。这需要启用 :ref:`CONFIG_ESP_SYSTEM_GDBSTUB_RUNTIME` 选项。
 
 除了 ``Ctrl-]`` 和 ``Ctrl-T``，其他快捷键信号会通过串口发送到目标设备。
+
+
+自动着色
+==========
+
+IDF 监视器会根据日志级别自动为输出内容进行着色。该功能通过避免冗余的日志格式化，减少了通过串口控制台传输的字节数，降低了日志传输的延迟，提升了性能。该功能还具有其他优势，能够为预编译库（例如 Wi-Fi）添加颜色，以及减少应用程序的二进制文件大小。
+
+该功能默认启用。如需禁用，请使用命令行选项 ``--disable-auto-color``。
+
+着色是基于日志级别进行的，日志级别后可选择是否显示时间戳和标签。如需在 {IDF_TARGET_NAME} 端启用着色，参见 :ref:`CONFIG_LOG_COLORS`。
+
+有关日志的更多信息，参见 :doc:`日志记录 <../../api-reference/system/log>`。
+
+.. note::
+
+    如果日志消息中包含换行符，自动着色可能无法正常工作。在这种情况下，IDF 监视器仅会为消息的第一行着色。
 
 
 兼具 ESP-IDF 特性
@@ -252,63 +268,7 @@ IDF 监视器的默认复位序列可在大多数环境中使用。使用默认�
 
 对于高级用户或特定用例，IDF 监视器支持使用 :ref:`configuration-file` 配置自定义复位序列。这在默认序列可能不足的极端情况下特别有用。
 
-复位序列可通过以下格式的字符串定义：
-
-- 各个命令由 ``|`` 分隔（例如 ``R0|D1|W0.5``）。
-- 命令（例如 ``R0``）由代码（``R``）和参数（``0``）定义。
-
-.. list-table::
-    :header-rows: 1
-    :widths: 15 50 35
-    :align: center
-
-    * - 代码
-      - 操作
-      - 参数
-    * - D
-      - 设置 DTR 控制线
-      - ``1``/``0``
-    * - R
-      - 设置 RTS 控制线
-      - ``1``/``0``
-    * - U
-      - 同时设置 DTR 和 RTS 控制线（仅适用于类 Unix 系统）
-      - ``0,0``/``0,1``/``1,0``/``1,1``
-    * - W
-      - 等待 ``N`` 秒（其中 ``N`` 为浮点数）
-      - N
-
-示例：
-
-.. code-block:: ini
-
-    [esp-idf-monitor]
-    custom_reset_sequence = U0,1|W0.1|D1|R0|W0.5|D0
-
-有关更多详细信息，请参阅 Esptool 文档中 `custom reset sequence`_ 章节。请注意，IDF 监视器只使用了 Esptool 配置中的 ``custom_reset_sequence`` 值，其他值会被 IDF 监视器忽略。
-
-IDF 监视器和 Esptool 之间共享配置
-----------------------------------------------
-
-自定义复位序列的配置可以在 IDF 监视器和 Esptool 之间的共享配置文件中指定。在这种情况下，为了使两个工具都能识别配置文件，其名称应为 ``setup.cfg`` 或 ``tox.ini``。
-
-共享配置文件的示例：
-
-.. code-block:: ini
-
-    [esp-idf-monitor]
-    menu_key = T
-    skip_menu_key = True
-
-    [esptool]
-    custom_reset_sequence = U0,1|W0.1|D1|R0|W0.5|D0
-
-.. note::
-
-    当在 ``[esp-idf-monitor]`` 部分和 ``[esptool]`` 部分都使用 ``custom_reset_sequence`` 参数时，IDF 监视器会优先使用 ``[esp-idf-monitor]`` 部分的配置。``[esptool]`` 部分中任何与之冲突的配置都将被忽略。
-
-    当配置分散在多个文件中时，此优先规则也适用。全局 esp-idf-monitor 配置将优先于本地 esptool 配置。
-
+如需使用自定义复位序列，请参阅 `IDF 监视器文档`_ 获取更多详细信息。
 
 配置 GDBStub 以启用 GDB
 ~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -397,118 +357,26 @@ GDBStub 支持在运行时进行调试。GDBStub 在目标上运行，并通过�
 配置文件
 ========
 
-``esp-idf-monitor`` 使用 `C0 控制字符`_ 与控制台进行交互。配置文件中的字符会被转换为对应的 C0 控制代码。可用字符包括英文字母 (A-Z) 和特殊符号：``[``、``]``、``\``、``^``、和 ``_``.
+``esp-idf-monitor`` 支持通过配置文件更改其默认行为。该配置文件可用于设置自定义快捷键，或设置自定义复位序列以重置芯片进入引导加载程序。
 
-.. warning::
-
-    注意，一些字符可能无法在所有平台通用，或被保留作为其他用途的快捷键。请谨慎使用此功能。
-
-
-文件位置
-~~~~~~~~~~
-
-配置文件的默认名称为 ``esp-idf-monitor.cfg``。首先，在 ``esp-idf-monitor`` 路径中检测配置文件并运行。
-
-如果此目录中没有检测到配置文件，则检查当前用户操作系统的配置目录：
-
-  - Linux: ``/home/<user>/.config/esp-idf-monitor/``
-  - MacOS ``/Users/<user>/.config/esp-idf-monitor/``
-  - Windows: ``c:\Users\<user>\AppData\Local\esp-idf-monitor\``
-
-如仍未检测到配置文件，会最后再检查主目录：
-
-  - Linux: ``/home/<user>/``
-  - MacOS ``/Users/<user>/``
-  - Windows: ``c:\Users\<user>\``
-
-在 Windows 中，可以使用 ``HOME`` 或 ``USERPROFILE`` 环境变量设置主目录，因此，Windows 配置目录的位置也取决于这些变量。
-
-还可以使用 ``ESP_IDF_MONITOR_CFGFILE`` 环境变量为配置文件指定一个不同的位置，例如 ``ESP_IDF_MONITOR_CFGFILE = ~/custom_config.cfg``。这一设置的检测优先级高于上述所有位置检测的优先级。
-
-如果没有使用其他配置文件，``esp-idf-monitor`` 会从其他常用的配置文件中读取设置。如果存在 ``setup.cfg`` 或 ``tox.ini`` 文件，``esp-idf-monitor`` 会自动从这些文件中读取设置。
-
-配置选项
-~~~~~~~~~~
-
-下表列出了可用的配置选项：
-
-.. list-table::
-    :header-rows: 1
-    :widths: 30 50 20
-    :align: center
-
-    * - 选项名称
-      - 描述
-      - 默认值
-    * - menu_key
-      - 访问主菜单
-      - ``T``
-    * - exit_key
-      - 退出监视器
-      - ``]``
-    * - chip_reset_key
-      - 初始化芯片重置
-      - ``R``
-    * - recompile_upload_key
-      - 重新编译并上传
-      - ``F``
-    * - recompile_upload_app_key
-      - 仅重新编译并上传应用程序
-      - ``A``
-    * - toggle_output_key
-      - 切换输出显示
-      - ``Y``
-    * - toggle_log_key
-      - 切换日志功能
-      - ``L``
-    * - toggle_timestamp_key
-      - 切换时间戳显示
-      - ``I``
-    * - chip_reset_bootloader_key
-      - 将芯片重置为引导加载模式
-      - ``P``
-    * - exit_menu_key
-      - 从菜单中退出监视器
-      - ``X``
-    * - skip_menu_key
-      - 设置使用菜单命令时无需按下主菜单键
-      - ``False``
-    * - custom_reset_sequence
-      - 复位目标到引导加载程序的自定义复位序列
-      - 无默认值
-
-
-语法
-~~~~
-
-配置文件为 .ini 文件格式，必须以 ``[esp-idf-monitor]`` 标头引入才能被识别为有效文件。以下语法以“配置名称 = 配置值”形式列出。以 ``#`` 或 ``;`` 开头的行是注释，将被忽略。
-
-.. code-block:: ini
-
-    # esp-idf-monitor.cfg file to configure internal settings of esp-idf-monitor
-    [esp-idf-monitor]
-    menu_key = T
-    exit_key = ]
-    chip_reset_key = R
-    recompile_upload_key = F
-    recompile_upload_app_key = A
-    toggle_output_key = Y
-    toggle_log_key = L
-    toggle_timestamp_key = I
-    chip_reset_bootloader_key = P
-    exit_menu_key = X
-    skip_menu_key = False
+有关配置文件的更多详细信息，请参阅 `IDF 监视器文档`_。
 
 
 IDF 监视器已知问题
 =================================
 
-如果在使用 IDF 监视器过程中遇到任何问题，请查看我们的 `GitHub 仓库 <https://github.com/espressif/esp-idf-monitor/issues>`_ 以获取已知问题列表及其当前状态。如果遇到的问题没有相关记录，请创建一个新的问题报告。
+目前已知的问题如下：
 
-.. _addr2line: https://sourceware.org/binutils/docs/binutils/addr2line.html
+- 消息中包含换行符时，自动着色无法检测日志级别。在这种情况下，IDF Monitor 只会为消息的第一行着色。
+
+  为了避免这个问题，可以在 menuconfig 中启用 :ref:`CONFIG_LOG_COLORS`。注意，这可能会对二进制文件的大小和性能产生一定影响。
+
+- 在 Windows 上，如果在 IDF 监视器关闭之前直接关闭了终端，某些驱动程序可能无法释放串口。要解决此问题，可以尝试重新拔插 USB 线，在某些情况下，需要重启计算机。目前，已知该问题会影响 CH9102 USB-to-UART 桥接芯片，而 CP210x 和 CH340 等驱动通常不会受到影响。
+
+  为避免该问题，请在退出终端前正确关闭 IDF 监视器，或考虑使用其他 USB-to-UART 桥接芯片。
+
+如果在使用 IDF 监视器过程中遇到问题，可以访问 `IDF 监视器的 GitHub 仓库 <https://github.com/espressif/esp-idf-monitor/issues>`_ 查看已知问题及其当前状态。如果遇到的问题没有相关记录，可以提交一个新的问题报告。
+
 .. _esp-idf-monitor: https://github.com/espressif/esp-idf-monitor
+.. _IDF 监视器文档: https://github.com/espressif/esp-idf-monitor/blob/v1.5.0/README.md#documentation
 .. _gdb: https://sourceware.org/gdb/download/onlinedocs/
-.. _pySerial: https://github.com/pyserial/pyserial
-.. _miniterm: https://pyserial.readthedocs.org/en/latest/tools.html#module-serial.tools.miniterm
-.. _C0 控制字符: https://zh.wikipedia.org/wiki/C0%E4%B8%8EC1%E6%8E%A7%E5%88%B6%E5%AD%97%E7%AC%A6#C0_(ASCII%E5%8F%8A%E5%85%B6%E6%B4%BE%E7%94%9F)
-.. _custom reset sequence: https://docs.espressif.com/projects/esptool/en/latest/{IDF_TARGET_PATH_NAME}/esptool/configuration-file.html#custom-reset-sequence

@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2015-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2015-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -7,37 +7,29 @@
 #include <stdint.h>
 #include <string.h>
 #include <sys/queue.h>
+#include "sdkconfig.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
+#include "esp_private/critical_section.h"
 #include "esp_heap_caps.h"
-#include "esp_dma_utils.h"
 #include "esp_intr_alloc.h"
-#include "soc/interrupts.h" // For interrupt index
 #include "esp_err.h"
 #include "esp_log.h"
+
+#include "soc/soc_caps.h"
+#include "soc/usb_periph.h"
 #include "hal/usb_dwc_hal.h"
-#include "hal/usb_dwc_types.h"
 #include "hcd.h"
 #include "usb_private.h"
 #include "usb/usb_types_ch9.h"
 
-#include "soc/soc_caps.h"
-#if SOC_CACHE_INTERNAL_MEM_VIA_L1CACHE
 #include "esp_cache.h"
 #include "esp_private/esp_cache_private.h"
-#endif // SOC_CACHE_INTERNAL_MEM_VIA_L1CACHE
 
 // ----------------------------------------------------- Macros --------------------------------------------------------
 
-// ------------------ Target specific ----------------------
-// TODO: Remove target specific section after support for multiple USB peripherals is implemented
-#include "sdkconfig.h"
-#if (CONFIG_IDF_TARGET_ESP32P4)
-#define USB_INTR ETS_USB_OTG_INTR_SOURCE
-#else
-#define USB_INTR ETS_USB_INTR_SOURCE
-#endif
+#define ALIGN_UP(num, align)    ((align) == 0 ? (num) : (((num) + ((align) - 1)) & ~((align) - 1)))
 
 // --------------------- Constants -------------------------
 
@@ -51,44 +43,49 @@
 #define CTRL_EP_MAX_MPS_LS                      8   // Largest Maximum Packet Size for Low Speed control endpoints
 #define CTRL_EP_MAX_MPS_HSFS                    64  // Largest Maximum Packet Size for High & Full Speed control endpoints
 
-#define NUM_PORTS                               1   // The controller only has one port.
+#define NUM_PORTS                               SOC_USB_OTG_PERIPH_NUM   // Each peripheral is a root port
 
 // ----------------------- Configs -------------------------
+
+#ifdef CONFIG_USB_HOST_DWC_DMA_CAP_MEMORY_IN_PSRAM      // In esp32p4, the USB-DWC internal DMA can access external RAM
+#define XFER_DESC_LIST_CAPS                     (MALLOC_CAP_DMA | MALLOC_CAP_CACHE_ALIGNED | MALLOC_CAP_SPIRAM)
+#else
+#define XFER_DESC_LIST_CAPS                     (MALLOC_CAP_DMA | MALLOC_CAP_CACHE_ALIGNED | MALLOC_CAP_INTERNAL)
+#endif
 
 #define FRAME_LIST_LEN                          USB_HAL_FRAME_LIST_LEN_32
 #define NUM_BUFFERS                             2
 
 #define XFER_LIST_LEN_CTRL                      3   // One descriptor for each stage
 #define XFER_LIST_LEN_BULK                      2   // One descriptor for transfer, one to support an extra zero length packet
-// Same length as the frame list makes it easier to schedule. Must be power of 2
+// Periodic transfer descriptor lists: Same length as the frame list makes it easier to schedule. Must be power of 2
 // FS: Must be 2-64. HS: Must be 8-256. See USB-OTG databook Table 5-47
 #define XFER_LIST_LEN_INTR                      FRAME_LIST_LEN
-#define XFER_LIST_LEN_ISOC                      FRAME_LIST_LEN
+#define XFER_LIST_LEN_ISOC                      64  // Implement longer ISOC transfer list to give us enough space for additional timing margin
+#define XFER_LIST_ISOC_MARGIN                   3   // The 1st ISOC transfer is scheduled 3 (micro)frames later so we have enough timing margin
 
-// ------------------------ Flags --------------------------
+// ------------------------ Internal --------------------------
 
 /**
- * @brief Bit masks for the HCD to use in the URBs reserved_flags field
+ * @brief Values for the HCD to use in the URBs hcd_var field
  *
- * The URB object has a reserved_flags member for host stack's internal use. The following flags will be set in
- * reserved_flags in order to keep track of state of an URB within the HCD.
+ * The URB object has a hcd_var member for host stack's internal use. The following values will be set in
+ * hcd_var in order to keep track of state of an URB within the HCD.
  */
 #define URB_HCD_STATE_IDLE                      0   // The URB is not enqueued in an HCD pipe
 #define URB_HCD_STATE_PENDING                   1   // The URB is enqueued and pending execution
 #define URB_HCD_STATE_INFLIGHT                  2   // The URB is currently in flight
 #define URB_HCD_STATE_DONE                      3   // The URB has completed execution or is retired, and is waiting to be dequeued
 
-#define URB_HCD_STATE_SET(reserved_flags, state)    (reserved_flags = (reserved_flags & ~URB_HCD_STATE_MASK) | state)
-#define URB_HCD_STATE_GET(reserved_flags)           (reserved_flags & URB_HCD_STATE_MASK)
-
 // -------------------- Convenience ------------------------
 
 const char *HCD_DWC_TAG = "HCD DWC";
 
-#define HCD_ENTER_CRITICAL_ISR()                portENTER_CRITICAL_ISR(&hcd_lock)
-#define HCD_EXIT_CRITICAL_ISR()                 portEXIT_CRITICAL_ISR(&hcd_lock)
-#define HCD_ENTER_CRITICAL()                    portENTER_CRITICAL(&hcd_lock)
-#define HCD_EXIT_CRITICAL()                     portEXIT_CRITICAL(&hcd_lock)
+DEFINE_CRIT_SECTION_LOCK_STATIC(hcd_lock);
+#define HCD_ENTER_CRITICAL_ISR()       esp_os_enter_critical_isr(&hcd_lock)
+#define HCD_EXIT_CRITICAL_ISR()        esp_os_exit_critical_isr(&hcd_lock)
+#define HCD_ENTER_CRITICAL()           esp_os_enter_critical(&hcd_lock)
+#define HCD_EXIT_CRITICAL()            esp_os_exit_critical(&hcd_lock)
 
 #define HCD_CHECK(cond, ret_val) ({                                         \
             if (!(cond)) {                                                  \
@@ -111,7 +108,6 @@ const char *HCD_DWC_TAG = "HCD DWC";
  * For other SOCs this is no-operation
  */
 #if SOC_CACHE_INTERNAL_MEM_VIA_L1CACHE
-#define ALIGN_UP_BY(num, align)                     (((num) + ((align) - 1)) & ~((align) - 1))
 #define CACHE_SYNC_FRAME_LIST(frame_list)           cache_sync_frame_list(frame_list)
 #define CACHE_SYNC_XFER_DESCRIPTOR_LIST_M2C(buffer) cache_sync_xfer_descriptor_list(buffer, true)
 #define CACHE_SYNC_XFER_DESCRIPTOR_LIST_C2M(buffer) cache_sync_xfer_descriptor_list(buffer, false)
@@ -253,25 +249,24 @@ struct port_obj {
         uint32_t val;
     } flags;
     bool initialized;
-    // FIFO biasing related
-    usb_hal_fifo_bias_t fifo_bias;                  // Bias is saved so it can be reconfigured upon reset
+    // FIFO related
+    usb_dwc_hal_fifo_config_t fifo_config;          // FIFO config to be applied at HAL level
     // Port callback and context
     hcd_port_callback_t callback;
     void *callback_arg;
     SemaphoreHandle_t port_mux;
     void *context;
+    intr_handle_t isr_hdl;       // Interrupt handle for this root port (USB-OTG peripheral)
 };
 
 /**
  * @brief Object representing the HCD
  */
 typedef struct {
-    // Ports (Hardware only has one)
-    port_t *port_obj;
-    intr_handle_t isr_hdl;
+    // Ports: Each peripheral is a root port
+    port_t *port_obj[NUM_PORTS];
 } hcd_obj_t;
 
-static portMUX_TYPE hcd_lock = portMUX_INITIALIZER_UNLOCKED;
 static hcd_obj_t *s_hcd_obj = NULL;     // Note: "s_" is for the static pointer
 
 // ------------------------------------------------- Forward Declare ---------------------------------------------------
@@ -323,35 +318,6 @@ static inline void cache_sync_data_buffer(pipe_t *pipe, urb_t *urb, bool done)
     }
 }
 #endif // SOC_CACHE_INTERNAL_MEM_VIA_L1CACHE
-
-// --------------------- Allocation ------------------------
-
-/**
- * @brief Allocate Frame List
- *
- * - Frame list is allocated in DMA capable memory
- * - Frame list is aligned to 512 and cache line size
- *
- * @note Free the memory with heap_caps_free() call
- *
- * @param[in] frame_list_len Length of the Frame List
- * @return Pointer to allocated frame list
- */
-static void *frame_list_alloc(size_t frame_list_len);
-
-/**
- * @brief Allocate Transfer Descriptor List
- *
- * - Frame list is allocated in DMA capable memory
- * - Frame list is aligned to 512 and cache line size
- *
- * @note Free the memory with heap_caps_free() call
- *
- * @param[in]  list_len           Required length
- * @param[out] list_len_bytes_out Allocated length in bytes (can be greater than required)
- * @return Pointer to allocated transfer descriptor list
- */
-static void *transfer_descriptor_list_alloc(size_t list_len, size_t *list_len_bytes_out);
 
 // ------------------- Buffer Control ----------------------
 
@@ -424,10 +390,15 @@ static void _buffer_exec(pipe_t *pipe);
  */
 static inline bool _buffer_check_done(pipe_t *pipe)
 {
+    // Only control transfers need to be continued
     if (pipe->ep_char.type != USB_DWC_XFER_TYPE_CTRL) {
         return true;
     }
-    // Only control transfers need to be continued
+    // The HW can't handle two transactions with preamble in one frame.
+    // TODO: IDF-12986
+    if (pipe->ep_char.ls_via_fs_hub) {
+        esp_rom_delay_us(1000);
+    }
     dma_buffer_block_t *buffer_inflight = pipe->buffers[pipe->multi_buffer_control.rd_idx];
     return (buffer_inflight->flags.ctrl.cur_stg == 2);
 }
@@ -579,6 +550,23 @@ static bool _port_check_all_pipes_halted(port_t *port);
  * @return false No device connected
  */
 static bool _port_debounce(port_t *port);
+
+/**
+ * @brief Convert user-provided FIFO configuration to HAL format
+ *
+ * This function validates and converts a user-defined FIFO configuration
+ * (provided via `hcd_config_t.fifo_config`) into the format expected by the HAL.
+ * It ensures that both RX FIFO and Non-Periodic TX FIFO sizes are non-zero.
+ *
+ * @param[in]  src Pointer to user-defined FIFO settings (HCD format)
+ * @param[out] dst Pointer to HAL-compatible FIFO configuration structure
+ *
+ * @return
+ *      - ESP_OK: Conversion successful and values copied
+ *      - ESP_ERR_INVALID_SIZE: Either RX FIFO or Non-Periodic TX FIFO is zero
+ */
+
+static esp_err_t convert_fifo_config_to_hal_config(const hcd_fifo_settings_t *src, usb_dwc_hal_fifo_config_t *dst);
 
 /**
  * @brief Power ON the port
@@ -766,16 +754,6 @@ static usb_speed_t get_usb_port_speed(usb_dwc_speed_t priv)
     case USB_DWC_SPEED_LOW: return USB_SPEED_LOW;
     case USB_DWC_SPEED_FULL: return USB_SPEED_FULL;
     case USB_DWC_SPEED_HIGH: return USB_SPEED_HIGH;
-    default: abort();
-    }
-}
-
-static usb_hal_fifo_bias_t get_hal_fifo_bias(hcd_port_fifo_bias_t public)
-{
-    switch (public) {
-    case HCD_PORT_FIFO_BIAS_BALANCED: return USB_HAL_FIFO_BIAS_DEFAULT;
-    case HCD_PORT_FIFO_BIAS_RX: return USB_HAL_FIFO_BIAS_RX;
-    case HCD_PORT_FIFO_BIAS_PTX: return USB_HAL_FIFO_BIAS_PTX;
     default: abort();
     }
 }
@@ -980,13 +958,53 @@ static void intr_hdlr_main(void *arg)
     }
 }
 
+// ----------------------- FIFO Config -------------------------
+
+/**
+ * @brief Calculate default FIFO configuration based on bias preference
+ *
+ * This function calculates the FIFO configuration (RX, non-periodic TX, and periodic TX)
+ * according to the selected bias mode from Kconfig:
+ *
+ * - CONFIG_USB_HOST_HW_BUFFER_BIAS_IN: Prioritize RX FIFO space, useful for IN-heavy traffic.
+ * - CONFIG_USB_HOST_HW_BUFFER_BIAS_PERIODIC_OUT: Prioritize periodic TX FIFO, suitable for periodic OUT transfers.
+ * - USB_HOST_HW_BUFFER_BIAS_BALANCED: Balanced configuration between RX and both TX FIFOs.
+ *
+ * @param[inout] port Pointer to the port object whose fifo_config will be filled
+ * @param[in] hal Pointer to an initialized HAL context providing hardware FIFO limits
+ */
+static void  _calculate_fifo_from_bias(port_t *port, const usb_dwc_hal_context_t *hal)
+{
+    const int otg_dfifo_depth = hal->constant_config.hsphy_type ? 1024 : 256;
+    const uint16_t fifo_size_lines = hal->constant_config.fifo_size;
+
+#if CONFIG_USB_HOST_HW_BUFFER_BIAS_IN
+    // Prioritize RX FIFO (best for IN-heavy workloads)
+    port->fifo_config.nptx_fifo_lines = otg_dfifo_depth / 16;
+    port->fifo_config.ptx_fifo_lines = otg_dfifo_depth / 8;
+    port->fifo_config.rx_fifo_lines = fifo_size_lines - port->fifo_config.ptx_fifo_lines - port->fifo_config.nptx_fifo_lines;
+
+#elif CONFIG_USB_HOST_HW_BUFFER_BIAS_PERIODIC_OUT
+    // Prioritize periodic TX FIFO (useful for high throughput periodic endpoints)
+    port->fifo_config.rx_fifo_lines = otg_dfifo_depth / 8 + 2; // 2 extra lines are allocated for status information. See USB-OTG Programming Guide, chapter 2.1.2.1
+    port->fifo_config.nptx_fifo_lines = otg_dfifo_depth / 16;
+    port->fifo_config.ptx_fifo_lines = fifo_size_lines - port->fifo_config.nptx_fifo_lines - port->fifo_config.rx_fifo_lines;
+
+#else // USB_HOST_HW_BUFFER_BIAS_BALANCED
+    // Balanced configuration (default)
+    port->fifo_config.nptx_fifo_lines = otg_dfifo_depth / 4;
+    port->fifo_config.ptx_fifo_lines = otg_dfifo_depth / 8;
+    port->fifo_config.rx_fifo_lines = fifo_size_lines - port->fifo_config.ptx_fifo_lines - port->fifo_config.nptx_fifo_lines;
+#endif
+}
+
 // --------------------------------------------- Host Controller Driver ------------------------------------------------
 
 static port_t *port_obj_alloc(void)
 {
     port_t *port = calloc(1, sizeof(port_t));
     usb_dwc_hal_context_t *hal = malloc(sizeof(usb_dwc_hal_context_t));
-    void *frame_list = frame_list_alloc(FRAME_LIST_LEN);
+    void *frame_list = heap_caps_aligned_calloc(USB_DWC_FRAME_LIST_MEM_ALIGN, FRAME_LIST_LEN, sizeof(uint32_t), MALLOC_CAP_DMA | MALLOC_CAP_CACHE_ALIGNED | MALLOC_CAP_INTERNAL);
     SemaphoreHandle_t port_mux = xSemaphoreCreateMutex();
     if (port == NULL || hal == NULL || frame_list == NULL || port_mux == NULL) {
         free(port);
@@ -1014,59 +1032,6 @@ static void port_obj_free(port_t *port)
     free(port);
 }
 
-void *frame_list_alloc(size_t frame_list_len)
-{
-    esp_err_t ret;
-    void *frame_list = NULL;
-    size_t actual_size = 0;
-    esp_dma_mem_info_t dma_mem_info = {
-        .dma_alignment_bytes = USB_DWC_FRAME_LIST_MEM_ALIGN,
-    };
-    ret = esp_dma_capable_calloc(frame_list_len, sizeof(uint32_t), &dma_mem_info, &frame_list, &actual_size);
-    assert(ret == ESP_OK);
-
-    // Both Frame List start address and size should be already cache aligned so this is only a sanity check
-    if (frame_list) {
-        if (!esp_dma_is_buffer_alignment_satisfied(frame_list, actual_size, dma_mem_info)) {
-            // This should never happen
-            heap_caps_free(frame_list);
-            frame_list = NULL;
-        }
-    }
-    return frame_list;
-}
-
-void *transfer_descriptor_list_alloc(size_t list_len, size_t *list_len_bytes_out)
-{
-#if SOC_CACHE_INTERNAL_MEM_VIA_L1CACHE
-    // Required Transfer Descriptor List size (in bytes) might not be aligned to cache line size, align the size up
-    size_t data_cache_line_size = 0;
-    esp_cache_get_alignment(MALLOC_CAP_DMA, &data_cache_line_size);
-    const size_t required_list_len_bytes = list_len * sizeof(usb_dwc_ll_dma_qtd_t);
-    *list_len_bytes_out = ALIGN_UP_BY(required_list_len_bytes, data_cache_line_size);
-#else
-    *list_len_bytes_out = list_len * sizeof(usb_dwc_ll_dma_qtd_t);
-#endif // SOC_CACHE_INTERNAL_MEM_VIA_L1CACHE
-
-    esp_err_t ret;
-    void *qtd_list = NULL;
-    size_t actual_size = 0;
-    esp_dma_mem_info_t dma_mem_info = {
-        .dma_alignment_bytes = USB_DWC_QTD_LIST_MEM_ALIGN,
-    };
-    ret = esp_dma_capable_calloc(*list_len_bytes_out, 1, &dma_mem_info, &qtd_list, &actual_size);
-    assert(ret == ESP_OK);
-
-    if (qtd_list) {
-        if (!esp_dma_is_buffer_alignment_satisfied(qtd_list, actual_size, dma_mem_info)) {
-            // This should never happen
-            heap_caps_free(qtd_list);
-            qtd_list = NULL;
-        }
-    }
-    return qtd_list;
-}
-
 // ----------------------- Public --------------------------
 
 esp_err_t hcd_install(const hcd_config_t *config)
@@ -1075,42 +1040,66 @@ esp_err_t hcd_install(const hcd_config_t *config)
     HCD_CHECK_FROM_CRIT(s_hcd_obj == NULL, ESP_ERR_INVALID_STATE);
     HCD_EXIT_CRITICAL();
 
+    // Check if peripheral_map does not have bits set outside of valid range. Valid bits are BIT0 - BIT(NUM_PORTS - 1)
+    HCD_CHECK((config->peripheral_map != 0) && (config->peripheral_map < BIT(NUM_PORTS)), ESP_ERR_INVALID_ARG);
+
     esp_err_t err_ret;
+
     // Allocate memory for the driver object
     hcd_obj_t *p_hcd_obj_dmy = calloc(1, sizeof(hcd_obj_t));
     if (p_hcd_obj_dmy == NULL) {
         return ESP_ERR_NO_MEM;
     }
-    // Allocate each port object (the hardware currently only has one port)
-    p_hcd_obj_dmy->port_obj = port_obj_alloc();
-    if (p_hcd_obj_dmy->port_obj == NULL) {
-        err_ret = ESP_ERR_NO_MEM;
-        goto port_alloc_err;
+
+    // Allocate each port object
+    for (int i = 0; i < NUM_PORTS; i++) {
+        if (BIT(i) & config->peripheral_map) {
+            p_hcd_obj_dmy->port_obj[i] = port_obj_alloc();
+            if (p_hcd_obj_dmy->port_obj[i] == NULL) {
+                err_ret = ESP_ERR_NO_MEM;
+                goto clean_up;
+            }
+            // Allocate interrupt
+            const int irq_index = usb_dwc_info.controllers[i].irq;
+            err_ret = esp_intr_alloc(irq_index,
+                                     config->intr_flags | ESP_INTR_FLAG_INTRDISABLED,  // The interrupt must be disabled until the port is initialized
+                                     intr_hdlr_main,
+                                     (void *)p_hcd_obj_dmy->port_obj[i],
+                                     &p_hcd_obj_dmy->port_obj[i]->isr_hdl);
+            if (err_ret != ESP_OK) {
+                ESP_LOGE(HCD_DWC_TAG, "Interrupt alloc error: %s", esp_err_to_name(err_ret));
+                goto clean_up;
+            }
+
+            // Apply custom FIFO config if provided
+            if (config->fifo_config != NULL) {
+                // Convert and validate user-provided config
+                err_ret = convert_fifo_config_to_hal_config(config->fifo_config, &p_hcd_obj_dmy->port_obj[i]->fifo_config);
+                if (err_ret != ESP_OK) {
+                    goto clean_up;
+                }
+            }
+        }
     }
-    // Allocate interrupt
-    err_ret = esp_intr_alloc(USB_INTR,
-                             config->intr_flags | ESP_INTR_FLAG_INTRDISABLED,  // The interrupt must be disabled until the port is initialized
-                             intr_hdlr_main,
-                             (void *)p_hcd_obj_dmy->port_obj,
-                             &p_hcd_obj_dmy->isr_hdl);
-    if (err_ret != ESP_OK) {
-        goto intr_alloc_err;
-    }
+
     HCD_ENTER_CRITICAL();
     if (s_hcd_obj != NULL) {
         HCD_EXIT_CRITICAL();
         err_ret = ESP_ERR_INVALID_STATE;
-        goto assign_err;
+        goto clean_up;
     }
     s_hcd_obj = p_hcd_obj_dmy;
     HCD_EXIT_CRITICAL();
     return ESP_OK;
 
-assign_err:
-    esp_intr_free(p_hcd_obj_dmy->isr_hdl);
-intr_alloc_err:
-    port_obj_free(p_hcd_obj_dmy->port_obj);
-port_alloc_err:
+clean_up:
+    // Free resources
+    for (int i = 0; i < NUM_PORTS; i++) {
+        if (p_hcd_obj_dmy->port_obj[i]) {
+            esp_intr_free(p_hcd_obj_dmy->port_obj[i]->isr_hdl);
+            port_obj_free(p_hcd_obj_dmy->port_obj[i]);
+        }
+    }
     free(p_hcd_obj_dmy);
     return err_ret;
 }
@@ -1118,8 +1107,14 @@ port_alloc_err:
 esp_err_t hcd_uninstall(void)
 {
     HCD_ENTER_CRITICAL();
-    // Check that all ports have been disabled (there's only one port)
-    if (s_hcd_obj == NULL || s_hcd_obj->port_obj->initialized) {
+    // Check that all ports have been disabled
+    bool all_ports_disabled = true;
+    for (int i = 0; i < NUM_PORTS; i++) {
+        if (s_hcd_obj->port_obj[i]) {
+            all_ports_disabled = all_ports_disabled && !(s_hcd_obj->port_obj[i]->initialized);
+        }
+    }
+    if (s_hcd_obj == NULL || !all_ports_disabled) {
         HCD_EXIT_CRITICAL();
         return ESP_ERR_INVALID_STATE;
     }
@@ -1128,8 +1123,12 @@ esp_err_t hcd_uninstall(void)
     HCD_EXIT_CRITICAL();
 
     // Free resources
-    port_obj_free(p_hcd_obj_dmy->port_obj);
-    esp_intr_free(p_hcd_obj_dmy->isr_hdl);
+    for (int i = 0; i < NUM_PORTS; i++) {
+        if (p_hcd_obj_dmy->port_obj[i]) {
+            esp_intr_free(p_hcd_obj_dmy->port_obj[i]->isr_hdl);
+            port_obj_free(p_hcd_obj_dmy->port_obj[i]);
+        }
+    }
     free(p_hcd_obj_dmy);
     return ESP_OK;
 }
@@ -1176,6 +1175,34 @@ static bool _port_debounce(port_t *port)
     // Disable debounce lock
     usb_dwc_hal_disable_debounce_lock(port->hal);
     return is_connected;
+}
+
+static esp_err_t convert_fifo_config_to_hal_config(const hcd_fifo_settings_t *src, usb_dwc_hal_fifo_config_t *dst)
+{
+    // Check at least RX and NPTX are non-zero
+    if (src->rx_fifo_lines == 0 || src->nptx_fifo_lines == 0) {
+        ESP_LOGE(HCD_DWC_TAG, "RX and Non-Periodic TX FIFO must be > 0");
+        return ESP_ERR_INVALID_SIZE;
+    }
+    // Assign valid values
+    dst->rx_fifo_lines   = src->rx_fifo_lines;
+    dst->nptx_fifo_lines = src->nptx_fifo_lines;
+    dst->ptx_fifo_lines  = src->ptx_fifo_lines; // OK even if zero
+
+    return ESP_OK;
+}
+
+/**
+ * @brief Check if the FIFO config is marked to use bias-based default values.
+ *
+ * If all FIFO line sizes are zero, the configuration is considered uninitialized,
+ * and default values will be calculated based on bias settings.
+ */
+static inline bool _is_fifo_config_by_bias(const usb_dwc_hal_fifo_config_t *cfg)
+{
+    return (cfg->rx_fifo_lines == 0 &&
+            cfg->nptx_fifo_lines == 0 &&
+            cfg->ptx_fifo_lines == 0);
 }
 
 // ---------------------- Commands -------------------------
@@ -1255,14 +1282,23 @@ static esp_err_t _port_cmd_reset(port_t *port)
         goto bailout;
     }
 
-    // Reinitialize port registers.
-    usb_dwc_hal_set_fifo_bias(port->hal, port->fifo_bias);  // Set FIFO biases
+    // Reinitialize port registers
+    if (!usb_dwc_hal_fifo_config_is_valid(port->hal, &port->fifo_config)) {
+        HCD_EXIT_CRITICAL();
+        ret = ESP_ERR_INVALID_SIZE;
+        ESP_LOGE(HCD_DWC_TAG, "Invalid FIFO config");
+        HCD_ENTER_CRITICAL();
+        goto bailout;
+    }
+    usb_dwc_hal_set_fifo_config(port->hal, &port->fifo_config);// Apply FIFO settings
+
     usb_dwc_hal_port_set_frame_list(port->hal, port->frame_list, FRAME_LIST_LEN);   // Set periodic frame list
     usb_dwc_hal_port_periodic_enable(port->hal);    // Enable periodic scheduling
 
     ret = ESP_OK;
 bailout:
     // Reinitialize channel registers
+    (void) 0;  // clang doesn't allow variable declarations after labels
     pipe_t *pipe;
     TAILQ_FOREACH(pipe, &port->pipes_idle_tailq, tailq_entry) {
         usb_dwc_hal_chan_set_ep_char(port->hal, pipe->chan_obj, &pipe->ep_char);
@@ -1353,29 +1389,42 @@ exit:
 
 esp_err_t hcd_port_init(int port_number, const hcd_port_config_t *port_config, hcd_port_handle_t *port_hdl)
 {
-    HCD_CHECK(port_number > 0 && port_config != NULL && port_hdl != NULL, ESP_ERR_INVALID_ARG);
-    HCD_CHECK(port_number <= NUM_PORTS, ESP_ERR_NOT_FOUND);
+    HCD_CHECK(port_number >= 0 && port_config != NULL && port_hdl != NULL, ESP_ERR_INVALID_ARG);
+    HCD_CHECK(port_number < NUM_PORTS, ESP_ERR_NOT_FOUND);
 
     HCD_ENTER_CRITICAL();
-    HCD_CHECK_FROM_CRIT(s_hcd_obj != NULL && !s_hcd_obj->port_obj->initialized, ESP_ERR_INVALID_STATE);
+    HCD_CHECK_FROM_CRIT(s_hcd_obj != NULL && !s_hcd_obj->port_obj[port_number]->initialized, ESP_ERR_INVALID_STATE);
     // Port object memory and resources (such as the mutex) already be allocated. Just need to initialize necessary fields only
-    port_t *port_obj = s_hcd_obj->port_obj;
+    port_t *port_obj = s_hcd_obj->port_obj[port_number];
     TAILQ_INIT(&port_obj->pipes_idle_tailq);
     TAILQ_INIT(&port_obj->pipes_active_tailq);
     port_obj->state = HCD_PORT_STATE_NOT_POWERED;
     port_obj->last_event = HCD_PORT_EVENT_NONE;
-    port_obj->fifo_bias = get_hal_fifo_bias(port_config->fifo_bias);
     port_obj->callback = port_config->callback;
     port_obj->callback_arg = port_config->callback_arg;
     port_obj->context = port_config->context;
-    usb_dwc_hal_init(port_obj->hal);
+
+    // USB-HAL's size is dependent on its configuration, namely on number of channels in the configuration
+    // We must first initialize the HAL, to get the number of channels and then allocate memory for the channels
+    usb_dwc_hal_init(port_obj->hal, port_number);
+    port_obj->hal->channels.hdls = calloc(port_obj->hal->constant_config.chan_num_total, sizeof(usb_dwc_hal_chan_t *));
+    HCD_CHECK_FROM_CRIT(port_obj->hal->channels.hdls != NULL, ESP_ERR_NO_MEM);
+
     port_obj->initialized = true;
-    // Clear the frame list. We set the frame list register and enable periodic scheduling after a successful reset
+    // Clear the frame list. We will set the frame list register and enable periodic scheduling after a successful reset
     memset(port_obj->frame_list, 0, FRAME_LIST_LEN * sizeof(uint32_t));
-    esp_intr_enable(s_hcd_obj->isr_hdl);
+    // If FIFO config is zeroed -> calculate from bias
+    if (_is_fifo_config_by_bias(&port_obj->fifo_config)) {
+        // Calculate default FIFO sizes based on Kconfig bias settings
+        _calculate_fifo_from_bias(port_obj, port_obj->hal);
+    }
+    esp_intr_enable(port_obj->isr_hdl);
     *port_hdl = (hcd_port_handle_t)port_obj;
     HCD_EXIT_CRITICAL();
-
+    ESP_LOGD(HCD_DWC_TAG, "FIFO config lines: RX=%" PRIu32 ", PTX=%" PRIu32 ", NPTX=%" PRIu32,
+             port_obj->fifo_config.rx_fifo_lines,
+             port_obj->fifo_config.ptx_fifo_lines,
+             port_obj->fifo_config.nptx_fifo_lines);
     vTaskDelay(pdMS_TO_TICKS(INIT_DELAY_MS));    // Need a short delay before host mode takes effect
     return ESP_OK;
 }
@@ -1391,7 +1440,8 @@ esp_err_t hcd_port_deinit(hcd_port_handle_t port_hdl)
                         && port->task_waiting_port_notif == NULL,
                         ESP_ERR_INVALID_STATE);
     port->initialized = false;
-    esp_intr_disable(s_hcd_obj->isr_hdl);
+    esp_intr_disable(port->isr_hdl);
+    free(port->hal->channels.hdls);
     usb_dwc_hal_deinit(port->hal);
     HCD_EXIT_CRITICAL();
 
@@ -1504,17 +1554,17 @@ esp_err_t hcd_port_recover(hcd_port_handle_t port_hdl)
                         && port->num_pipes_idle == 0 && port->num_pipes_queued == 0
                         && port->flags.val == 0 && port->task_waiting_port_notif == NULL,
                         ESP_ERR_INVALID_STATE);
+
     // We are about to do a soft reset on the peripheral. Disable the peripheral throughout
-    esp_intr_disable(s_hcd_obj->isr_hdl);
+    esp_intr_disable(port->isr_hdl);
     usb_dwc_hal_core_soft_reset(port->hal);
     port->state = HCD_PORT_STATE_NOT_POWERED;
     port->last_event = HCD_PORT_EVENT_NONE;
     port->flags.val = 0;
-    // Soft reset wipes all registers so we need to reinitialize the HAL
-    usb_dwc_hal_init(port->hal);
+
     // Clear the frame list. We set the frame list register and enable periodic scheduling after a successful reset
     memset(port->frame_list, 0, FRAME_LIST_LEN * sizeof(uint32_t));
-    esp_intr_enable(s_hcd_obj->isr_hdl);
+    esp_intr_enable(port->isr_hdl);
     HCD_EXIT_CRITICAL();
     return ESP_OK;
 }
@@ -1526,28 +1576,6 @@ void *hcd_port_get_context(hcd_port_handle_t port_hdl)
     HCD_ENTER_CRITICAL();
     ret = port->context;
     HCD_EXIT_CRITICAL();
-    return ret;
-}
-
-esp_err_t hcd_port_set_fifo_bias(hcd_port_handle_t port_hdl, hcd_port_fifo_bias_t bias)
-{
-    esp_err_t ret;
-    usb_hal_fifo_bias_t hal_bias = get_hal_fifo_bias(bias);
-
-    // Configure the new FIFO sizes and store the pointers
-    port_t *port = (port_t *)port_hdl;
-    xSemaphoreTake(port->port_mux, portMAX_DELAY);
-    HCD_ENTER_CRITICAL();
-    // Check that port is in the correct state to update FIFO sizes
-    if (port->initialized && !port->flags.event_pending && port->num_pipes_idle == 0 && port->num_pipes_queued == 0) {
-        usb_dwc_hal_set_fifo_bias(port->hal, hal_bias);
-        port->fifo_bias = hal_bias;
-        ret = ESP_OK;
-    } else {
-        ret = ESP_ERR_INVALID_STATE;
-    }
-    HCD_EXIT_CRITICAL();
-    xSemaphoreGive(port->port_mux);
     return ret;
 }
 
@@ -1592,16 +1620,27 @@ static dma_buffer_block_t *buffer_block_alloc(usb_transfer_type_t type)
         desc_list_len = XFER_LIST_LEN_INTR;
         break;
     }
+
+    // DMA buffer block: Software structure for managing the transfer buffer
     dma_buffer_block_t *buffer = calloc(1, sizeof(dma_buffer_block_t));
-    size_t real_len = 0;
-    void *xfer_desc_list = transfer_descriptor_list_alloc(desc_list_len, &real_len);
-    if (buffer == NULL || xfer_desc_list == NULL) {
+    if (buffer == NULL) {
+        return NULL;
+    }
+
+    // Transfer descriptor list: Must be 512 aligned and DMA capable (USB-DWC requirement) and its size must be cache aligned
+    void *xfer_desc_list = heap_caps_aligned_calloc(USB_DWC_QTD_LIST_MEM_ALIGN, desc_list_len * sizeof(usb_dwc_ll_dma_qtd_t), 1, XFER_DESC_LIST_CAPS);
+
+    if ((xfer_desc_list == NULL) || ((uintptr_t)xfer_desc_list & (USB_DWC_QTD_LIST_MEM_ALIGN - 1))) {
         free(buffer);
         heap_caps_free(xfer_desc_list);
         return NULL;
     }
     buffer->xfer_desc_list = xfer_desc_list;
-    buffer->xfer_desc_list_len_bytes = real_len;
+
+    // Note for developers: We do not use heap_caps_get_allocated_size() because it is broken with HEAP_POISONING=COMPREHENSIVE
+    size_t cache_align = 0;
+    esp_cache_get_alignment(XFER_DESC_LIST_CAPS, &cache_align);
+    buffer->xfer_desc_list_len_bytes = ALIGN_UP(desc_list_len * sizeof(usb_dwc_ll_dma_qtd_t), cache_align);
     return buffer;
 }
 
@@ -1630,7 +1669,7 @@ static bool pipe_args_usb_compliance_verification(const hcd_pipe_config_t *pipe_
     return true;
 }
 
-static bool pipe_alloc_hcd_support_verification(usb_dwc_hal_context_t *hal, const usb_ep_desc_t * ep_desc)
+static bool pipe_alloc_hcd_support_verification(usb_dwc_hal_context_t *hal, const usb_ep_desc_t *ep_desc)
 {
     assert(hal != NULL);
     assert(ep_desc != NULL);
@@ -1697,7 +1736,14 @@ static void pipe_set_ep_char(const hcd_pipe_config_t *pipe_config, usb_transfer_
         ep_char->mps = USB_EP_DESC_GET_MPS(pipe_config->ep_desc);
     }
     ep_char->dev_addr = pipe_config->dev_addr;
-    ep_char->ls_via_fs_hub = (port_speed == USB_SPEED_FULL && pipe_config->dev_speed == USB_SPEED_LOW);
+    ep_char->ls_via_fs_hub = 0;
+    if (pipe_idx > 0) {
+        // TODO: remove warning after IDF-12986
+        if (port_speed == USB_SPEED_FULL && pipe_config->dev_speed == USB_SPEED_LOW) {
+            ESP_LOGW(HCD_DWC_TAG, "Low-speed, extra delay will be applied in ISR");
+            ep_char->ls_via_fs_hub = 1;
+        }
+    }
     // Calculate the pipe's interval in terms of USB frames
     // @see USB-OTG programming guide chapter 6.5 for more information
     if (type == USB_TRANSFER_TYPE_INTR || type == USB_TRANSFER_TYPE_ISOCHRONOUS) {
@@ -1898,6 +1944,8 @@ esp_err_t hcd_pipe_alloc(hcd_port_handle_t port_hdl, const hcd_pipe_config_t *pi
     bool chan_allocated = usb_dwc_hal_chan_alloc(port->hal, pipe->chan_obj, (void *) pipe);
     if (!chan_allocated) {
         HCD_EXIT_CRITICAL();
+        // The only reason why alloc channel could return false is no more free channels
+        ESP_LOGE(HCD_DWC_TAG, "No more HCD channels available");
         ret = ESP_ERR_NOT_SUPPORTED;
         goto err;
     }
@@ -2148,7 +2196,7 @@ static inline void IRAM_ATTR _buffer_fill_isoc(dma_buffer_block_t *buffer, usb_t
     assert(interval > 0);
     assert(__builtin_popcount(interval) == 1); // Isochronous interval must be power of 2 according to USB2.0 specification
     int total_num_desc = transfer->num_isoc_packets * interval;
-    assert(total_num_desc <= XFER_LIST_LEN_ISOC);
+    assert(total_num_desc <= XFER_LIST_LEN_ISOC - XFER_LIST_ISOC_MARGIN); // Some space in the qTD list is reserved for timing margin
     int desc_idx = start_idx;
     int bytes_filled = 0;
     // Zeroize the whole QTD, so we can focus only on the active descriptors
@@ -2204,19 +2252,8 @@ static void IRAM_ATTR _buffer_fill(pipe_t *pipe)
         if (pipe->multi_buffer_control.buffer_num_to_exec == 0) {
             // There are no more previously filled buffers to execute. We need to calculate a new start index based on HFNUM and the pipe's schedule
             uint16_t cur_frame_num = usb_dwc_hal_port_get_cur_frame_num(pipe->port->hal);
-            start_idx = cur_frame_num + 1; // This is the next frame that the periodic scheduler will fetch
-            uint16_t rem_time = usb_dwc_ll_hfnum_get_frame_time_rem(pipe->port->hal->dev);
-
-            // If there is not enough time remaining in this frame, consider the next frame as start index
-            // The remaining time is in USB PHY clocks. The threshold value is time between buffer fill and execute (6-11us) = 180 + 5 x num_packets
-            if (rem_time < 195 + 5 * transfer->num_isoc_packets) {
-                if (rem_time > 165 + 5 * transfer->num_isoc_packets) {
-                    // If the remaining time is +-15 PHY clocks around the threshold value we cannot be certain whether we will schedule it in time for this frame
-                    // Busy wait 10us to be sure that we are at the beginning of next frame/microframe
-                    esp_rom_delay_us(10);
-                }
-                start_idx++;
-            }
+            start_idx = cur_frame_num + 1;      // This is the next frame that the periodic scheduler will fetch
+            start_idx += XFER_LIST_ISOC_MARGIN; // Start scheduling with a little delay. This will get us enough timing margin so no transfer is skipped
 
             // Only every (interval + offset) transfer belongs to this channel
             // Following calculation effectively rounds up to nearest (interval + offset)
@@ -2434,18 +2471,31 @@ static inline void _buffer_parse_isoc(dma_buffer_block_t *buffer, bool is_in)
         int desc_status;
         usb_dwc_hal_xfer_desc_parse(buffer->xfer_desc_list, desc_idx, &rem_len, &desc_status);
         usb_dwc_hal_xfer_desc_clear(buffer->xfer_desc_list, desc_idx);
-        assert(rem_len == 0 || is_in);
-        assert(desc_status == USB_DWC_HAL_XFER_DESC_STS_SUCCESS || desc_status == USB_DWC_HAL_XFER_DESC_STS_NOT_EXECUTED);
+        switch (desc_status) {
+        case USB_DWC_HAL_XFER_DESC_STS_SUCCESS:
+            transfer->isoc_packet_desc[pkt_idx].status = USB_TRANSFER_STATUS_COMPLETED;
+            break;
+        case USB_DWC_HAL_XFER_DESC_STS_NOT_EXECUTED:
+            transfer->isoc_packet_desc[pkt_idx].status = USB_TRANSFER_STATUS_SKIPPED;
+            break;
+        case USB_DWC_HAL_XFER_DESC_STS_PKTERR:
+            transfer->isoc_packet_desc[pkt_idx].status = USB_TRANSFER_STATUS_ERROR;
+            break;
+        case USB_DWC_HAL_XFER_DESC_STS_BUFFER_ERR:
+            transfer->isoc_packet_desc[pkt_idx].status = USB_TRANSFER_STATUS_ERROR;
+            break;
+        default:
+            assert(false);
+            break;
+        }
+
         assert(rem_len <= transfer->isoc_packet_desc[pkt_idx].num_bytes);    // Check for DMA errata
         // Update ISO packet actual length and status
         transfer->isoc_packet_desc[pkt_idx].actual_num_bytes = transfer->isoc_packet_desc[pkt_idx].num_bytes - rem_len;
         total_actual_num_bytes += transfer->isoc_packet_desc[pkt_idx].actual_num_bytes;
-        transfer->isoc_packet_desc[pkt_idx].status = (desc_status == USB_DWC_HAL_XFER_DESC_STS_NOT_EXECUTED) ? USB_TRANSFER_STATUS_SKIPPED : USB_TRANSFER_STATUS_COMPLETED;
         // A descriptor is also allocated for unscheduled frames. We need to skip over them
         desc_idx += buffer->flags.isoc.interval;
-        if (desc_idx >= XFER_LIST_LEN_INTR) {
-            desc_idx -= XFER_LIST_LEN_INTR;
-        }
+        desc_idx %= XFER_LIST_LEN_ISOC;
     }
     // Write back the actual_num_bytes and statue of entire transfer
     assert(total_actual_num_bytes <= transfer->num_bytes);

@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2020-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2020-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -15,11 +15,16 @@
 #include "xtensa_api.h"
 #include "xt_utils.h"
 #elif __riscv
+#include "riscv/csr.h"
 #include "riscv/rv_utils.h"
 #endif
 #include "esp_intr_alloc.h"
 #include "esp_err.h"
 #include "esp_attr.h"
+
+#if CONFIG_SECURE_ENABLE_TEE && !NON_OS_BUILD
+#include "secure_service_num.h"
+#endif
 
 #ifdef __cplusplus
 extern "C" {
@@ -129,6 +134,27 @@ FORCE_INLINE_ATTR __attribute__((pure)) int esp_cpu_get_core_id(void)
     return (int)rv_utils_get_core_id();
 #endif
 }
+/**
+ * @brief Get the current [RISC-V] CPU core's privilege level
+ *
+ * This function returns the current privilege level of the CPU core executing
+ * this function.
+ *
+ * @return The current CPU core's privilege level, -1 if not supported.
+ */
+
+FORCE_INLINE_ATTR __attribute__((always_inline)) int esp_cpu_get_curr_privilege_level(void)
+{
+#ifdef __XTENSA__
+    return -1;
+#else
+#if CONFIG_IDF_TARGET_ESP32C3 || CONFIG_IDF_TARGET_ESP32C2
+    return PRV_M;
+#else
+    return RV_READ_CSR(CSR_PRV_MODE);
+#endif
+#endif
+}
 
 /**
  * @brief Read the current stack pointer address
@@ -229,7 +255,7 @@ FORCE_INLINE_ATTR void esp_cpu_intr_set_ivt_addr(const void *ivt_addr)
 #ifdef __XTENSA__
     xt_utils_set_vecbase((uint32_t)ivt_addr);
 #else
-    rv_utils_set_mtvec((uint32_t)ivt_addr);
+    rv_utils_set_xtvec((uint32_t)ivt_addr);
 #endif
 }
 
@@ -245,7 +271,35 @@ FORCE_INLINE_ATTR void esp_cpu_intr_set_mtvt_addr(const void *mtvt_addr)
 {
     rv_utils_set_mtvt((uint32_t)mtvt_addr);
 }
+
+/**
+ * @brief Set the base address of the current CPU's Interrupt Vector Table (XTVT), based
+ * on the current privilege level
+ *
+ * @param xtvt_addr Interrupt Vector Table's base address
+ *
+ * @note The XTVT table is only applicable when CLIC is supported
+ */
+FORCE_INLINE_ATTR void esp_cpu_intr_set_xtvt_addr(const void *xtvt_addr)
+{
+    rv_utils_set_xtvt((uint32_t)xtvt_addr);
+}
 #endif  //#if SOC_INT_CLIC_SUPPORTED
+
+#if SOC_CPU_SUPPORT_WFE
+/**
+ * @brief Disable the WFE (wait for event) feature for CPU.
+ */
+FORCE_INLINE_ATTR void esp_cpu_disable_wfe_mode(void)
+{
+#if CONFIG_SECURE_ENABLE_TEE && !NON_OS_BUILD
+    extern esprv_int_mgmt_t esp_tee_intr_sec_srv_cb;
+    esp_tee_intr_sec_srv_cb(2, SS_RV_UTILS_WFE_MODE_ENABLE, false);
+#else
+    rv_utils_wfe_mode_enable(false);
+#endif
+}
+#endif
 
 #if SOC_CPU_HAS_FLEXIBLE_INTC
 /**
@@ -328,7 +382,7 @@ FORCE_INLINE_ATTR bool esp_cpu_intr_has_handler(int intr_num)
 #ifdef __XTENSA__
     has_handler = xt_int_has_handler(intr_num, esp_cpu_get_core_id());
 #else
-    has_handler = intr_handler_get(intr_num);
+    has_handler = intr_handler_get(intr_num) != NULL;
 #endif
     return has_handler;
 }
@@ -415,7 +469,12 @@ FORCE_INLINE_ATTR uint32_t esp_cpu_intr_get_enabled_mask(void)
 #ifdef __XTENSA__
     return xt_utils_intr_get_enabled_mask();
 #else
+#if CONFIG_SECURE_ENABLE_TEE && !NON_OS_BUILD && CONFIG_IDF_TARGET_ESP32C5
+    extern esprv_int_mgmt_t esp_tee_intr_sec_srv_cb;
+    return esp_tee_intr_sec_srv_cb(1, SS_RV_UTILS_INTR_GET_ENABLED_MASK);
+#else
     return rv_utils_intr_get_enabled_mask();
+#endif
 #endif
 }
 
@@ -430,7 +489,12 @@ FORCE_INLINE_ATTR void esp_cpu_intr_edge_ack(int intr_num)
 #ifdef __XTENSA__
     xthal_set_intclear((unsigned) (1 << intr_num));
 #else
+#if CONFIG_SECURE_ENABLE_TEE && !NON_OS_BUILD
+    extern esprv_int_mgmt_t esp_tee_intr_sec_srv_cb;
+    esp_tee_intr_sec_srv_cb(2, SS_RV_UTILS_INTR_EDGE_ACK, intr_num);
+#else
     rv_utils_intr_edge_ack((unsigned) intr_num);
+#endif
 #endif
 }
 
@@ -577,6 +641,14 @@ bool esp_cpu_compare_and_set(volatile uint32_t *addr, uint32_t compare_value, ui
 FORCE_INLINE_ATTR void esp_cpu_branch_prediction_enable(void)
 {
     rv_utils_en_branch_predictor();
+}
+
+/**
+ * @brief Disable branch prediction
+ */
+FORCE_INLINE_ATTR void esp_cpu_branch_prediction_disable(void)
+{
+    rv_utils_dis_branch_predictor();
 }
 #endif  //#if SOC_BRANCH_PREDICTOR_SUPPORTED
 

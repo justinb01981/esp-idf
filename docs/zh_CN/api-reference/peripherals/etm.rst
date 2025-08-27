@@ -32,6 +32,7 @@ ETM 模块具有多个通道，这些通道支持用户根据需要进行配置�
 - :ref:`etm-event` - 介绍如何分配新的 ETM 事件句柄，以及如何从不同外设获取现有句柄。
 - :ref:`etm-task` - 介绍如何分配新的 ETM 任务句柄，以及如何从不同外设获取现有句柄。
 - :ref:`etm-channel-control` - 介绍常见的 ETM 通道控制函数。
+- :ref:`etm-power-management` - 介绍了驱动针对功耗管理提供的选项和策略。
 - :ref:`etm-thread-safety` - 列出了驱动程序中始终线程安全的 API。
 - :ref:`etm-kconfig-options` - 列出了 ETM 支持的 Kconfig 选项，这些选项对驱动程序的行为会产生不同影响。
 
@@ -67,11 +68,12 @@ GPIO **边沿** 事件是最常见的事件类型，任何 GPIO 管脚均可触�
 
     :SOC_SYSTIMER_SUPPORT_ETM: - 调用 :cpp:func:`esp_systick_new_etm_alarm_event` 可以从 RTOS Systick 获取 ETM 事件句柄，每个 CPU 核心可以获取一个事件句柄。
     :SOC_SYSTIMER_SUPPORT_ETM: - 要了解如何从 esp_timer 获取 ETM 事件句柄，请参阅 :doc:`/api-reference/system/esp_timer`。
-    :SOC_TIMER_SUPPORT_ETM: - 要了解如何从 GPTimer 获取 ETM 事件句柄，请参阅 :doc:`/api-reference/peripherals/gptimer`。
+    :SOC_TIMER_SUPPORT_ETM: - 要了解如何从 GPTimer 获取 ETM 事件句柄，请参阅 :ref:`gptimer-etm-event-and-task`。
     :SOC_GDMA_SUPPORT_ETM: - 要了解如何从 async memcpy 获取 ETM 事件句柄，请参阅 :doc:`/api-reference/system/async_memcpy`。
     :SOC_MCPWM_SUPPORT_ETM: - 要了解如何从 MCPWM 中获取 ETM 事件句柄，请参阅 :doc:`/api-reference/peripherals/mcpwm`。
     :SOC_ANA_CMPR_SUPPORT_ETM: - 要了解如何从模拟比较器获取 ETM 事件句柄，请参阅 :doc:`/api-reference/peripherals/ana_cmpr`。
     :SOC_TEMPERATURE_SENSOR_SUPPORT_ETM: - 要了解如何从温度传感器获取 ETM 事件句柄，请参阅 :doc:`/api-reference/peripherals/temp_sensor`。
+    :SOC_I2S_SUPPORTS_ETM:  - 要了解如何从 I2S 获取 ETM 事件句柄，请参阅 :doc:`/api-reference/peripherals/i2s`。
 
 .. _etm-task:
 
@@ -96,8 +98,9 @@ GPIO 任务是最常见的任务类型。一个 GPIO 可以采取一个或多个
 
 .. list::
 
-    :SOC_TIMER_SUPPORT_ETM: - 要了解如何从 GPTimer 获取 ETM 任务句柄，请参阅 :doc:`/api-reference/peripherals/gptimer`。
+    :SOC_TIMER_SUPPORT_ETM: - 要了解如何从 GPTimer 获取 ETM 任务句柄，请参阅 :ref:`gptimer-etm-event-and-task`。
     :SOC_TEMPERATURE_SENSOR_SUPPORT_ETM: - 要了解如何从温度传感器获取 ETM 任务句柄，请参阅 :doc:`/api-reference/peripherals/temp_sensor`。
+    :SOC_I2S_SUPPORTS_ETM:  - 要了解如何从 I2S 获取 ETM 任务句柄，请参阅 :doc:`/api-reference/peripherals/i2s`。
 
 .. _etm-channel-control:
 
@@ -128,6 +131,17 @@ ETM 通道分析
     ===========ETM Dump End============
 
 以上输出信息打印的数字 ID 在 ``soc/soc_etm_source.h`` 文件中定义。
+
+.. _etm-power-management:
+
+电源管理
+^^^^^^^^
+
+当启用电源管理时，即 :ref:`CONFIG_PM_ENABLE` 打开的时候，系统可能会调整或禁用时钟源，并在进入睡眠前关闭 ETM 外设依赖的电源。这会导致事件和任务之间的连接信息被丢失，ETM 通道在唤醒后无法正常工作。因此，默认情况下，驱动程序会获取电源管理锁，以禁止系统关闭 ETM 外设。
+
+.. only:: SOC_ETM_SUPPORT_SLEEP_RETENTION
+
+    如果你想节省更多电量，可以将 :cpp:member:`esp_etm_channel_config_t::etm_chan_flags::allow_pd` 设置为 ``true``。ETM 寄存器将在睡眠前备份，并在唤醒后恢复。请注意，启用此选项会增加内存消耗，用于保存寄存器上下文。
 
 .. _etm-thread-safety:
 

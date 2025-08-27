@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2006 Uwe Stuehler <uwe@openbsd.org>
- * Adaptations to ESP-IDF Copyright (c) 2016-2018 Espressif Systems (Shanghai) PTE LTD
+ * Adaptations to ESP-IDF Copyright (c) 2016-2024 Espressif Systems (Shanghai) PTE LTD
  *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -15,7 +15,7 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
-#include "sdmmc_common.h"
+#include "esp_private/sdmmc_common.h"
 #include "sd_pwr_ctrl_by_on_chip_ldo.h"
 #include "sd_pwr_ctrl.h"
 
@@ -32,6 +32,16 @@ static const char* TAG = "sdmmc_init";
         } \
     } while(0);
 
+#define SDMMC_INIT_STEP_PARAM(condition, function, param) \
+    do { \
+        if ((condition)) { \
+            esp_err_t err = (function)(card, param); \
+            if (err != ESP_OK) { \
+                ESP_LOGD(TAG, "%s: %s returned 0x%x", __func__, #function, err); \
+                return err; \
+            } \
+        } \
+    } while(0);
 
 esp_err_t sdmmc_card_init(const sdmmc_host_t* config, sdmmc_card_t* card)
 {
@@ -57,6 +67,9 @@ esp_err_t sdmmc_card_init(const sdmmc_host_t* config, sdmmc_card_t* card)
 
     /* Check if host flags are compatible with slot configuration. */
     SDMMC_INIT_STEP(!is_spi, sdmmc_fix_host_flags);
+
+    /* Check if host function pointers are correctly initialised */
+    SDMMC_INIT_STEP(always, sdmmc_check_host_function_ptr_integrity);
 
     /* Reset SDIO (CMD52, RES) before re-initializing IO (CMD5). */
     SDMMC_INIT_STEP(io_supported, sdmmc_io_reset);
@@ -84,6 +97,11 @@ esp_err_t sdmmc_card_init(const sdmmc_host_t* config, sdmmc_card_t* card)
 
     ESP_LOGD(TAG, "%s: card type is %s", __func__,
             is_sdio ? "SDIO" : is_mmc ? "MMC" : "SD");
+
+    /* switch to 1.8V if supported (UHS-I) */
+    bool is_uhs1 = is_sdmem && (card->ocr & SD_OCR_S18_RA) && (card->ocr & SD_OCR_SDHC_CAP);
+    ESP_LOGV(TAG, "is_uhs1: %d", is_uhs1);
+    SDMMC_INIT_STEP(is_uhs1, sdmmc_init_sd_uhs1);
 
     /* Read the contents of CID register*/
     SDMMC_INIT_STEP(is_mem, sdmmc_init_cid);
@@ -115,6 +133,10 @@ esp_err_t sdmmc_card_init(const sdmmc_host_t* config, sdmmc_card_t* card)
     /* MMC cards: read CXD */
     SDMMC_INIT_STEP(is_mmc, sdmmc_init_mmc_read_ext_csd);
 
+    /* SDIO cards: read CCCR card capabilities */
+    uint8_t card_cap = 0;
+    SDMMC_INIT_STEP_PARAM(is_sdio, sdmmc_io_init_read_card_cap, &card_cap);
+
     /* Try to switch card to HS mode if the card supports it.
      * Set card->max_freq_khz value accordingly.
      */
@@ -128,17 +150,27 @@ esp_err_t sdmmc_card_init(const sdmmc_host_t* config, sdmmc_card_t* card)
         SDMMC_INIT_STEP(always, sdmmc_init_host_bus_width);
     }
 
+    /* Driver Strength */
+    SDMMC_INIT_STEP(is_uhs1, sdmmc_init_sd_driver_strength);
+
+    /* Current Limit */
+    SDMMC_INIT_STEP(is_uhs1, sdmmc_init_sd_current_limit);
+
     /* SD card: read SD Status register */
     SDMMC_INIT_STEP(is_sdmem, sdmmc_init_sd_ssr);
 
     /* Switch to the host to use card->max_freq_khz frequency. */
     SDMMC_INIT_STEP(always, sdmmc_init_host_frequency);
 
+    /* Timing tuning */
+    SDMMC_INIT_STEP(is_uhs1, sdmmc_init_sd_timing_tuning);
+
     /* Sanity check after switching the bus mode and frequency */
     SDMMC_INIT_STEP(is_sdmem, sdmmc_check_scr);
     /* Sanity check after eMMC switch to HS mode */
     SDMMC_INIT_STEP(is_mmc, sdmmc_init_mmc_check_ext_csd);
-    /* TODO: add similar checks for SDIO */
+    /* Sanity check for SDIO after switching the frequency */
+    SDMMC_INIT_STEP_PARAM(is_sdio, sdmmc_io_init_check_card_cap, &card_cap);
 
     return ESP_OK;
 }

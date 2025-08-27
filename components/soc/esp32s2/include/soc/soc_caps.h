@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2020-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2020-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -22,8 +22,8 @@
  * x 0`, it's still a risk.)
  *
  * ECO & exceptions:
- * For ECO-ed booleans, `#define x "Not determined"` for them. This will cause error when used by
- * `#if x` and `#if !x`, making these missing definitions more obvious.
+ * For ECO-ed booleans, `#define x "Not determined" // [gen_soc_caps:ignore]` for them. This will cause error when used by
+ * `#if x` and `#if !x`, making these missing definitions more obvious. Ignore pragma ensures those values are not converted into config options.
  *
  * These defines are parsed and imported as kconfig variables via the script
  * `tools/gen_soc_caps_kconfig/gen_soc_caps_kconfig.py`
@@ -35,6 +35,12 @@
  */
 
 #pragma once
+
+#if __has_include("soc/soc_caps_eval.h")
+#include "soc/soc_caps_eval.h"
+#endif
+
+#define _SOC_CAPS_TARGET_IS_ESP32S2     1 // [gen_soc_caps:ignore]
 
 /*-------------------------- COMMON CAPS ---------------------------------------*/
 #define SOC_ADC_SUPPORTED               1
@@ -148,7 +154,7 @@
 
 #define SOC_CPU_BREAKPOINTS_NUM             2
 #define SOC_CPU_WATCHPOINTS_NUM             2
-#define SOC_CPU_WATCHPOINT_MAX_REGION_SIZE  64 // bytes
+#define SOC_CPU_WATCHPOINT_MAX_REGION_SIZE  0x40 // bytes
 
 /*-------------------------- DAC CAPS ----------------------------------------*/
 #define SOC_DAC_CHAN_NUM      2
@@ -182,6 +188,8 @@
 #define SOC_GPIO_CLOCKOUT_BY_IO_MUX    (1)
 #define SOC_GPIO_CLOCKOUT_CHANNEL_NUM  (3)
 
+// RTC_IOs and DIG_IOs can be hold during deep sleep and after waking up
+#define SOC_GPIO_SUPPORT_HOLD_IO_IN_DSLP (1)
 
 /*-------------------------- Dedicated GPIO CAPS ---------------------------------------*/
 #define SOC_DEDIC_GPIO_OUT_CHANNELS_NUM (8) /*!< 8 outward channels on each CPU core */
@@ -198,6 +206,7 @@
 #define SOC_I2C_FIFO_LEN       (32) /*!< I2C hardware FIFO depth */
 #define SOC_I2C_CMD_REG_NUM    (16) /*!< Number of I2C command registers */
 #define SOC_I2C_SUPPORT_SLAVE       (1)
+#define SOC_I2C_SLAVE_CAN_GET_STRETCH_CAUSE (1)
 
 // FSM_RST only resets the FSM, not using it. So SOC_I2C_SUPPORT_HW_FSM_RST not defined.
 //ESP32-S2 support hardware clear bus
@@ -214,6 +223,7 @@
 #define SOC_I2S_SUPPORTS_PLL_F160M  (1)
 #define SOC_I2S_SUPPORTS_DMA_EQUAL  (1)
 #define SOC_I2S_SUPPORTS_LCD_CAMERA (1)
+#define SOC_I2S_MAX_DATA_WIDTH      (24)
 #define SOC_I2S_APLL_MIN_FREQ       (250000000)
 #define SOC_I2S_APLL_MAX_FREQ       (500000000)
 #define SOC_I2S_APLL_MIN_RATE       (10675) //in Hz, I2S Clock rate limited by hardware
@@ -230,6 +240,7 @@
 #define SOC_LEDC_SUPPORT_APB_CLOCK       (1)
 #define SOC_LEDC_SUPPORT_REF_TICK        (1)
 #define SOC_LEDC_SUPPORT_XTAL_CLOCK      (1)
+#define SOC_LEDC_TIMER_NUM               (4)
 #define SOC_LEDC_CHANNEL_NUM             (8)
 #define SOC_LEDC_TIMER_BIT_WIDTH         (14)
 #define SOC_LEDC_SUPPORT_FADE_STOP       (1)
@@ -259,7 +270,7 @@
 #define SOC_RMT_CHANNELS_PER_GROUP            4  /*!< Total 4 channels */
 #define SOC_RMT_MEM_WORDS_PER_CHANNEL         64 /*!< Each channel owns 64 words memory (1 word = 4 Bytes) */
 #define SOC_RMT_SUPPORT_RX_DEMODULATION       1  /*!< Support signal demodulation on RX path (i.e. remove carrier) */
-#define SOC_RMT_SUPPORT_TX_ASYNC_STOP         1  /*!< Support stop transmission asynchronously */
+#define SOC_RMT_SUPPORT_ASYNC_STOP            1  /*!< Support stop transmission asynchronously */
 #define SOC_RMT_SUPPORT_TX_LOOP_COUNT         1  /*!< Support transmitting specified number of cycles in loop mode */
 #define SOC_RMT_SUPPORT_TX_SYNCHRO            1  /*!< Support coordinate a group of TX channels to start simultaneously */
 #define SOC_RMT_SUPPORT_TX_CARRIER_DATA_ONLY  1  /*!< TX carrier can be modulated to data phase only */
@@ -275,11 +286,8 @@
                                              */
 #define SOC_RTCIO_HOLD_SUPPORTED 1
 #define SOC_RTCIO_WAKE_SUPPORTED 1
-
-/*-------------------------- Sigma Delta Modulator CAPS -----------------*/
-#define SOC_SDM_GROUPS             1U
-#define SOC_SDM_CHANNELS_PER_GROUP 8
-#define SOC_SDM_CLK_SUPPORT_APB    1
+// LP IO peripherals have independent clock gating to manage
+#define SOC_LP_IO_CLOCK_IS_INDEPENDENT 1
 
 /*-------------------------- SPI CAPS ----------------------------------------*/
 #define SOC_SPI_HD_BOTH_INOUT_SUPPORTED     1   //Support enabling MOSI and MISO phases together under Halfduplex mode
@@ -322,28 +330,32 @@
 #define SOC_MEMSPI_SRC_FREQ_20M_SUPPORTED         1
 
 /*-------------------------- SYSTIMER CAPS ----------------------------------*/
-#define SOC_SYSTIMER_COUNTER_NUM  1  // Number of counter units
+#define SOC_SYSTIMER_COUNTER_NUM  (1U)  // Number of counter units
 #define SOC_SYSTIMER_ALARM_NUM    3  // Number of alarm units
 #define SOC_SYSTIMER_BIT_WIDTH_LO 32 // Bit width of systimer low part
 #define SOC_SYSTIMER_BIT_WIDTH_HI 32 // Bit width of systimer high part
 
-/*-------------------------- TIMER GROUP CAPS --------------------------------*/
-#define SOC_TIMER_GROUPS                  (2)
-#define SOC_TIMER_GROUP_TIMERS_PER_GROUP  (2)
-#define SOC_TIMER_GROUP_COUNTER_BIT_WIDTH (64)
-#define SOC_TIMER_GROUP_SUPPORT_XTAL      (1)
-#define SOC_TIMER_GROUP_SUPPORT_APB       (1)
-#define SOC_TIMER_GROUP_TOTAL_TIMERS      (4)
+/*-------------------------- LP_TIMER CAPS ----------------------------------*/
+#define SOC_LP_TIMER_BIT_WIDTH_LO           32 // Bit width of lp_timer low part
+#define SOC_LP_TIMER_BIT_WIDTH_HI           16 // Bit width of lp_timer high part
 
 /*-------------------------- TOUCH SENSOR CAPS -------------------------------*/
-#define SOC_TOUCH_SENSOR_VERSION            (2)     /*!<Hardware version of touch sensor */
-#define SOC_TOUCH_SENSOR_NUM                (15)    /*!<15 Touch channels */
-#define SOC_TOUCH_PROXIMITY_CHANNEL_NUM     (3)     /*!<Support touch proximity channel number. */
+#define SOC_TOUCH_SENSOR_VERSION            (2)     /*!< Hardware version of touch sensor */
+#define SOC_TOUCH_SENSOR_NUM                (15)    /*!< 15 Touch channels */
+#define SOC_TOUCH_MIN_CHAN_ID               (1U)     /*!< Touch minimum channel number, (0 is internal denoise channel) */
+#define SOC_TOUCH_MAX_CHAN_ID               (14)    /*!< Touch maximum channel number */
+#define SOC_TOUCH_SUPPORT_BENCHMARK         (1)     /*!< Touch sensor supports benchmark configuration */
+#define SOC_TOUCH_SUPPORT_SLEEP_WAKEUP      (1)     /*!< Touch sensor supports sleep awake */
+#define SOC_TOUCH_SUPPORT_WATERPROOF        (1)     /*!< Touch sensor supports waterproof */
+#define SOC_TOUCH_SUPPORT_PROX_SENSING      (1)     /*!< Touch sensor supports proximity sensing */
+#define SOC_TOUCH_SUPPORT_DENOISE_CHAN      (1)     /*!< Touch sensor supports denoise channel */
+#define SOC_TOUCH_PROXIMITY_CHANNEL_NUM     (3)     /*!< Support touch proximity channel number. */
 
-#define SOC_TOUCH_SAMPLER_NUM               (1U)    /*!< The sampler number in total, each sampler can be used to sample on one frequency */
+#define SOC_TOUCH_SAMPLE_CFG_NUM            (1U)    /*!< The sample configuration number in total, each sampler can be used to sample on one frequency */
 
 /*-------------------------- TWAI CAPS ---------------------------------------*/
-#define SOC_TWAI_CONTROLLER_NUM         1UL
+#define SOC_TWAI_CONTROLLER_NUM         1U
+#define SOC_TWAI_MASK_FILTER_NUM        1U
 #define SOC_TWAI_CLK_SUPPORT_APB        1
 #define SOC_TWAI_BRP_MIN                2
 #define SOC_TWAI_BRP_MAX                32768
@@ -358,6 +370,8 @@
 #define SOC_UART_SUPPORT_REF_TICK   (1)         /*!< Support REF_TICK as the clock source */
 #define SOC_UART_FIFO_LEN           (128)       /*!< The UART hardware FIFO length */
 #define SOC_UART_BITRATE_MAX        (5000000)   /*!< Max bit rate supported by UART */
+
+#define SOC_UART_WAKEUP_SUPPORT_ACTIVE_THRESH_MODE (1)
 
 /*-------------------------- SPIRAM CAPS -------------------------------------*/
 #define SOC_SPIRAM_SUPPORTED          1
@@ -390,14 +404,12 @@
 #define SOC_SHA_SUPPORT_SHA512_256      (1)
 #define SOC_SHA_SUPPORT_SHA512_T        (1)
 
-
 /*--------------------------- MPI CAPS ---------------------------------------*/
 #define SOC_MPI_MEM_BLOCKS_NUM (4)
 #define SOC_MPI_OPERATIONS_NUM (3)
 
 /*--------------------------- RSA CAPS ---------------------------------------*/
 #define SOC_RSA_MAX_BIT_LEN    (4096)
-
 
 /*-------------------------- AES CAPS -----------------------------------------*/
 #define SOC_AES_SUPPORT_DMA     (1)
@@ -463,6 +475,7 @@
 #define SOC_PM_SUPPORT_VDDSDIO_PD                 (1)
 
 #define SOC_CONFIGURABLE_VDDSDIO_SUPPORTED        (1)
+#define SOC_PM_MODEM_PD_BY_SW                     (1)
 
 /*-------------------------- CLOCK SUBSYSTEM CAPS ----------------------------------------*/
 #define SOC_CLK_APLL_SUPPORTED                    (1)
@@ -472,6 +485,8 @@
 #define SOC_CLK_RC_FAST_SUPPORT_CALIBRATION       (1)
 
 #define SOC_CLK_XTAL32K_SUPPORTED                 (1)     /*!< Support to connect an external low frequency crystal */
+
+#define SOC_CLK_LP_FAST_SUPPORT_XTAL_D4           (1)     /*!< Support XTAL_D4 clock as the LP_FAST clock source */
 
 /*-------------------------- COEXISTENCE HARDWARE PTI CAPS -------------------------------*/
 #define SOC_COEX_HW_PTI                 (1)

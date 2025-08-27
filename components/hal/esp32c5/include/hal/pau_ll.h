@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2023-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2023-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -14,8 +14,10 @@
 #include "soc/pau_reg.h"
 #include "soc/pau_struct.h"
 #include "soc/pcr_struct.h"
+#include "soc/lp_aon_struct.h"
 #include "hal/pau_types.h"
 #include "hal/assert.h"
+#include "hal/misc.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -34,242 +36,121 @@ static inline void pau_ll_enable_bus_clock(bool enable)
 
 static inline uint32_t pau_ll_get_regdma_backup_flow_error(pau_dev_t *dev)
 {
-#if CONFIG_IDF_TARGET_ESP32C5_BETA3_VERSION
     return dev->regdma_conf.flow_err;
-#else
-    HAL_ASSERT(false && "pau not supported yet");
-    return 0;
-#endif
 }
 
 static inline void pau_ll_select_regdma_entry_link(pau_dev_t *dev, int link)
 {
-#if CONFIG_IDF_TARGET_ESP32C5_BETA3_VERSION
     dev->regdma_conf.link_sel = link;
-#else
-    HAL_ASSERT(false && "pau not supported yet");
-#endif
 }
 
 static inline void pau_ll_set_regdma_entry_link_backup_direction(pau_dev_t *dev, bool to_mem)
 {
-#if CONFIG_IDF_TARGET_ESP32C5_BETA3_VERSION
     dev->regdma_conf.to_mem = to_mem ? 1 : 0;
-#else
-    HAL_ASSERT(false && "pau not supported yet");
-#endif
 }
 
-static inline void pau_ll_set_regdma_entry_link_backup_start_enable(pau_dev_t *dev)
+static inline void pau_ll_set_regdma_entry_link_backup_start_enable(pau_dev_t *dev, bool enable)
 {
-#if CONFIG_IDF_TARGET_ESP32C5_BETA3_VERSION
-    dev->regdma_conf.start = 1;
-#else
-    HAL_ASSERT(false && "pau not supported yet");
-#endif
-}
-
-static inline void pau_ll_set_regdma_entry_link_backup_start_disable(pau_dev_t *dev)
-{
-#if CONFIG_IDF_TARGET_ESP32C5_BETA3_VERSION
-    dev->regdma_conf.start = 0;
-#else
-    HAL_ASSERT(false && "pau not supported yet");
-#endif
-}
-
-static inline void pau_ll_set_regdma_select_wifimac_link(pau_dev_t *dev)
-{
-#if CONFIG_IDF_TARGET_ESP32C5_BETA3_VERSION
-    dev->regdma_conf.sel_mac = 1;
-#else
-    HAL_ASSERT(false && "pau not supported yet");
-#endif
-}
-
-static inline void pau_ll_set_regdma_deselect_wifimac_link(pau_dev_t *dev)
-{
-#if CONFIG_IDF_TARGET_ESP32C5_BETA3_VERSION
-    dev->regdma_conf.sel_mac = 0;
-#else
-    HAL_ASSERT(false && "pau not supported yet");
-#endif
-}
-
-static inline void pau_ll_set_regdma_wifimac_link_backup_direction(pau_dev_t *dev, bool to_mem)
-{
-#if CONFIG_IDF_TARGET_ESP32C5_BETA3_VERSION
-    dev->regdma_conf.to_mem_mac = to_mem ? 1 : 0;
-#else
-    HAL_ASSERT(false && "pau not supported yet");
-#endif
-}
-
-static inline void pau_ll_set_regdma_wifimac_link_backup_start_enable(pau_dev_t *dev)
-{
-#if CONFIG_IDF_TARGET_ESP32C5_BETA3_VERSION
-    dev->regdma_conf.start_mac = 1;
-#else
-    HAL_ASSERT(false && "pau not supported yet");
-#endif
-}
-
-static inline void pau_ll_set_regdma_wifimac_link_backup_start_disable(pau_dev_t *dev)
-{
-#if CONFIG_IDF_TARGET_ESP32C5_BETA3_VERSION
-    dev->regdma_conf.start_mac = 0;
-#else
-    HAL_ASSERT(false && "pau not supported yet");
-#endif
-}
-
-static inline void pau_ll_set_regdma_link0_addr(pau_dev_t *dev, void *link_addr)
-{
-#if CONFIG_IDF_TARGET_ESP32C5_BETA3_VERSION
-    dev->regdma_link_0_addr.val = (uint32_t)link_addr;
-#else
-    HAL_ASSERT(false && "pau not supported yet");
-#endif
-}
-
-static inline void pau_ll_set_regdma_link1_addr(pau_dev_t *dev, void *link_addr)
-{
-#if CONFIG_IDF_TARGET_ESP32C5_BETA3_VERSION
-    dev->regdma_link_1_addr.val = (uint32_t)link_addr;
-#else
-    HAL_ASSERT(false && "pau not supported yet");
-#endif
-}
-
-static inline void pau_ll_set_regdma_link2_addr(pau_dev_t *dev, void *link_addr)
-{
-#if CONFIG_IDF_TARGET_ESP32C5_BETA3_VERSION
-    dev->regdma_link_2_addr.val = (uint32_t)link_addr;
-#else
-    HAL_ASSERT(false && "pau not supported yet");
-#endif
-}
-
-static inline void pau_ll_set_regdma_link3_addr(pau_dev_t *dev, void *link_addr)
-{
-#if CONFIG_IDF_TARGET_ESP32C5_BETA3_VERSION
-    dev->regdma_link_3_addr.val = (uint32_t)link_addr;
-#else
-    HAL_ASSERT(false && "pau not supported yet");
-#endif
-}
-
-static inline void pau_ll_set_regdma_wifimac_link_addr(pau_dev_t *dev, void *link_addr)
-{
-#if CONFIG_IDF_TARGET_ESP32C5_BETA3_VERSION
-    dev->regdma_link_mac_addr.val = (uint32_t)link_addr;
-#else
-    HAL_ASSERT(false && "pau not supported yet");
-#endif
+    dev->regdma_conf.start = enable;
 }
 
 static inline uint32_t pau_ll_get_regdma_current_link_addr(pau_dev_t *dev)
 {
-#if CONFIG_IDF_TARGET_ESP32C5_BETA3_VERSION
     return dev->regdma_current_link_addr.val;
-#else
-    HAL_ASSERT(false && "pau not supported yet");
-    return 0;
-#endif
 }
 
 static inline uint32_t pau_ll_get_regdma_backup_addr(pau_dev_t *dev)
 {
-#if CONFIG_IDF_TARGET_ESP32C5_BETA3_VERSION
-    return dev->regdma_backup_addr.val;
-#else
-    HAL_ASSERT(false && "pau not supported yet");
-    return 0;
-#endif
+    return dev->regdma_peri_addr.val;
 }
 
 static inline uint32_t pau_ll_get_regdma_memory_addr(pau_dev_t *dev)
 {
-#if CONFIG_IDF_TARGET_ESP32C5_BETA3_VERSION
     return dev->regdma_mem_addr.val;
-#else
-    HAL_ASSERT(false && "pau not supported yet");
-    return 0;
-#endif
 }
 
 static inline uint32_t pau_ll_get_regdma_intr_raw_signal(pau_dev_t *dev)
 {
-#if CONFIG_IDF_TARGET_ESP32C5_BETA3_VERSION
     return dev->int_raw.val;
-#else
-    HAL_ASSERT(false && "pau not supported yet");
-    return 0;
-#endif
 }
 
 static inline uint32_t pau_ll_get_regdma_intr_status(pau_dev_t *dev)
 {
-#if CONFIG_IDF_TARGET_ESP32C5_BETA3_VERSION
     return dev->int_st.val;
-#else
-    HAL_ASSERT(false && "pau not supported yet");
-    return 0;
-#endif
 }
 
-static inline void pau_ll_set_regdma_backup_done_intr_enable(pau_dev_t *dev)
+static inline void pau_ll_set_regdma_backup_done_intr_enable(pau_dev_t *dev, bool enable)
 {
-#if CONFIG_IDF_TARGET_ESP32C5_BETA3_VERSION
-    dev->int_ena.done_int_ena = 1;
-#else
-    HAL_ASSERT(false && "pau not supported yet");
-#endif
-}
-
-static inline void pau_ll_set_regdma_backup_done_intr_disable(pau_dev_t *dev)
-{
-#if CONFIG_IDF_TARGET_ESP32C5_BETA3_VERSION
-    dev->int_ena.done_int_ena = 0;
-#else
-    HAL_ASSERT(false && "pau not supported yet");
-#endif
+    dev->int_ena.done_int_ena = enable;
 }
 
 static inline void pau_ll_set_regdma_backup_error_intr_enable(pau_dev_t *dev)
 {
-#if CONFIG_IDF_TARGET_ESP32C5_BETA3_VERSION
     dev->int_ena.error_int_ena = 1;
-#else
-    HAL_ASSERT(false && "pau not supported yet");
-#endif
 }
 
 static inline void pau_ll_set_regdma_backup_error_intr_disable(pau_dev_t *dev)
 {
-#if CONFIG_IDF_TARGET_ESP32C5_BETA3_VERSION
     dev->int_ena.error_int_ena = 0;
-#else
-    HAL_ASSERT(false && "pau not supported yet");
-#endif
 }
 
 static inline void pau_ll_clear_regdma_backup_done_intr_state(pau_dev_t *dev)
 {
-#if CONFIG_IDF_TARGET_ESP32C5_BETA3_VERSION
-    dev->int_clr.done_int_clr = 1;
-#else
-    HAL_ASSERT(false && "pau not supported yet");
-#endif
+    dev->int_clr.val = 0x1;
 }
 
 static inline void pau_ll_clear_regdma_backup_error_intr_state(pau_dev_t *dev)
 {
-#if CONFIG_IDF_TARGET_ESP32C5_BETA3_VERSION
-    dev->int_clr.error_int_clr = 1;
-#else
-    HAL_ASSERT(false && "pau not supported yet");
-#endif
+    dev->int_clr.val = 0x2;
+}
+
+
+/**
+ * @brief Set the maximum number of linked lists supported by REGDMA
+ * @param count: the maximum number of regdma link
+ */
+static inline void pau_ll_set_regdma_link_count(int count)
+{
+    HAL_FORCE_MODIFY_U32_REG_FIELD(LP_AON.backup_dma_cfg0, branch_link_length_aon, count);
+}
+
+/**
+ * @brief Set the maximum number of times a single linked list can run for REGDMA. If a linked list continuously reads in a loop
+ *        for some reason and the execution count exceeds this configured number, a timeout will be triggered.
+ * @param count: the maximum number of loop
+ */
+static inline void pau_ll_set_regdma_link_loop_threshold(int count)
+{
+    HAL_FORCE_MODIFY_U32_REG_FIELD(LP_AON.backup_dma_cfg1, link_work_tout_thres_aon, count);
+}
+
+/**
+ * @brief Set the timeout duration for accessing registers. If REGDMA encounters bus-related issues while accessing
+ *        registers and gets stuck on the bus, a timeout will be triggered.
+ * @param count: the maximum number of time
+ */
+static inline void pau_ll_set_regdma_link_reg_access_tout_threshold(int count)
+{
+    HAL_FORCE_MODIFY_U32_REG_FIELD(LP_AON.backup_dma_cfg1, link_backup_tout_thres_aon, count);
+}
+
+/**
+ * @brief Set the regdma_link_addr
+ * @param addr: the addr of regdma_link
+ */
+static inline void pau_ll_set_regdma_link_addr(uint32_t addr)
+{
+    HAL_FORCE_MODIFY_U32_REG_FIELD(LP_AON.backup_dma_cfg2, link_addr_aon, addr);
+}
+
+static inline void pau_ll_set_regdma_link_wait_retry_count(int count)
+{
+    HAL_FORCE_MODIFY_U32_REG_FIELD(LP_AON.backup_dma_cfg1, link_wait_tout_thres_aon, count);
+}
+
+static inline void pau_ll_set_regdma_link_wait_read_interval(int interval)
+{
+    HAL_FORCE_MODIFY_U32_REG_FIELD(LP_AON.backup_dma_cfg0, read_interval_aon, interval);
 }
 
 #ifdef __cplusplus

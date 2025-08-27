@@ -1,5 +1,5 @@
-| Supported Targets | ESP32 | ESP32-C2 | ESP32-C3 | ESP32-C6 | ESP32-H2 | ESP32-S3 |
-| ----------------- | ----- | -------- | -------- | -------- | -------- | -------- |
+| Supported Targets | ESP32 | ESP32-C2 | ESP32-C3 | ESP32-C5 | ESP32-C6 | ESP32-C61 | ESP32-H2 | ESP32-S3 |
+| ----------------- | ----- | -------- | -------- | -------- | -------- | --------- | -------- | -------- |
 
 # BLE Central L2CAP COC Example
 
@@ -22,7 +22,6 @@ Maximum data of 512 bytes can be transferred over L2CAP when MTU is set to 512 a
 Note :
 
 * To install the dependency packages needed, please refer to the top level [README file](../../../../README.md#running-test-python-script-pytest).
-* Currently this Python utility is only supported on Linux (BLE communication is via BLuez + DBus).
 
 ## How to Use Example
 

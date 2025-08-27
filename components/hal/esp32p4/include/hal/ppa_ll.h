@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2023-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2023-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -24,8 +24,8 @@ extern "C" {
 #define PPA_LL_BLEND0_CLUT_MEM_ADDR_OFFSET  0x400
 #define PPA_LL_BLEND1_CLUT_MEM_ADDR_OFFSET  0x800
 
-#define PPA_LL_SRM_SCALING_INT_MAX   PPA_SR_SCAL_X_INT_V
-#define PPA_LL_SRM_SCALING_FRAG_MAX  PPA_SR_SCAL_X_FRAG_V
+#define PPA_LL_SRM_SCALING_INT_MAX   (PPA_SR_SCAL_X_INT_V + 1)
+#define PPA_LL_SRM_SCALING_FRAG_MAX  (PPA_SR_SCAL_X_FRAG_V + 1)
 
 // TODO: On P4 ECO2, SRM block size needs update
 #define PPA_LL_SRM_DEFAULT_BLOCK_SIZE   18 // 18 x 18 block size
@@ -53,7 +53,10 @@ static inline void ppa_ll_enable_bus_clock(bool enable)
 
 /// use a macro to wrap the function, force the caller to use it in a critical section
 /// the critical section needs to declare the __DECLARE_RCC_ATOMIC_ENV variable in advance
-#define ppa_ll_enable_bus_clock(...) (void)__DECLARE_RCC_ATOMIC_ENV; ppa_ll_enable_bus_clock(__VA_ARGS__)
+#define ppa_ll_enable_bus_clock(...) do { \
+        (void)__DECLARE_RCC_ATOMIC_ENV; \
+        ppa_ll_enable_bus_clock(__VA_ARGS__); \
+    } while(0)
 
 /**
  * @brief Reset the PPA module
@@ -66,7 +69,10 @@ static inline void ppa_ll_reset_register(void)
 
 /// use a macro to wrap the function, force the caller to use it in a critical section
 /// the critical section needs to declare the __DECLARE_RCC_ATOMIC_ENV variable in advance
-#define ppa_ll_reset_register(...) (void)__DECLARE_RCC_ATOMIC_ENV; ppa_ll_reset_register(__VA_ARGS__)
+#define ppa_ll_reset_register(...) do { \
+        (void)__DECLARE_RCC_ATOMIC_ENV; \
+        ppa_ll_reset_register(__VA_ARGS__); \
+    } while(0)
 
 ///////////////////////// Scaling, Rotating, Mirroring (SRM) //////////////////////////////
 /**
@@ -660,9 +666,9 @@ static inline void ppa_ll_blend_configure_filling_block(ppa_dev_t *dev, color_pi
  */
 static inline void ppa_ll_blend_set_rx_fg_fix_rgb(ppa_dev_t *dev, color_pixel_rgb888_data_t *rgb)
 {
-    dev->blend_rgb.blend1_rx_b = rgb->b;
-    dev->blend_rgb.blend1_rx_g = rgb->g;
-    dev->blend_rgb.blend1_rx_r = rgb->r;
+    HAL_FORCE_MODIFY_U32_REG_FIELD(dev->blend_rgb, blend1_rx_b, rgb->b);
+    HAL_FORCE_MODIFY_U32_REG_FIELD(dev->blend_rgb, blend1_rx_g, rgb->g);
+    HAL_FORCE_MODIFY_U32_REG_FIELD(dev->blend_rgb, blend1_rx_r, rgb->r);
 }
 
 /*
@@ -682,13 +688,13 @@ static inline void ppa_ll_blend_set_rx_fg_fix_rgb(ppa_dev_t *dev, color_pixel_rg
  */
 static inline void ppa_ll_blend_configure_rx_bg_ck_range(ppa_dev_t *dev, color_pixel_rgb888_data_t *rgb_thres_low, color_pixel_rgb888_data_t *rgb_thres_high)
 {
-    dev->ck_bg_low.colorkey_bg_b_low = rgb_thres_low->b;
-    dev->ck_bg_low.colorkey_bg_g_low = rgb_thres_low->g;
-    dev->ck_bg_low.colorkey_bg_r_low = rgb_thres_low->r;
+    HAL_FORCE_MODIFY_U32_REG_FIELD(dev->ck_bg_low, colorkey_bg_b_low, rgb_thres_low->b);
+    HAL_FORCE_MODIFY_U32_REG_FIELD(dev->ck_bg_low, colorkey_bg_g_low, rgb_thres_low->g);
+    HAL_FORCE_MODIFY_U32_REG_FIELD(dev->ck_bg_low, colorkey_bg_r_low, rgb_thres_low->r);
 
-    dev->ck_bg_high.colorkey_bg_b_high = rgb_thres_high->b;
-    dev->ck_bg_high.colorkey_bg_g_high = rgb_thres_high->g;
-    dev->ck_bg_high.colorkey_bg_r_high = rgb_thres_high->r;
+    HAL_FORCE_MODIFY_U32_REG_FIELD(dev->ck_bg_high, colorkey_bg_b_high, rgb_thres_high->b);
+    HAL_FORCE_MODIFY_U32_REG_FIELD(dev->ck_bg_high, colorkey_bg_g_high, rgb_thres_high->g);
+    HAL_FORCE_MODIFY_U32_REG_FIELD(dev->ck_bg_high, colorkey_bg_r_high, rgb_thres_high->r);
 }
 
 /**
@@ -700,13 +706,13 @@ static inline void ppa_ll_blend_configure_rx_bg_ck_range(ppa_dev_t *dev, color_p
  */
 static inline void ppa_ll_blend_configure_rx_fg_ck_range(ppa_dev_t *dev, color_pixel_rgb888_data_t *rgb_thres_low, color_pixel_rgb888_data_t *rgb_thres_high)
 {
-    dev->ck_fg_low.colorkey_fg_b_low = rgb_thres_low->b;
-    dev->ck_fg_low.colorkey_fg_g_low = rgb_thres_low->g;
-    dev->ck_fg_low.colorkey_fg_r_low = rgb_thres_low->r;
+    HAL_FORCE_MODIFY_U32_REG_FIELD(dev->ck_fg_low, colorkey_fg_b_low, rgb_thres_low->b);
+    HAL_FORCE_MODIFY_U32_REG_FIELD(dev->ck_fg_low, colorkey_fg_g_low, rgb_thres_low->g);
+    HAL_FORCE_MODIFY_U32_REG_FIELD(dev->ck_fg_low, colorkey_fg_r_low, rgb_thres_low->r);
 
-    dev->ck_fg_high.colorkey_fg_b_high = rgb_thres_high->b;
-    dev->ck_fg_high.colorkey_fg_g_high = rgb_thres_high->g;
-    dev->ck_fg_high.colorkey_fg_r_high = rgb_thres_high->r;
+    HAL_FORCE_MODIFY_U32_REG_FIELD(dev->ck_fg_high, colorkey_fg_b_high, rgb_thres_high->b);
+    HAL_FORCE_MODIFY_U32_REG_FIELD(dev->ck_fg_high, colorkey_fg_g_high, rgb_thres_high->g);
+    HAL_FORCE_MODIFY_U32_REG_FIELD(dev->ck_fg_high, colorkey_fg_r_high, rgb_thres_high->r);
 }
 
 /**
@@ -717,9 +723,9 @@ static inline void ppa_ll_blend_configure_rx_fg_ck_range(ppa_dev_t *dev, color_p
  */
 static inline void ppa_ll_blend_set_ck_default_rgb(ppa_dev_t *dev, color_pixel_rgb888_data_t *rgb)
 {
-    dev->ck_default.colorkey_default_b = rgb->b;
-    dev->ck_default.colorkey_default_g = rgb->g;
-    dev->ck_default.colorkey_default_r = rgb->r;
+    HAL_FORCE_MODIFY_U32_REG_FIELD(dev->ck_default, colorkey_default_b, rgb->b);
+    HAL_FORCE_MODIFY_U32_REG_FIELD(dev->ck_default, colorkey_default_g, rgb->g);
+    HAL_FORCE_MODIFY_U32_REG_FIELD(dev->ck_default, colorkey_default_r, rgb->r);
 }
 
 /**

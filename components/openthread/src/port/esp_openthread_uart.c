@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2021-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2021-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -17,6 +17,7 @@
 #include "esp_openthread_common_macro.h"
 #include "esp_openthread_platform.h"
 #include "esp_openthread_types.h"
+#include "esp_vfs.h"
 #include "esp_vfs_dev.h"
 #include "common/logging.hpp"
 #include "driver/uart.h"
@@ -30,7 +31,7 @@ static int s_uart_fd;
 static uint8_t s_uart_buffer[ESP_OPENTHREAD_UART_BUFFER_SIZE];
 static const char *uart_workflow = "uart";
 
-#if (CONFIG_OPENTHREAD_CLI || (CONFIG_OPENTHREAD_RADIO && CONFIG_OPENTHREAD_RCP_UART))
+#if (CONFIG_OPENTHREAD_CLI || (CONFIG_OPENTHREAD_RADIO && (CONFIG_OPENTHREAD_RCP_UART || CONFIG_OPENTHREAD_RCP_USB_SERIAL_JTAG)))
 otError otPlatUartEnable(void)
 {
     return OT_ERROR_NONE;
@@ -62,6 +63,17 @@ otError otPlatUartSend(const uint8_t *buf, uint16_t buf_length)
 
 esp_err_t esp_openthread_uart_init_port(const esp_openthread_uart_config_t *config)
 {
+#ifndef CONFIG_ESP_CONSOLE_UART
+    // If UART console is used, UART vfs devices should be registered during startup.
+    // Otherwise we need to register them here.
+    char uart_path[16];
+    snprintf(uart_path, sizeof(uart_path), "/dev/uart/%d", config->port);
+    bool is_uart_registered = (access(uart_path, F_OK) == 0);
+    if (!is_uart_registered) {
+        // If UART vfs devices are registered, we will failed to open the directory
+        uart_vfs_dev_register();
+    }
+#endif
     ESP_RETURN_ON_ERROR(uart_param_config(config->port, &config->uart_config), OT_PLAT_LOG_TAG,
                         "uart_param_config failed");
     ESP_RETURN_ON_ERROR(
@@ -91,7 +103,6 @@ esp_err_t esp_openthread_host_cli_usb_init(const esp_openthread_platform_config_
 
     ret = usb_serial_jtag_driver_install((usb_serial_jtag_driver_config_t *)&config->host_config.host_usb_config);
     usb_serial_jtag_vfs_use_driver();
-    uart_vfs_dev_register();
     return ret;
 }
 #endif
@@ -105,6 +116,7 @@ esp_err_t esp_openthread_host_cli_uart_init(const esp_openthread_platform_config
 }
 #endif
 
+#if CONFIG_OPENTHREAD_RCP_UART
 esp_err_t esp_openthread_host_rcp_uart_init(const esp_openthread_platform_config_t *config)
 {
     esp_err_t ret = ESP_OK;
@@ -124,6 +136,28 @@ esp_err_t esp_openthread_host_rcp_uart_init(const esp_openthread_platform_config
 
     return ret;
 }
+#endif
+
+#if CONFIG_OPENTHREAD_RCP_USB_SERIAL_JTAG
+esp_err_t esp_openthread_host_rcp_usb_init(const esp_openthread_platform_config_t *config)
+{
+    esp_err_t ret = ESP_OK;
+
+    usb_serial_jtag_vfs_set_rx_line_endings(ESP_LINE_ENDINGS_LF);
+    usb_serial_jtag_vfs_set_tx_line_endings(ESP_LINE_ENDINGS_LF);
+
+    ESP_ERROR_CHECK(usb_serial_jtag_driver_install((usb_serial_jtag_driver_config_t *)&config->host_config.host_usb_config));
+    ESP_ERROR_CHECK(usb_serial_jtag_vfs_register());
+    usb_serial_jtag_vfs_use_driver();
+
+    s_uart_fd = open("/dev/usbserjtag", O_RDWR | O_NONBLOCK);
+    ESP_RETURN_ON_FALSE(s_uart_fd >= 0, ESP_FAIL, OT_PLAT_LOG_TAG, "open usbserjtag failed");
+    ret = esp_openthread_platform_workflow_register(&esp_openthread_uart_update, &esp_openthread_uart_process,
+                                                    uart_workflow);
+
+    return ret;
+}
+#endif
 
 void esp_openthread_uart_deinit()
 {
@@ -148,7 +182,7 @@ esp_err_t esp_openthread_uart_process(otInstance *instance, const esp_openthread
     int rval = read(s_uart_fd, s_uart_buffer, sizeof(s_uart_buffer));
 
     if (rval > 0) {
-#if (CONFIG_OPENTHREAD_CLI || (CONFIG_OPENTHREAD_RADIO && CONFIG_OPENTHREAD_RCP_UART))
+#if (CONFIG_OPENTHREAD_CLI || (CONFIG_OPENTHREAD_RADIO && (CONFIG_OPENTHREAD_RCP_UART || CONFIG_OPENTHREAD_RCP_USB_SERIAL_JTAG)))
         otPlatUartReceived(s_uart_buffer, (uint16_t)rval);
 #endif
     } else if (rval < 0) {

@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+#include <string.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
@@ -60,7 +61,7 @@ TEST_CASE("Dedicated_GPIO_bundle_install/uninstall", "[dedic_gpio]")
 
 typedef struct {
     SemaphoreHandle_t sem;
-    const int gpios[TEST_GPIO_GROUP_SIZE];
+    int gpios[TEST_GPIO_GROUP_SIZE];
 } test_dedic_task_context_t;
 
 static void test_dedic_gpio_on_specific_core(void *args)
@@ -69,16 +70,8 @@ static void test_dedic_gpio_on_specific_core(void *args)
     uint32_t value = 0;
     dedic_gpio_cpu_ll_write_all(0x0); // clear all out channels
 
-    // configure a group of GPIOs, output only
-    const int bundleA_gpios[] = {ctx->gpios[0], ctx->gpios[1]};
-    gpio_config_t io_conf = {
-        .mode = GPIO_MODE_OUTPUT,
-    };
-    for (int i = 0; i < sizeof(bundleA_gpios) / sizeof(bundleA_gpios[0]); i++) {
-        io_conf.pin_bit_mask = 1ULL << bundleA_gpios[i];
-        gpio_config(&io_conf);
-    }
     // Create bundleA, output only
+    const int bundleA_gpios[] = {ctx->gpios[0], ctx->gpios[1]};
     dedic_gpio_bundle_handle_t bundleA = NULL;
     dedic_gpio_bundle_config_t bundleA_config = {
         .gpio_array = bundleA_gpios,
@@ -89,15 +82,8 @@ static void test_dedic_gpio_on_specific_core(void *args)
     };
     TEST_ESP_OK(dedic_gpio_new_bundle(&bundleA_config, &bundleA));
 
-    // configure another group of GPIOs, input and output
-    const int bundleB_gpios[] = {ctx->gpios[2], ctx->gpios[3]};
-    io_conf.mode = GPIO_MODE_INPUT_OUTPUT;
-    for (int i = 0; i < sizeof(bundleB_gpios) / sizeof(bundleB_gpios[0]); i++) {
-        io_conf.pin_bit_mask = 1ULL << bundleB_gpios[i];
-        gpio_config(&io_conf);
-    }
-
     // GPIO bundleB, input and output
+    const int bundleB_gpios[] = {ctx->gpios[2], ctx->gpios[3]};
     dedic_gpio_bundle_handle_t bundleB = NULL;
     dedic_gpio_bundle_config_t bundleB_config = {
         .gpio_array = bundleB_gpios,
@@ -144,6 +130,7 @@ TEST_CASE("Dedicated_GPIO_run_on_multiple_CPU_cores", "[dedic_gpio]")
 {
     SemaphoreHandle_t sem = xSemaphoreCreateCounting(SOC_CPU_CORES_NUM, 0);
     TaskHandle_t task_handle[SOC_CPU_CORES_NUM];
+    test_dedic_task_context_t isr_ctx[SOC_CPU_CORES_NUM];
 
     for (int i = 0; i < SOC_CPU_CORES_NUM; i++) {
 #if CONFIG_IDF_TARGET_ESP32P4
@@ -151,11 +138,11 @@ TEST_CASE("Dedicated_GPIO_run_on_multiple_CPU_cores", "[dedic_gpio]")
 #else
         int start_gpio = i * TEST_GPIO_GROUP_SIZE;
 #endif
-        test_dedic_task_context_t isr_ctx = {
-            .sem = sem,
-            .gpios = {start_gpio, start_gpio + 1, start_gpio + 2, start_gpio + 3}
-        };
-        xTaskCreatePinnedToCore(test_dedic_gpio_on_specific_core, "dedic_gpio_test_tsk", 4096, &isr_ctx, 1,
+        isr_ctx[i].sem = sem;
+        const int gpios[TEST_GPIO_GROUP_SIZE] = {start_gpio, start_gpio + 1, start_gpio + 2, start_gpio + 3};
+        memcpy(isr_ctx[i].gpios, gpios, sizeof(gpios));
+
+        xTaskCreatePinnedToCore(test_dedic_gpio_on_specific_core, "dedic_gpio_test_tsk", 4096, &isr_ctx[i], 1,
                                 &task_handle[i], i);
     }
 
@@ -190,13 +177,6 @@ TEST_CASE("Dedicated_GPIO_interrupt_and_callback", "[dedic_gpio]")
 #else
     const int bundle_gpios[] = {0, 1};
 #endif
-    gpio_config_t io_conf = {
-        .mode = GPIO_MODE_INPUT_OUTPUT,
-    };
-    for (int i = 0; i < sizeof(bundle_gpios) / sizeof(bundle_gpios[0]); i++) {
-        io_conf.pin_bit_mask = 1ULL << bundle_gpios[i];
-        gpio_config(&io_conf);
-    }
     dedic_gpio_bundle_handle_t bundle = NULL;
     dedic_gpio_bundle_config_t bundle_config = {
         .gpio_array = bundle_gpios,

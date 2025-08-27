@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2022-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2022-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Unlicense OR CC0-1.0
  */
@@ -13,6 +13,7 @@
 #include "driver/spi_master.h"
 #endif // CONFIG_ETH_USE_SPI_ETHERNET
 #include "esp_log.h"
+#include "esp_mac.h"
 #include "driver/gpio.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -102,7 +103,9 @@ static esp_netif_t *eth_start(void)
     esp32_emac_config.smi_gpio.mdc_num = CONFIG_EXAMPLE_ETH_MDC_GPIO;
     esp32_emac_config.smi_gpio.mdio_num = CONFIG_EXAMPLE_ETH_MDIO_GPIO;
     s_mac = esp_eth_mac_new_esp32(&esp32_emac_config, &mac_config);
-#if CONFIG_EXAMPLE_ETH_PHY_IP101
+#if CONFIG_EXAMPLE_ETH_PHY_GENERIC
+    s_phy = esp_eth_phy_new_generic(&phy_config);
+#elif CONFIG_EXAMPLE_ETH_PHY_IP101
     s_phy = esp_eth_phy_new_ip101(&phy_config);
 #elif CONFIG_EXAMPLE_ETH_PHY_RTL8201
     s_phy = esp_eth_phy_new_rtl8201(&phy_config);
@@ -112,7 +115,7 @@ static esp_netif_t *eth_start(void)
     s_phy = esp_eth_phy_new_dp83848(&phy_config);
 #elif CONFIG_EXAMPLE_ETH_PHY_KSZ80XX
     s_phy = esp_eth_phy_new_ksz80xx(&phy_config);
-#endif
+#endif // CONFIG_EXAMPLE_ETH_PHY_GENERIC
 #elif CONFIG_EXAMPLE_USE_SPI_ETHERNET
     gpio_install_isr_service(0);
     spi_bus_config_t buscfg = {
@@ -133,37 +136,46 @@ static esp_netif_t *eth_start(void)
     /* dm9051 ethernet driver is based on spi driver */
     eth_dm9051_config_t dm9051_config = ETH_DM9051_DEFAULT_CONFIG(CONFIG_EXAMPLE_ETH_SPI_HOST, &spi_devcfg);
     dm9051_config.int_gpio_num = CONFIG_EXAMPLE_ETH_SPI_INT_GPIO;
+#if CONFIG_EXAMPLE_ETH_SPI_INT_GPIO < 0
+    dm9051_config.poll_period_ms = CONFIG_EXAMPLE_ETH_SPI_POLLING_MS_VAL;
+#endif // CONFIG_EXAMPLE_ETH_SPI_INT_GPIO
     s_mac = esp_eth_mac_new_dm9051(&dm9051_config, &mac_config);
     s_phy = esp_eth_phy_new_dm9051(&phy_config);
 #elif CONFIG_EXAMPLE_USE_W5500
     /* w5500 ethernet driver is based on spi driver */
     eth_w5500_config_t w5500_config = ETH_W5500_DEFAULT_CONFIG(CONFIG_EXAMPLE_ETH_SPI_HOST, &spi_devcfg);
     w5500_config.int_gpio_num = CONFIG_EXAMPLE_ETH_SPI_INT_GPIO;
+#if CONFIG_EXAMPLE_ETH_SPI_INT_GPIO < 0
+    w5500_config.poll_period_ms = CONFIG_EXAMPLE_ETH_SPI_POLLING_MS_VAL;
+#endif // CONFIG_EXAMPLE_ETH_SPI_INT_GPIO
     s_mac = esp_eth_mac_new_w5500(&w5500_config, &mac_config);
     s_phy = esp_eth_phy_new_w5500(&phy_config);
-#endif
+#endif // CONFIG_EXAMPLE_USE_DM9051
 #elif CONFIG_EXAMPLE_USE_OPENETH
     phy_config.autonego_timeout_ms = 100;
     s_mac = esp_eth_mac_new_openeth(&mac_config);
     s_phy = esp_eth_phy_new_dp83848(&phy_config);
-#endif
+#endif // CONFIG_EXAMPLE_USE_INTERNAL_ETHERNET
 
     // Install Ethernet driver
     esp_eth_config_t config = ETH_DEFAULT_CONFIG(s_mac, s_phy);
     ESP_ERROR_CHECK(esp_eth_driver_install(&config, &s_eth_handle));
-#if !CONFIG_EXAMPLE_USE_INTERNAL_ETHERNET
+
+#if CONFIG_EXAMPLE_USE_SPI_ETHERNET
     /* The SPI Ethernet module might doesn't have a burned factory MAC address, we cat to set it manually.
-       02:00:00 is a Locally Administered OUI range so should not be used except when testing on a LAN under your control.
+       We set the ESP_MAC_ETH mac address as the default, if you want to use ESP_MAC_EFUSE_CUSTOM mac address, please enable the
+       configuration: `ESP_MAC_USE_CUSTOM_MAC_AS_BASE_MAC`
     */
-    ESP_ERROR_CHECK(esp_eth_ioctl(s_eth_handle, ETH_CMD_S_MAC_ADDR, (uint8_t[]) {
-        0x02, 0x00, 0x00, 0x12, 0x34, 0x56
-    }));
-#endif
+    uint8_t eth_mac[6] = {0};
+    ESP_ERROR_CHECK(esp_read_mac(eth_mac, ESP_MAC_ETH));
+    ESP_ERROR_CHECK(esp_eth_ioctl(s_eth_handle, ETH_CMD_S_MAC_ADDR, eth_mac));
+#endif // CONFIG_EXAMPLE_USE_SPI_ETHERNET
+
     // combine driver with netif
     s_eth_glue = esp_eth_new_netif_glue(s_eth_handle);
     esp_netif_attach(netif, s_eth_glue);
 
-    // Register user defined event handers
+    // Register user defined event handlers
     ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_ETH_GOT_IP, &eth_on_got_ip, NULL));
 #ifdef CONFIG_EXAMPLE_CONNECT_IPV6
     ESP_ERROR_CHECK(esp_event_handler_register(ETH_EVENT, ETHERNET_EVENT_CONNECTED, &on_eth_event, netif));

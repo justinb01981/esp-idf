@@ -1,22 +1,22 @@
 /*
- * SPDX-FileCopyrightText: 2022-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2022-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
 
 /*******************************************************************************
  * NOTICE
+ * The Lowlevel layer for SPI Flash
  * The ll is not public api, don't use in application code.
- * See readme.md in soc/include/hal/readme.md
  ******************************************************************************/
-
-// The Lowlevel layer for SPI Flash
 
 #pragma once
 
 #include <stdlib.h>
 #include "soc/spi_periph.h"
 #include "soc/spi_struct.h"
+#include "soc/pcr_struct.h"
+#include "hal/assert.h"
 #include "hal/spi_types.h"
 #include "hal/spi_flash_types.h"
 #include <sys/param.h> // For MIN/MAX
@@ -28,12 +28,13 @@
 extern "C" {
 #endif
 
-//NOTE: These macros are changed on c3 for build. MODIFY these when bringup flash.
 #define gpspi_flash_ll_get_hw(host_id)  ( ((host_id)==SPI2_HOST) ? &GPSPI2 : ({abort();(spi_dev_t*)0;}) )
 #define gpspi_flash_ll_hw_get_id(dev)   ( ((dev) == (void*)&GPSPI2) ? SPI2_HOST : -1 )
 
 typedef typeof(GPSPI2.clock.val) gpspi_flash_ll_clock_reg_t;
 #define GPSPI_FLASH_LL_PERIPHERAL_FREQUENCY_MHZ  (80)
+#define GPSPI_FLASH_LL_SUPPORT_CLK_SRC_PRE_DIV   (1)
+#define GPSPI_FLASH_LL_PERIPH_CLK_DIV_MAX ((SPI_CLKCNT_N + 1) * (SPI_CLKDIV_PRE + 1)) //peripheral internal maxmum clock divider
 
 /*------------------------------------------------------------------------------
  * Control
@@ -180,7 +181,7 @@ static inline bool gpspi_flash_ll_host_idle(const spi_dev_t *dev)
  */
 static inline void gpspi_flash_ll_read_phase(spi_dev_t *dev)
 {
-    typeof (dev->user) user = {
+    typeof(dev->user) user = {
         .usr_mosi = 0,
         .usr_miso = 1,
         .usr_addr = 1,
@@ -211,9 +212,9 @@ static inline void gpspi_flash_ll_set_cs_pin(spi_dev_t *dev, int pin)
  */
 static inline void gpspi_flash_ll_set_read_mode(spi_dev_t *dev, esp_flash_io_mode_t read_mode)
 {
-    typeof (dev->ctrl) ctrl;
+    typeof(dev->ctrl) ctrl;
     ctrl.val = dev->ctrl.val;
-    typeof (dev->user) user;
+    typeof(dev->user) user;
     user.val = dev->user.val;
 
     ctrl.val &= ~(SPI_FCMD_QUAD_M | SPI_FADDR_QUAD_M | SPI_FREAD_QUAD_M | SPI_FCMD_DUAL_M | SPI_FADDR_DUAL_M | SPI_FREAD_DUAL_M);
@@ -221,7 +222,7 @@ static inline void gpspi_flash_ll_set_read_mode(spi_dev_t *dev, esp_flash_io_mod
 
     switch (read_mode) {
     case SPI_FLASH_FASTRD:
-        //the default option
+    //the default option
     case SPI_FLASH_SLOWRD:
         break;
     case SPI_FLASH_QIO:
@@ -339,7 +340,7 @@ static inline void gpspi_flash_ll_set_addr_bitlen(spi_dev_t *dev, uint32_t bitle
 static inline void gpspi_flash_ll_set_usr_address(spi_dev_t *dev, uint32_t addr, uint32_t bitlen)
 {
     // The blank region should be all ones
-    uint32_t padding_ones = (bitlen == 32? 0 : UINT32_MAX >> bitlen);
+    uint32_t padding_ones = (bitlen == 32 ? 0 : UINT32_MAX >> bitlen);
     dev->addr.val = (addr << (32 - bitlen)) | padding_ones;
 }
 
@@ -363,7 +364,23 @@ static inline void gpspi_flash_ll_set_address(spi_dev_t *dev, uint32_t addr)
 static inline void gpspi_flash_ll_set_dummy(spi_dev_t *dev, uint32_t dummy_n)
 {
     dev->user.usr_dummy = dummy_n ? 1 : 0;
-    HAL_FORCE_MODIFY_U32_REG_FIELD(dev->user1, usr_dummy_cyclelen, dummy_n - 1);
+    if (dummy_n > 0) {
+        HAL_FORCE_MODIFY_U32_REG_FIELD(dev->user1, usr_dummy_cyclelen, dummy_n - 1);
+    }
+}
+
+/**
+ * Set D/Q output level during dummy phase
+ *
+ * @param dev Beginning address of the peripheral registers.
+ * @param out_en whether to enable IO output for dummy phase
+ * @param out_level dummy output level
+ */
+static inline void gpspi_flash_ll_set_dummy_out(spi_dev_t *dev, uint32_t out_en, uint32_t out_lev)
+{
+    dev->ctrl.dummy_out = out_en;
+    dev->ctrl.q_pol = out_lev;
+    dev->ctrl.d_pol = out_lev;
 }
 
 /**
@@ -374,14 +391,24 @@ static inline void gpspi_flash_ll_set_dummy(spi_dev_t *dev, uint32_t dummy_n)
  */
 static inline void gpspi_flash_ll_set_hold(spi_dev_t *dev, uint32_t hold_n)
 {
-    dev->user1.cs_hold_time = hold_n - 1;
-    dev->user.cs_hold = (hold_n > 0? 1: 0);
+    dev->user.cs_hold = (hold_n > 0 ? 1 : 0);
+    if (hold_n > 0) {
+        dev->user1.cs_hold_time = hold_n - 1;
+    }
 }
 
+/**
+ * Set the delay of SPI clocks before the first SPI clock after the CS active edge.
+ *
+ * @param dev Beginning address of the peripheral registers.
+ * @param cs_setup_time Delay of SPI clocks after the CS active edge, 0 to disable the setup phase.
+ */
 static inline void gpspi_flash_ll_set_cs_setup(spi_dev_t *dev, uint32_t cs_setup_time)
 {
     dev->user.cs_setup = (cs_setup_time > 0 ? 1 : 0);
-    dev->user1.cs_setup_time = cs_setup_time - 1;
+    if (cs_setup_time > 0) {
+        dev->user1.cs_setup_time = cs_setup_time - 1;
+    }
 }
 
 /**
@@ -398,9 +425,59 @@ static inline uint32_t gpspi_flash_ll_calculate_clock_reg(uint8_t clkdiv)
     if (clkdiv == 1) {
         div_parameter = (1 << 31);
     } else {
-        div_parameter = ((clkdiv - 1) | (((clkdiv/2 - 1) & 0xff) << 6 ) | (((clkdiv - 1) & 0xff) << 12));
+        div_parameter = ((clkdiv - 1) | (((clkdiv / 2 - 1) & 0xff) << 6) | (((clkdiv - 1) & 0xff) << 12));
     }
     return div_parameter;
+}
+
+/**
+ * Set the clock source
+ *
+ * @param hw Beginning address of the peripheral registers.
+ * @param clk_source Clock source to use
+ */
+static inline void gpspi_flash_ll_set_clk_source(spi_dev_t *hw, spi_clock_source_t clk_source)
+{
+    uint32_t clk_id = 0;
+    switch (clk_source) {
+    case SOC_MOD_CLK_PLL_F160M:
+        clk_id = 1;
+        break;
+    case SOC_MOD_CLK_RC_FAST:
+        clk_id = 2;
+        break;
+    case SOC_MOD_CLK_XTAL:
+        clk_id = 0;
+        break;
+    default:
+        HAL_ASSERT(false);
+    }
+
+    PCR.spi2_clkm_conf.spi2_clkm_sel = clk_id;
+}
+
+/**
+ * Enable/disable SPI flash module clock
+ *
+ * @param host_id    SPI host ID
+ * @param enable     true to enable, false to disable
+ */
+static inline void gpspi_flash_ll_enable_clock(spi_dev_t *hw, bool enable)
+{
+    PCR.spi2_clkm_conf.spi2_clkm_en = enable;
+}
+
+/**
+ * Enable/disable SPI flash module clock
+ *
+ * @param hw Beginning address of the peripheral registers.
+ * @param enable     true to enable, false to disable
+ */
+static inline void gpspi_flash_ll_clk_source_pre_div(spi_dev_t *hw, uint8_t hs_div, uint8_t mst_div)
+{
+    // In IDF master driver 'mst_div' will be const 2 and 'hs_div' is actually pre_div temporally
+    (void) hs_div;
+    HAL_FORCE_MODIFY_U32_REG_FIELD(PCR.spi2_clkm_conf, spi2_clkm_div_num, mst_div - 1);
 }
 
 #ifdef __cplusplus

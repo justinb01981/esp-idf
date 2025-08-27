@@ -25,19 +25,19 @@ ESP-IDF makes these components explicit and configurable. To do that, when a pro
 Concepts
 --------
 
-- A "project" is a directory that contains all the files and configuration to build a single "app" (executable), as well as additional supporting elements such as a partition table, data/filesystem partitions, and a bootloader.
+- A ``project`` is a directory that contains all the files and configuration to build a single ``app`` (executable), as well as additional supporting elements such as a partition table, data partitions or filesystem partitions, and a bootloader.
 
-- "Project configuration" is held in a single file called ``sdkconfig`` in the root directory of the project. This configuration file is modified via ``idf.py menuconfig`` to customize the configuration of the project. A single project contains exactly one project configuration.
+- ``Project configuration`` is held in a single file called ``sdkconfig`` in the root directory of the project. This configuration file is modified via ``idf.py menuconfig`` to customize the configuration of the project. A single project contains exactly one project configuration.
 
-- An "app" is an executable that is built by ESP-IDF. A single project will usually build two apps - a "project app" (the main executable, ie your custom firmware) and a "bootloader app" (the initial bootloader program which launches the project app).
+- An ``app`` is an executable that is built by ESP-IDF. A single project will usually build two apps - a "project app" (the main executable, ie your custom firmware) and a "bootloader app" (the initial bootloader program which launches the project app).
 
-- "components" are modular pieces of standalone code that are compiled into static libraries (.a files) and linked to an app. Some are provided by ESP-IDF itself, others may be sourced from other places.
+- ``Components`` are modular pieces of standalone code that are compiled into static libraries (.a files) and linked to an app. Some are provided by ESP-IDF itself, others may be sourced from other places.
 
-- "Target" is the hardware for which an application is built. A full list of supported targets in your version of ESP-IDF can be seen by running `idf.py --list-targets`.
+- ``Target`` is the hardware for which an application is built. A full list of supported targets in your version of ESP-IDF can be seen by running `idf.py --list-targets`.
 
 Some things are not part of the project:
 
-- "ESP-IDF" is not part of the project. Instead, it is standalone, and linked to the project via the ``IDF_PATH`` environment variable which holds the path of the ``esp-idf`` directory. This allows the ESP-IDF framework to be decoupled from your project.
+- ``ESP-IDF`` is not part of the project. Instead, it is standalone, and linked to the project via the ``IDF_PATH`` environment variable which holds the path of the ``esp-idf`` directory. This allows the ESP-IDF framework to be decoupled from your project.
 
 - The toolchain for compilation is not part of the project. The toolchain should be installed in the system command line PATH.
 
@@ -47,8 +47,8 @@ Using the Build System
 
 .. _idf.py:
 
-``idf.py``
-----------
+idf.py
+------
 
 The ``idf.py`` command-line tool provides a front-end for easily managing your project builds. It manages the following tools:
 
@@ -56,13 +56,13 @@ The ``idf.py`` command-line tool provides a front-end for easily managing your p
 - Ninja_ which builds the project
 - `esptool.py`_ for flashing the target.
 
-You can read more about configuring the build system using ``idf.py`` :doc:`here <tools/idf-py>`.
+For more details about configuring the build system using ``idf.py``, please refer to :doc:`IDF Frontend <tools/idf-py>`.
 
 
 Using CMake Directly
 --------------------
 
-:ref:`idf.py` is a wrapper around CMake_ for convenience. However, you can also invoke CMake directly if you prefer.
+:ref:`idf.py` is a wrapper around CMake_ for convenience. However, you can also invoke CMake directly.
 
 .. highlight:: bash
 
@@ -125,13 +125,12 @@ When adding custom non-build steps like "flash" to the IDE, it is recommended to
 
 For more detailed information about integrating ESP-IDF with CMake into an IDE, see `Build System Metadata`_.
 
-
 .. _setting-python-interpreter:
 
 Setting up the Python Interpreter
 ---------------------------------
 
-ESP-IDF works well with Python version 3.8+.
+ESP-IDF works well with Python version 3.10+.
 
 ``idf.py`` and other Python scripts will run with the default Python interpreter, i.e., ``python``. You can switch to a different one like ``python3 $IDF_PATH/tools/idf.py ...``, or you can set up a shell alias or another script to simplify the command.
 
@@ -149,11 +148,14 @@ Example Project
 
 .. highlight:: none
 
-An example project directory tree might look like this::
+An example project directory tree might look like this:
+
+.. code-block:: none
 
     - myProject/
                  - CMakeLists.txt
                  - sdkconfig
+                 - dependencies.lock
                  - bootloader_components/ - boot_component/ - CMakeLists.txt
                                                             - Kconfig
                                                             - src1.c
@@ -164,17 +166,25 @@ An example project directory tree might look like this::
                                              - Kconfig
                                              - src1.c
                                              - include/ - component2.h
+                 - managed_components/ - namespace__component-name/ - CMakelists.txt
+                                                                    - src1.c
+                                                                    - idf_component.yml
+                                                                    - include/ - src1.h
                  - main/       - CMakeLists.txt
                                - src1.c
                                - src2.c
-
+                               - idf_component.yml
                  - build/
 
 This example "myProject" contains the following elements:
 
 - A top-level project CMakeLists.txt file. This is the primary file which CMake uses to learn how to build the project; and may set project-wide CMake variables. It includes the file :idf_file:`/tools/cmake/project.cmake` which implements the rest of the build system. Finally, it sets the project name and defines the project.
 
-- "sdkconfig" project configuration file. This file is created/updated when ``idf.py menuconfig`` runs, and holds the configuration for all of the components in the project (including ESP-IDF itself). The ``sdkconfig`` file may or may not be added to the source control system of the project.
+- "sdkconfig" project configuration file. This file is created/updated when ``idf.py menuconfig`` runs, and holds the configuration for all of the components in the project (including ESP-IDF itself). The ``sdkconfig`` file may or may not be added to the source control system of the project. More information about this file can be found in the :ref:`sdkconfig file <sdkconfig-file>` section in the Configuration Guide.
+
+- "dependencies.lock" file contains the list of all managed components, and their versions, that are currently in used in the project. The ``dependencies.lock`` file is generated or updated automatically when IDF Component Manager is used to add or update project components. So this file should never be edited manually! If the project does not have ``idf_component.yml`` files in any of its components, ``dependencies.lock`` will not be created.
+
+- Optional "idf_component.yml" file contains metadata about the component and its dependencies. It is used by the IDF Component Manager to download and resolve these dependencies. More information about this file can be found in the `idf_component.yml <https://docs.espressif.com/projects/idf-component-manager/en/latest/reference/manifest_file.html>`_ section.
 
 - Optional "bootloader_components" directory contains components that need to be compiled and linked inside the bootloader project. A project does not have to contain custom bootloader components of this kind, but it can be useful in case the bootloader needs to be modified to embed new features.
 
@@ -183,6 +193,8 @@ This example "myProject" contains the following elements:
 - "main" directory is a special component that contains source code for the project itself. "main" is a default name, the CMake variable ``COMPONENT_DIRS`` includes this component but you can modify this variable. See the :ref:`renaming main <rename-main>` section for more info. If you have a lot of source files in your project, we recommend grouping most into components instead of putting them all in "main".
 
 - "build" directory is where the build output is created. This directory is created by ``idf.py`` if it doesn't already exist. CMake configures the project and generates interim build files in this directory. Then, after the main build process is run, this directory will also contain interim object files and libraries as well as final binary output files. This directory is usually not added to source control or distributed with the project source code.
+
+- "managed_components" directory is created by the IDF Component Manager to store components managed by this tool. Each managed component typically includes a ``idf_component.yml`` manifest file defining the component's metadata, such as version and dependencies. However, for components sourced from Git repositories, the manifest file is optional. Users should avoid manually modifying the contents of the "managed_components" directory. If alterations are needed, the component can be copied to the ``components`` directory. The "managed_components" directory is usually not versioned in Git and not distributed with the project source code.
 
 Component directories each contain a component ``CMakeLists.txt`` file. This file contains variable definitions to control the build process of the component, and its integration into the overall project. See `Component CMakeLists Files`_ for more details.
 
@@ -230,9 +242,11 @@ These variables all have default values that can be overridden for custom behavi
 
 - ``EXTRA_COMPONENT_DIRS``: Optional list of additional directories to search for components. Paths can be relative to the project directory, or absolute.
 
-- ``COMPONENTS``: A list of component names to build into the project. Defaults to all components found in the ``COMPONENT_DIRS`` directories. Use this variable to "trim down" the project for faster build times. Note that any component which "requires" another component via the REQUIRES or PRIV_REQUIRES arguments on component registration will automatically have it added to this list, so the ``COMPONENTS`` list can be very short.
+- ``COMPONENTS``: A list of component names to build into the project. Defaults to all components found in the ``COMPONENT_DIRS`` directories. Use this variable to "trim down" the project for faster build times. Note that any component which "requires" another component via the REQUIRES or PRIV_REQUIRES arguments on component registration will automatically have it added to this list, so the ``COMPONENTS`` list can be very short. The ``MINIMAL_BUILD`` :ref:`build property <cmake-build-properties>` can be used as an alternative to specifying only the ``main`` component in ``COMPONENTS``.
 
-- ``BOOTLOADER_IGNORE_EXTRA_COMPONENT``: A list of components, placed in ``bootloader_components/``, that should be ignored by the bootloader compilation. Use this variable if a bootloader component needs to be included conditionally inside the project.
+- ``BOOTLOADER_IGNORE_EXTRA_COMPONENT``: Optional list of components, placed in ``bootloader_components/``, that should be ignored by the bootloader compilation. Use this variable if a bootloader component needs to be included conditionally inside the project.
+
+- ``BOOTLOADER_EXTRA_COMPONENT_DIRS``: Optional list of additional directories to search for components to be compiled as part of the bootloader. Please note that this is a build property.
 
 Any paths in these variables can be absolute paths, or set relative to the project directory.
 
@@ -294,7 +308,14 @@ When CMake runs to configure the project, it logs the components included in the
 Multiple Components with the Same Name
 --------------------------------------
 
-When ESP-IDF is collecting all the components to compile, it will do this in the order specified by ``COMPONENT_DIRS``; by default, this means ESP-IDF's internal components first (``IDF_PATH/components``), then any components in directories specified in ``EXTRA_COMPONENT_DIRS``, and finally the project's components (``PROJECT_DIR/components``). If two or more of these directories contain component sub-directories with the same name, the component in the last place searched is used. This allows, for example, overriding ESP-IDF components with a modified version by copying that component from the ESP-IDF components directory to the project components directory and then modifying it there. If used in this way, the ESP-IDF directory itself can remain untouched.
+When ESP-IDF is collecting all the components to compile, the search precedence is as follows (from highest to lowest):
+
+* Project components
+* Components from ``EXTRA_COMPONENT_DIRS``
+* Project managed components, downloaded by the IDF Component Manager into ``PROJECT_DIR/managed_components``, unless the IDF Component Manager is disabled.
+* ESP-IDF components (``IDF_PATH/components``)
+
+If two or more of these directories contain component sub-directories with the same name, the component with higher precedence is used. This allows, for example, overriding ESP-IDF components with a modified version by copying that component from the ESP-IDF components directory to the project components directory and then modifying it there. If used in this way, the ESP-IDF directory itself can remain untouched.
 
 .. note::
 
@@ -338,10 +359,11 @@ The following component-specific variables are available for use inside componen
 - ``COMPONENT_NAME``: Name of the component. Same as the name of the component directory.
 - ``COMPONENT_ALIAS``: Alias of the library created internally by the build system for the component.
 - ``COMPONENT_LIB``: Name of the library created internally by the build system for the component.
+- ``COMPONENT_VERSION``: Component version specified by idf_component.yml and set by IDF Component Manager.
 
 The following variables are set at the project level, but available for use in component CMakeLists:
 
-- ``CONFIG_*``: Each value in the project configuration has a corresponding variable available in cmake. All names begin with ``CONFIG_``. :doc:`More information here </api-reference/kconfig>`.
+- ``CONFIG_*``: Each value in the project configuration has a corresponding variable available in cmake. All names begin with ``CONFIG_``. More information on how the project configuration works, please visit :ref:`Project Configuration Guide <project-configuration-guide>`.
 - ``ESP_PLATFORM``: Set to 1 when the CMake file is processed within the ESP-IDF build system.
 
 
@@ -407,7 +429,7 @@ These settings are found under the "Component Settings" menu when menuconfig is 
 
 To create a component Kconfig file, it is easiest to start with one of the Kconfig files distributed with ESP-IDF.
 
-For an example, see `Adding conditional configuration`_.
+For an example, see `Adding conditional configuration`_. For a more detailed guide, see :ref:`Component Configuration Guide <component-configuration-guide>`.
 
 
 Preprocessor Definitions
@@ -440,7 +462,7 @@ When Writing a Component
 
 - ``PRIV_REQUIRES`` should be set to all components whose header files are #included from *any source files* in this component, unless already listed in ``REQUIRES``. Also, any component which is required to be linked in order for this component to function correctly.
 
-- The values of ``REQUIRES`` and ``PRIV_REQUIRES`` should not depend on any configuration choices (``CONFIG_xxx`` macros). This is because requirements are expanded before the configuration is loaded. Other component variables (like include paths or source files) can depend on configuration choices.
+- The values of ``REQUIRES`` and ``PRIV_REQUIRES`` should not depend on any configuration options (``CONFIG_xxx`` macros). This is because requirements are expanded before the configuration is loaded. Other component variables (like include paths or source files) can depend on configuration options.
 
 - Not setting either or both ``REQUIRES`` variables is fine. If the component has no requirements except for the `Common component requirements`_ needed for RTOS, libc, etc.
 
@@ -592,10 +614,14 @@ Including Components in the Build
 
   - Components mentioned explicitly in ``COMPONENTS``.
   - Those components' requirements (evaluated recursively).
-  - The "common" components that every component depends on.
+  - The :ref:`common components <component-common-requirements>` that every component depends on.
 
 - Setting ``COMPONENTS`` to the minimal list of required components can significantly reduce compile times.
+- The ``MINIMAL_BUILD`` :ref:`build property <cmake-build-properties>` can be set to ``ON``, which acts as a shortcut to configure the ``COMPONENTS`` variable to include only the ``main`` component. This means that the build will include only the :ref:`common components <component-common-requirements>`, the ``main`` component, and all dependencies associated with it, both direct and indirect. If the ``COMPONENTS`` variable is defined while the ``MINIMAL_BUILD`` property is enabled, ``COMPONENTS`` will take precedence.
 
+.. note::
+
+   Certain features and configurations, such as those provided by esp_psram or espcoredump components, may not be available to your project by default if the minimal list of components is used. When using the ``COMPONENTS`` variable, ensure that all necessary components are included. Similarly, when using the ``MINIMAL_BUILD`` build property, ensure that all required components are specified in the ``REQUIRES`` or ``PRIV_REQUIRES`` argument during component registration.
 
 .. _component-circular-dependencies:
 
@@ -703,13 +729,14 @@ Note that ``project_include.cmake`` isn't necessary for the most common componen
 Take great care when setting variables or targets in a ``project_include.cmake`` file. As the values are included in the top-level project CMake pass, they can influence or break functionality across all components!
 
 
-KConfig.projbuild
+Kconfig.projbuild
 -----------------
 
-This is an equivalent to ``project_include.cmake`` for :ref:`component-configuration` KConfig files. If you want to include configuration options at the top level of menuconfig, rather than inside the "Component Configuration" sub-menu, then these can be defined in the KConfig.projbuild file alongside the ``CMakeLists.txt`` file.
+This is an equivalent to ``project_include.cmake`` for :ref:`component-configuration` Kconfig files. If you want to include configuration options at the top level of menuconfig, rather than inside the "Component Configuration" sub-menu, then these can be defined in the Kconfig.projbuild file alongside the ``CMakeLists.txt`` file.
 
-Take care when adding configuration values in this file, as they will be included across the entire project configuration. Where possible, it's generally better to create a KConfig file for :ref:`component-configuration`.
+Take care when adding configuration values in this file, as they will be included across the entire project configuration. Where possible, it's generally better to create a Kconfig file for :ref:`component-configuration`.
 
+For more information, see :ref:`Kconfig Files <kconfig-files>` section in the Configuration Guide.
 
 Wrappers to Redefine or Extend Existing Functions
 -------------------------------------------------
@@ -730,7 +757,7 @@ This mechanism is shown in the example :example:`build_system/wrappers`. Check :
 Override the Default Bootloader
 -------------------------------
 
-Thanks to the optional ``bootloader_components`` directory present in your ESP-IDf project, it is possible to override the default ESP-IDF bootloader. To do so, a new ``bootloader_components/main`` component should be defined, which will make the project directory tree look like the following:
+Thanks to the optional ``bootloader_components`` directory present in your ESP-IDF project, it is possible to override the default ESP-IDF bootloader. To do so, a new ``bootloader_components/main`` component should be defined, which will make the project directory tree look like the following:
 
     - myProject/
                  - CMakeLists.txt
@@ -744,7 +771,7 @@ Thanks to the optional ``bootloader_components`` directory present in your ESP-I
                  - build/
 
 
-Here the ``my_bootloader.c`` file becomes source code for the new bootloader, which means that it will need to perform all the required operations to set up and load the ``main`` application from flash.
+Here, the ``my_bootloader.c`` file becomes source code for the new bootloader, which means that it will need to perform all the required operations to set up and load the ``main`` application from flash.
 
 It is also possible to conditionally replace the bootloader depending on a certain condition, such as the target for example. This can be achieved thanks to the ``BOOTLOADER_IGNORE_EXTRA_COMPONENT`` CMake variable. This list can be used to tell the ESP-IDF bootloader project to ignore and not compile the given components present in ``bootloader_components``. For example, if one wants to use the default bootloader for ESP32 target, then ``myProject/CMakeLists.txt`` should look like the following::
 
@@ -760,13 +787,22 @@ It is important to note that this can also be used for any other bootloader comp
 
 See :example:`custom_bootloader/bootloader_override` for an example of overriding the default bootloader.
 
+Similarly to regular applications, it is possible to include external components, not placed in `bootloader_component`, as part of the bootloader build thanks to the build property ``BOOTLOADER_EXTRA_COMPONENT_DIRS``. It can either refer to a directory that contains several components, or refer to a single component. For example:
+
+    include($ENV{IDF_PATH}/tools/cmake/project.cmake)
+
+    idf_build_set_property(BOOTLOADER_EXTRA_COMPONENT_DIRS "/path/to/extra/component/" APPEND)
+
+    project(main)
+
+See :example:`custom_bootloader/bootloader_extra_dir` for an example of adding extra components to the bootloader build.
 
 .. _config_only_component:
 
 Configuration-Only Components
 =============================
 
-Special components which contain no source files, only ``Kconfig.projbuild`` and ``KConfig``, can have a one-line ``CMakeLists.txt`` file which calls the function ``idf_component_register()`` with no arguments specified. This function will include the component in the project build, but no library will be built *and* no header files will be added to any included paths.
+Special components which contain no source files, only ``Kconfig.projbuild`` and ``Kconfig``, can have a one-line ``CMakeLists.txt`` file which calls the function ``idf_component_register()`` with no arguments specified. This function will include the component in the project build, but no library will be built *and* no header files will be added to any included paths.
 
 
 Debugging CMake
@@ -1044,6 +1080,10 @@ The best of these approaches for building an external project will depend on the
 Custom Sdkconfig Defaults
 =========================
 
+.. note::
+
+  For more detailed information about ``sdkconfig.defaults`` file, please visit :ref:`sdkconfig.defaults file <sdkconfig-defaults-file>` in Project Configuration section.
+
 For example projects or other projects where you don't want to specify a full sdkconfig configuration, but you do want to override some key values from the ESP-IDF defaults, it is possible to create a file ``sdkconfig.defaults`` in the project directory. This file will be used when creating a new config from scratch, or when any new config value hasn't yet been set in the ``sdkconfig`` file.
 
 To override the name of this file or to specify multiple files, set the ``SDKCONFIG_DEFAULTS`` environment variable or set ``SDKCONFIG_DEFAULTS`` in top-level ``CMakeLists.txt``. File names that are not specified as full paths are resolved relative to current project's directory.
@@ -1062,6 +1102,7 @@ If ``SDKCONFIG_DEFAULTS`` is used to override the name of defaults file/files, t
 
 For example, if ``SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig_devkit1"``, and there is a file ``sdkconfig.defaults.esp32`` in the same folder, then the files will be applied in the following order: (1) sdkconfig.defaults (2) sdkconfig.defaults.esp32 (3) sdkconfig_devkit1.
 
+You can find more detailed information on how the project configuration works in the :ref:`Project Configuration Guide <project-configuration-guide>`. In the :ref:`Configuration Files Structure and Relationships <configuration-structure>`, you can find lower-level information about the configuration files.
 
 .. _flash_parameters:
 
@@ -1243,12 +1284,26 @@ Set a :ref:`build property <cmake-build-properties>` *property* with value *val*
 
 .. code-block:: none
 
-  idf_build_component(component_dir)
+  idf_build_component(component_dir [component_source])
 
 Present a directory *component_dir* that contains a component to the build system. Relative paths are converted to absolute paths with respect to current directory.
-All calls to this command must be performed before `idf_build_process`.
 
-This command does not guarantee that the component will be processed during build (see the `COMPONENTS` argument description for `idf_build_process`)
+An optional *component_source* argument can be specified to indicate the source of the component. (default: "project_components")
+
+This argument determines the overriding priority for components with the same name. For detailed information, see :ref:`cmake-components-same-name`.
+
+This argument supports the following values (from highest to lowest priority):
+
+- "project_components" - project components
+- "project_extra_components" - components from ``EXTRA_COMPONENT_DIRS``
+- "project_managed_components" - custom project dependencies managed by the IDF Component Manager
+- "idf_components" - ESP-IDF built-in components, typically under :idf:`/components`
+
+For instance, if a component named "json" is present as both "idf_components", and "project_components", the component as "project_components" takes precedence over the one as "idf_components".
+
+.. warning::
+
+    All calls to this command must be performed before `idf_build_process`. This command does not guarantee that the component will be processed during build (see the `COMPONENTS` argument description for `idf_build_process`).
 
 .. code-block:: none
 
@@ -1318,6 +1373,7 @@ These are properties that describe the build. Values of build properties can be 
 - INCLUDE_DIRECTORIES - include directories for all component source files
 - KCONFIGS - list of Kconfig files found in components in build; set by ``idf_build_process``
 - KCONFIG_PROJBUILDS - list of Kconfig.projbuild files found in components in build; set by ``idf_build_process``
+- MINIMAL_BUILD - perform a minimal build by including only the "common" components required by all other components, along with the components that are direct or transitive dependencies only of the ``main`` component. By default, this property is disabled (set to ``OFF``), but it can be enabled by setting it to ``ON``.
 - PROJECT_NAME - name of the project; set from ``idf_build_process`` PROJECT_NAME argument
 - PROJECT_DIR - directory of the project; set from ``idf_build_process`` PROJECT_DIR argument
 - PROJECT_VER - version of the project; set from ``idf_build_process`` PROJECT_VER argument
@@ -1408,6 +1464,7 @@ These are properties that describe a component. Values of component properties c
 - COMPONENT_LIB - name for created component static/interface library; set by ``idf_build_component`` and library itself is created by ``idf_component_register``
 - COMPONENT_NAME - name of the component; set by ``idf_build_component`` based on the component directory name
 - COMPONENT_TYPE - type of the component, whether LIBRARY or CONFIG_ONLY. A component is of type LIBRARY if it specifies source files or embeds a file
+- COMPONENT_SOURCE - source of the component, one of "idf_components", "project_managed_components", "project_components", "project_extra_components". This is used to determine the override precedence of components with the same name.
 - EMBED_FILES - list of files to embed in component; set from ``idf_component_register`` EMBED_FILES argument
 - EMBED_TXTFILES - list of text files to embed in component; set from ``idf_component_register`` EMBED_TXTFILES argument
 - INCLUDE_DIRS - list of component include directories; set from ``idf_component_register`` INCLUDE_DIRS argument
@@ -1479,7 +1536,7 @@ A tool called ``kconfserver`` is provided to allow IDEs to easily integrate with
 
 You can run ``kconfserver`` from a project via ``idf.py confserver`` or ``ninja kconfserver``, or a similar target triggered from a different build generator.
 
-For more information about ``kconfserver``, see the `esp-idf-kconfig documentation <https://github.com/espressif/esp-idf-kconfig/blob/master/docs/DOCUMENTATION.md>`_.
+For more information about ``kconfserver``, see the `esp-idf-kconfig documentation <https://docs.espressif.com/projects/esp-idf-kconfig/en/latest/kconfserver/index.html>`_.
 
 
 Build System Internals
@@ -1548,6 +1605,10 @@ Enumeration
 
     - Retrieve each component's public and private requirements. A child process is created which executes each component's CMakeLists.txt in script mode. The values of ``idf_component_register`` REQUIRES and PRIV_REQUIRES argument is returned to the parent build process. This is called early expansion. The variable ``CMAKE_BUILD_EARLY_EXPANSION`` is defined during this step.
     - Recursively include components based on public and private requirements.
+    - Unless IDF Component Manager is disabled, it is called to resolve the dependencies of the components:
+      - Looks for manifests and dependencies contained in the project.
+      - Starts the version solving process to resolve the dependencies of the components.
+      - When the version solving process succeeds, the IDF Component Manager downloads dependencies, integrates them into the build, and creates a ``dependencies.lock`` file that contains a list of the exact versions of the dependencies installed by the IDF Component Manager.
 
 
 Processing
@@ -1624,6 +1685,23 @@ Flashing from Make
 ------------------
 
 ``make flash`` and similar targets still work to build and flash. However, project ``sdkconfig`` no longer specifies serial port and baud rate. Environment variables can be used to override these. See :ref:`flash-with-ninja-or-make` for more details.
+
+Application Examples
+--------------------
+
+- :example:`build_system/wrappers` demonstrates how to use a linker feature to redefine or override any public function in both ESP-IDF and the bootloader, allowing modification or extension of a function's default behavior.
+
+- :example:`custom_bootloader/bootloader_override` demonstrates how to override the second stage bootloader from a regular project, providing a custom bootloader that prints an extra message on startup, with the ability to conditionally override the bootloader based on certain conditions like target-dependency or Kconfig options.
+
+- :example:`build_system/cmake/import_lib` demonstrates how to import and use third-party libraries using ExternalProject CMake module.
+
+- :example:`build_system/cmake/import_prebuilt` demonstrates how to import a prebuilt static library into the ESP-IDF build system, build a component with dependencies, and link it to the main component, ultimately outputting the current running partition.
+
+- :example:`build_system/cmake/idf_as_lib` demonstrates the creation of an application equivalent to :example:`hello world application <get-started/hello_world>` using a custom CMake project.
+
+- :example:`build_system/cmake/multi_config` demonstrates how to build multiple configurations of a single application from a single codebase, it is useful for creating binaries for multiple similar products.
+
+- :example:`build_system/cmake/plugins` demonstrates features of the ESP-IDF build system related to link time registration of plugins, allowing you to add multiple implementations of a certain feature without the need to make the application aware of all these implementations.
 
 .. _esp-idf-template: https://github.com/espressif/esp-idf-template
 .. _cmake: https://cmake.org

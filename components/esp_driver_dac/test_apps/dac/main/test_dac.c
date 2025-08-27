@@ -12,13 +12,13 @@
 #include "driver/dac_cosine.h"
 #include "driver/dac_continuous.h"
 #include "driver/gpio.h"
+#include "esp_private/gpio.h"
 #include "esp_adc/adc_oneshot.h"
 #include "esp_err.h"
 #if CONFIG_IDF_TARGET_ESP32
 #include "esp_private/i2s_platform.h"
 // Following headers are used to test the conversion frequency
 #include "soc/i2s_periph.h"
-#include "hal/gpio_hal.h"
 #include "driver/pulse_cnt.h"
 #include "soc/pcnt_periph.h"
 #elif CONFIG_IDF_TARGET_ESP32S2
@@ -100,13 +100,13 @@ TEST_CASE("DAC_API_basic_logic_test", "[dac]")
     };
     /* DMA peripheral availability test */
 #if CONFIG_IDF_TARGET_ESP32
-    TEST_ESP_OK(i2s_platform_acquire_occupation(0, "dac_test"));
+    TEST_ESP_OK(i2s_platform_acquire_occupation(I2S_CTLR_HP, 0, "dac_test"));
 #elif CONFIG_IDF_TARGET_ESP32S2
     TEST_ASSERT(spicommon_periph_claim(SPI3_HOST, "dac_test"));
 #endif
     TEST_ASSERT(dac_continuous_new_channels(&cont_cfg, &cont_handle) == ESP_ERR_NOT_FOUND);
 #if CONFIG_IDF_TARGET_ESP32
-    TEST_ESP_OK(i2s_platform_release_occupation(0));
+    TEST_ESP_OK(i2s_platform_release_occupation(I2S_CTLR_HP, 0));
 #elif CONFIG_IDF_TARGET_ESP32S2
     TEST_ASSERT(spicommon_periph_free(SPI3_HOST));
 #endif
@@ -253,7 +253,7 @@ TEST_CASE("DAC_dma_convert_frequency_test", "[dac]")
     TEST_ESP_OK(pcnt_unit_enable(pcnt_unit));
 
     // Connect the clock signal to pcnt input signal
-    gpio_hal_iomux_func_sel(GPIO_PIN_MUX_REG[GPIO_NUM_4], PIN_FUNC_GPIO);
+    gpio_func_sel(GPIO_NUM_4, PIN_FUNC_GPIO);
     gpio_set_direction(GPIO_NUM_4, GPIO_MODE_INPUT_OUTPUT);
     // The DAC conversion frequency is equal to I2S bclk.
     esp_rom_gpio_connect_out_signal(GPIO_NUM_4, i2s_periph_signal[0].m_tx_ws_sig, 0, 0);

@@ -4,8 +4,9 @@ if(${idf_target} STREQUAL "linux")
     return() # This component is not supported by the POSIX/Linux simulator
 endif()
 
-if(IDF_TARGET STREQUAL "esp32p4" OR IDF_TARGET STREQUAL "esp32c61")
-    # TODO: IDF-7460, IDF-8851, IDF-9553
+if(IDF_TARGET STREQUAL "esp32p4")
+    # TODO: IDF-7460
+    idf_component_register()
     return()
 endif()
 
@@ -52,10 +53,9 @@ if(CONFIG_ESP_PHY_ENABLED)
     endif()
 endif()
 
-# [refactor-todo]: requires "driver" component for periph_ctrl header file
 idf_component_register(SRCS "${srcs}"
                     INCLUDE_DIRS "include" "${idf_target}/include"
-                    PRIV_REQUIRES nvs_flash driver efuse esp_timer esp_wifi
+                    PRIV_REQUIRES nvs_flash esp_driver_gpio efuse esp_timer esp_wifi esptool_py
                     LDFRAGMENTS "${ldfragments}"
                     EMBED_FILES  ${embed_files}
                     )
@@ -72,6 +72,19 @@ if(CONFIG_ESP_PHY_ENABLED)
 
         idf_component_get_property(esp_phy_lib esp_phy COMPONENT_LIB)
 
+        if(CONFIG_ESP_PHY_ENABLE_CERT_TEST)
+            if(CONFIG_IDF_TARGET_ESP32)
+                target_link_libraries(${COMPONENT_LIB} INTERFACE $<TARGET_FILE:${esp_phy_lib}> libbttestmode.a
+                librftest.a $<TARGET_FILE:${esp_phy_lib}>)
+            elseif(CONFIG_IDF_TARGET_ESP32S2)
+                target_link_libraries(${COMPONENT_LIB} INTERFACE $<TARGET_FILE:${esp_phy_lib}> librftest.a
+                librfate.a $<TARGET_FILE:${esp_phy_lib}>)
+            else()
+                target_link_libraries(${COMPONENT_LIB} INTERFACE $<TARGET_FILE:${esp_phy_lib}> libbttestmode.a
+                librfate.a librftest.a $<TARGET_FILE:${esp_phy_lib}>)
+            endif()
+        endif()
+
         if(CONFIG_IDF_TARGET_ESP32)
             target_link_libraries(${COMPONENT_LIB} PUBLIC rtc)
             target_link_libraries(${COMPONENT_LIB} INTERFACE $<TARGET_FILE:${esp_phy_lib}> libphy.a librtc.a
@@ -84,15 +97,14 @@ if(CONFIG_ESP_PHY_ENABLED)
             target_link_libraries(${COMPONENT_LIB} INTERFACE $<TARGET_FILE:${esp_phy_lib}> libphy.a
             $<TARGET_FILE:${esp_phy_lib}>)
         endif()
-
-    if(CONFIG_ESP_PHY_ENABLE_CERT_TEST)
-        target_link_libraries(${COMPONENT_LIB} INTERFACE $<TARGET_FILE:${esp_phy_lib}> libbttestmode.a
-        librfate.a librftest.a $<TARGET_FILE:${esp_phy_lib}>)
     endif()
-endif()
 
    if(CONFIG_ESP_PHY_INIT_DATA_IN_PARTITION)
         idf_component_get_property(esp_common_dir esp_common COMPONENT_DIR)
+        idf_component_get_property(esp_rom_dir esp_rom COMPONENT_DIR)
+        idf_component_get_property(newlib_dir newlib COMPONENT_DIR)
+        idf_component_get_property(soc_dir soc COMPONENT_DIR)
+        idf_component_get_property(log_dir log COMPONENT_DIR)
         partition_table_get_partition_info(phy_partition_offset
         "--partition-type data --partition-subtype phy" "offset")
 
@@ -110,8 +122,9 @@ endif()
                 DEPENDS ${CMAKE_CURRENT_LIST_DIR}/${idf_target}/phy_init_data.c
                 COMMAND ${CMAKE_C_COMPILER} -c ${CMAKE_CURRENT_LIST_DIR}/${idf_target}/phy_init_data.c
                 -I ${esp_common_dir}/include -I ${CMAKE_CURRENT_LIST_DIR}/include
-                -I ${CMAKE_CURRENT_LIST_DIR}/${idf_target}/include
-                -I ${config_dir} -o phy_init_data.obj
+                -I ${CMAKE_CURRENT_LIST_DIR}/${idf_target}/include -I ${esp_rom_dir}/include
+                -I ${soc_dir}/${idf_target}/include -I ${newlib_dir}/platform_include
+                -I ${log_dir}/include -I ${config_dir} -o phy_init_data.obj
                 COMMAND ${CMAKE_OBJCOPY} -O binary phy_init_data.obj ${phy_init_data_bin}
                 )
             add_custom_target(phy_init_data ALL DEPENDS ${phy_init_data_bin})

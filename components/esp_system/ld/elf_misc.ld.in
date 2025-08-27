@@ -1,5 +1,17 @@
 #include "sdkconfig.h"
 
+  /**
+   * This section is not included in the binary image; it is only present in the ELF file.
+   * It is used to keep certain symbols in the ELF file.
+   */
+  .noload 0 (INFO) :
+  {
+    _noload_keep_in_elf_start = ABSOLUTE(.);
+    KEEP(*(.noload_keep_in_elf .noload_keep_in_elf.*))
+    mapping[noload_keep_in_elf]
+    _noload_keep_in_elf_end = ABSOLUTE(.);
+  }
+
   /* DWARF 1 */
   .debug              0 : { *(.debug) }
   .line               0 : { *(.line) }
@@ -54,10 +66,11 @@
     * And so forth...
     */
    *(.rela.*)
-#if !(CONFIG_COMPILER_CXX_EXCEPTIONS || CONFIG_ESP_SYSTEM_USE_EH_FRAME)
+   *(.got .got.plt) /* TODO: GCC-382 */
+#if !EH_FRAME_LINKING_ENABLED
    *(.eh_frame_hdr)
    *(.eh_frame)
-#endif // !(CONFIG_COMPILER_CXX_EXCEPTIONS || CONFIG_ESP_SYSTEM_USE_EH_FRAME)
+#endif // !EH_FRAME_LINKING_ENABLED
   }
 #elif CONFIG_IDF_TARGET_ARCH_XTENSA
 /**
@@ -78,9 +91,9 @@
   {
    *(.fini)
    *(.eh_frame_hdr)
-#if !CONFIG_COMPILER_CXX_EXCEPTIONS
+#if !EH_FRAME_LINKING_ENABLED
    *(.eh_frame)
-#endif // !CONFIG_COMPILER_CXX_EXCEPTIONS
+#endif // !EH_FRAME_LINKING_ENABLED
   }
 #else
   #error "Target architecture is not supported!"

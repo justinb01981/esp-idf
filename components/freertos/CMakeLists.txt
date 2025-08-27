@@ -20,7 +20,9 @@
 #       - Files common across all kernel implementations and all ports
 
 # Bootloader builds only needs FreeRTOS for config, not for anything else
-if(BOOTLOADER_BUILD)
+idf_build_get_property(non_os_build NON_OS_BUILD)
+
+if(non_os_build)
     idf_component_register()
     return()
 endif()
@@ -94,7 +96,7 @@ endif()
 
 # Add ESP-additions source files
 list(APPEND srcs
-    "esp_additions/freertos_compatibility.c"
+    "esp_additions/idf_additions_event_groups.c"
     "esp_additions/idf_additions.c")
 
 if(arch STREQUAL "linux")
@@ -248,4 +250,12 @@ else()
         idf_component_optional_requires(PRIVATE esp_pm)
     endif()
 
+    if(NOT CONFIG_FREERTOS_SMP AND
+       CONFIG_COMPILER_STATIC_ANALYZER AND CMAKE_C_COMPILER_ID STREQUAL "GNU")  # suppress false-positive warning
+        set_source_files_properties(
+            "${kernel_impl}/queue.c"
+            PROPERTIES COMPILE_OPTIONS
+            "-Wno-analyzer-null-argument"
+            )
+    endif()
 endif()

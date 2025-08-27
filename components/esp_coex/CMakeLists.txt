@@ -1,5 +1,7 @@
 idf_build_get_property(idf_target IDF_TARGET)
 
+set(srcs "")
+
 if(${idf_target} STREQUAL "linux")
     return() # This component is not supported by the POSIX/Linux simulator
 endif()
@@ -19,13 +21,15 @@ if(CONFIG_ESP_COEX_ENABLED)
     endif()
 
     if(CONFIG_ESP_WIFI_ENABLED)
-        list(APPEND srcs "${idf_target}/esp_coex_adapter.c")
+        list(APPEND srcs "${idf_target}/esp_coex_adapter.c"
+                            "src/coexist_debug_diagram.c"
+                            "src/coexist_debug.c")
     endif()
 endif()
 
 idf_component_register(SRCS "${srcs}"
                     INCLUDE_DIRS "include"
-                    PRIV_REQUIRES esp_timer driver esp_event
+                    PRIV_REQUIRES esp_timer esp_driver_gpio
                     LDFRAGMENTS "${ldfragments}")
 
 if(CONFIG_ESP_COEX_ENABLED)

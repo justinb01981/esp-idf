@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2015-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2015-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -61,6 +61,8 @@ static inline transport_esp_tls_t *ssl_get_context_data(esp_transport_handle_t t
 static int esp_tls_connect_async(esp_transport_handle_t t, const char *host, int port, int timeout_ms, bool is_plain_tcp)
 {
     transport_esp_tls_t *ssl = ssl_get_context_data(t);
+    ESP_STATIC_ANALYZER_CHECK(ssl == NULL, -1);
+
     if (ssl->conn_state == TRANS_SSL_INIT) {
         ssl->cfg.timeout_ms = timeout_ms;
         ssl->cfg.is_plain_tcp = is_plain_tcp;
@@ -101,6 +103,7 @@ static inline int tcp_connect_async(esp_transport_handle_t t, const char *host, 
 static int ssl_connect(esp_transport_handle_t t, const char *host, int port, int timeout_ms)
 {
     transport_esp_tls_t *ssl = ssl_get_context_data(t);
+    ESP_STATIC_ANALYZER_CHECK(ssl == NULL, -1);
 
     ssl->cfg.timeout_ms = timeout_ms;
 
@@ -139,6 +142,7 @@ static int tcp_connect(esp_transport_handle_t t, const char *host, int port, int
 {
     transport_esp_tls_t *ssl = ssl_get_context_data(t);
     esp_tls_last_error_t *err_handle = esp_transport_get_error_handle(t);
+    ESP_STATIC_ANALYZER_CHECK(ssl == NULL, -1);
 
     ssl->cfg.timeout_ms = timeout_ms;
     esp_err_t err = esp_tls_plain_tcp_connect(host, strlen(host), port, &ssl->cfg, err_handle, &ssl->sockfd);
@@ -154,6 +158,7 @@ static int tcp_connect(esp_transport_handle_t t, const char *host, int port, int
 static int base_poll_read(esp_transport_handle_t t, int timeout_ms)
 {
     transport_esp_tls_t *ssl = ssl_get_context_data(t);
+    ESP_STATIC_ANALYZER_CHECK(ssl == NULL, -1);
     int ret = -1;
     int remain = 0;
     struct timeval timeout;
@@ -169,7 +174,10 @@ static int base_poll_read(esp_transport_handle_t t, int timeout_ms)
         return remain;
     }
     ret = select(ssl->sockfd + 1, &readset, NULL, &errset, esp_transport_utils_ms_to_timeval(timeout_ms, &timeout));
-    if (ret > 0 && FD_ISSET(ssl->sockfd, &errset)) {
+    // The select() function monitors the socket for readiness to read or write, and checks for errors.
+    // If both an error (errset) and readiness (readset/writeset) are detected simultaneously,
+    // this code ensures that the pending read data must be handled before we start processing error.
+    if (ret == 1 && FD_ISSET(ssl->sockfd, &errset)) {
         int sock_errno = 0;
         uint32_t optlen = sizeof(sock_errno);
         getsockopt(ssl->sockfd, SOL_SOCKET, SO_ERROR, &sock_errno, &optlen);
@@ -185,6 +193,7 @@ static int base_poll_read(esp_transport_handle_t t, int timeout_ms)
 static int base_poll_write(esp_transport_handle_t t, int timeout_ms)
 {
     transport_esp_tls_t *ssl = ssl_get_context_data(t);
+    ESP_STATIC_ANALYZER_CHECK(ssl == NULL, -1);
     int ret = -1;
     struct timeval timeout;
     fd_set writeset;
@@ -211,6 +220,7 @@ static int ssl_write(esp_transport_handle_t t, const char *buffer, int len, int 
 {
     int poll;
     transport_esp_tls_t *ssl = ssl_get_context_data(t);
+    ESP_STATIC_ANALYZER_CHECK(ssl == NULL, -1);
 
     if ((poll = esp_transport_poll_write(t, timeout_ms)) <= 0) {
         ESP_LOGW(TAG, "Poll timeout or error, errno=%s, fd=%d, timeout_ms=%d", strerror(errno), ssl->sockfd, timeout_ms);
@@ -233,6 +243,7 @@ static int tcp_write(esp_transport_handle_t t, const char *buffer, int len, int 
 {
     int poll;
     transport_esp_tls_t *ssl = ssl_get_context_data(t);
+    ESP_STATIC_ANALYZER_CHECK(ssl == NULL, -1);
 
     if ((poll = esp_transport_poll_write(t, timeout_ms)) <= 0) {
         ESP_LOGW(TAG, "Poll timeout or error, errno=%s, fd=%d, timeout_ms=%d", strerror(errno), ssl->sockfd, timeout_ms);
@@ -249,6 +260,7 @@ static int tcp_write(esp_transport_handle_t t, const char *buffer, int len, int 
 static int ssl_read(esp_transport_handle_t t, char *buffer, int len, int timeout_ms)
 {
     transport_esp_tls_t *ssl = ssl_get_context_data(t);
+    ESP_STATIC_ANALYZER_CHECK(ssl == NULL, -1);
 
     int poll = esp_transport_poll_read(t, timeout_ms);
     if (poll == -1) {
@@ -260,9 +272,12 @@ static int ssl_read(esp_transport_handle_t t, char *buffer, int len, int timeout
 
     int ret = esp_tls_conn_read(ssl->tls, (unsigned char *)buffer, len);
     if (ret < 0) {
-        ESP_LOGE(TAG, "esp_tls_conn_read error, errno=%s", strerror(errno));
         if (ret == ESP_TLS_ERR_SSL_WANT_READ || ret == ESP_TLS_ERR_SSL_TIMEOUT) {
             ret = ERR_TCP_TRANSPORT_CONNECTION_TIMEOUT;
+            ESP_LOGD(TAG, "esp_tls_conn_read error, errno=%s", strerror(errno));
+        }
+        else {
+            ESP_LOGE(TAG, "esp_tls_conn_read error, errno=%s", strerror(errno));
         }
 
         esp_tls_error_handle_t esp_tls_error_handle;
@@ -284,6 +299,7 @@ static int ssl_read(esp_transport_handle_t t, char *buffer, int len, int timeout
 static int tcp_read(esp_transport_handle_t t, char *buffer, int len, int timeout_ms)
 {
     transport_esp_tls_t *ssl = ssl_get_context_data(t);
+    ESP_STATIC_ANALYZER_CHECK(ssl == NULL, -1);
 
     int poll = esp_transport_poll_read(t, timeout_ms);
     if (poll == -1) {
@@ -316,6 +332,8 @@ static int base_close(esp_transport_handle_t t)
 {
     int ret = -1;
     transport_esp_tls_t *ssl = ssl_get_context_data(t);
+    ESP_STATIC_ANALYZER_CHECK(ssl == NULL, -1);
+
     if (ssl && ssl->ssl_initialized) {
         ret = esp_tls_conn_destroy(ssl->tls);
         ssl->tls = NULL;
@@ -346,6 +364,14 @@ void esp_transport_ssl_enable_global_ca_store(esp_transport_handle_t t)
     GET_SSL_FROM_TRANSPORT_OR_RETURN(ssl, t);
     ssl->cfg.use_global_ca_store = true;
 }
+
+#if CONFIG_MBEDTLS_DYNAMIC_BUFFER
+void esp_transport_ssl_set_esp_tls_dyn_buf_strategy(esp_transport_handle_t t, esp_tls_dyn_buf_strategy_t strategy)
+{
+    GET_SSL_FROM_TRANSPORT_OR_RETURN(ssl, t);
+    ssl->cfg.esp_tls_dyn_buf_strategy = strategy;
+}
+#endif
 
 void esp_transport_ssl_set_tls_version(esp_transport_handle_t t, esp_tls_proto_ver_t tls_version)
 {
@@ -382,12 +408,34 @@ void esp_transport_ssl_set_client_cert_data(esp_transport_handle_t t, const char
     ssl->cfg.clientcert_pem_bytes = len + 1;
 }
 
+void esp_transport_ssl_set_addr_family(esp_transport_handle_t t, esp_tls_addr_family_t addr_family)
+{
+    GET_SSL_FROM_TRANSPORT_OR_RETURN(ssl, t);
+    ssl->cfg.addr_family = addr_family;
+}
+
 #ifdef CONFIG_MBEDTLS_HARDWARE_ECDSA_SIGN
 void esp_transport_ssl_set_client_key_ecdsa_peripheral(esp_transport_handle_t t, uint8_t ecdsa_efuse_blk)
 {
     GET_SSL_FROM_TRANSPORT_OR_RETURN(ssl, t);
     ssl->cfg.use_ecdsa_peripheral = true;
     ssl->cfg.ecdsa_key_efuse_blk = ecdsa_efuse_blk;
+}
+
+#if SOC_ECDSA_SUPPORT_CURVE_P384
+void esp_transport_ssl_set_client_key_ecdsa_peripheral_extended(esp_transport_handle_t t, uint8_t ecdsa_efuse_blk, uint8_t ecdsa_efuse_blk_high)
+{
+    GET_SSL_FROM_TRANSPORT_OR_RETURN(ssl, t);
+    ssl->cfg.use_ecdsa_peripheral = true;
+    ssl->cfg.ecdsa_key_efuse_blk = ecdsa_efuse_blk;
+    ssl->cfg.ecdsa_key_efuse_blk_high = ecdsa_efuse_blk_high;
+}
+#endif
+
+void esp_transport_ssl_set_ecdsa_curve(esp_transport_handle_t t, esp_tls_ecdsa_curve_t curve)
+{
+    GET_SSL_FROM_TRANSPORT_OR_RETURN(ssl, t);
+    ssl->cfg.ecdsa_curve = curve;
 }
 #endif
 
@@ -437,6 +485,12 @@ void esp_transport_ssl_set_common_name(esp_transport_handle_t t, const char *com
 {
     GET_SSL_FROM_TRANSPORT_OR_RETURN(ssl, t);
     ssl->cfg.common_name = common_name;
+}
+
+void esp_transport_ssl_set_ciphersuites_list(esp_transport_handle_t t, const int *ciphersuites_list)
+{
+    GET_SSL_FROM_TRANSPORT_OR_RETURN(ssl, t);
+    ssl->cfg.ciphersuites_list = ciphersuites_list;
 }
 
 #ifdef CONFIG_ESP_TLS_USE_SECURE_ELEMENT

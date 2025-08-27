@@ -6,7 +6,11 @@
 概述
 --------
 
-触摸元件库是基于触摸传感器驱动设计的高度抽象的元件库，该库提供了统一且友好的软件接口，可以快速构建电容式触摸传感器的应用。有关触摸传感器驱动 API 的更多信息，请参阅 :doc:`../peripherals/touch_pad`。
+触摸元件库是基于触摸传感器驱动设计的高度抽象的元件库，该库提供了统一且友好的软件接口，可以快速构建电容式触摸传感器的应用。
+
+.. warning::
+
+    目前的触摸元件库仍然基于旧的触摸传感器驱动。如您不需要使用触摸元件库，请参考新的 :doc:`电容式触摸传感器 </api-reference/peripherals/cap_touch_sens>` 驱动。
 
 架构
 ^^^^^^^^^^^^
@@ -34,7 +38,7 @@
     :align: center
 
     * - 功能
-      - ESP32S2
+      - {IDF_TARGET_NAME}
     * - 防水
       - ✔
     * - 按键
@@ -428,8 +432,6 @@
 
 使用触摸传感器，可以唤醒从 Light-sleep 或 Deep-sleep 模式中唤醒芯片。在 Light-sleep 模式下，任何已安装的触摸按键都可以唤醒芯片。但在 Deep-sleep 模式下，只有睡眠按键可以唤醒芯片，触摸传感器还会立即进行校准。如果手指没有及时离开，可能导致校准参考值出错。尽管在手指离开后，校准参考值会自行恢复，不会影响驱动逻辑，但如果你不想在从 Deep-sleep 模式唤醒时看到错误的校准参考值，可以调用 :cpp:func:`touch_element_sleep_enable_wakeup_calibration`，禁用唤醒校准功能。
 
-查看使用触摸元件唤醒芯片的示例代码，请前往 ESP-IDF 示例的 :example:`system/light_sleep` 目录。
-
 .. code-block:: c
 
     void app_main()
@@ -451,9 +453,13 @@
     }
 
 应用示例
--------------------
+--------
 
-查看使用触摸元件库的示例代码，请前往 ESP-IDF 示例的 :example:`peripherals/touch_sensor/touch_element` 目录。
+- :example:`peripherals/touch_sensor/touch_element/touch_element_waterproof` 演示了如何使用触摸元件库来设置带有防水保护的电容式触摸传感器。
+- :example:`peripherals/touch_sensor/touch_element/touch_slider` 演示了如何使用触摸元件库来设置和操作触摸滑条。
+- :example:`peripherals/touch_sensor/touch_element/touch_elements_combination` 演示了如何使用触摸元件库来设置多种类型的触摸元件，并在一个任务中处理所有的事件消息。
+- :example:`peripherals/touch_sensor/touch_element/touch_matrix` 演示了如何通过触摸元件库，在 {IDF_TARGET_NAME} 开发板上使用电容式触摸传感器来构建触摸矩阵。
+- :example:`peripherals/touch_sensor/touch_element/touch_button` 演示了如何通过触摸元件库，在 {IDF_TARGET_NAME} 开发板上设置和使用触摸按键。
 
 
 API 参考 - 触摸元件核心

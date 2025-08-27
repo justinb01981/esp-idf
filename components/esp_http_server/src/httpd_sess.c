@@ -72,6 +72,7 @@ static int enum_function(struct sock_db *session, void *context)
     case HTTPD_TASK_INIT:
         session->fd = -1;
         session->ctx = NULL;
+        session->for_async_req = false;
         break;
     // Get active session
     case HTTPD_TASK_GET_ACTIVE:
@@ -87,7 +88,7 @@ static int enum_function(struct sock_db *session, void *context)
         break;
     // Set descriptor
     case HTTPD_TASK_SET_DESCRIPTOR:
-        if (session->fd != -1) {
+        if (session->fd != -1 && !session->for_async_req) {
             FD_SET(session->fd, ctx->fdset);
             if (session->fd > ctx->max_fd) {
                 ctx->max_fd = session->fd;
@@ -145,6 +146,7 @@ static void httpd_sess_close(void *arg)
     }
     sock_db->lru_socket = false;
     struct httpd_data *hd = (struct httpd_data *) sock_db->handle;
+    hd->http_server_state = HTTP_SERVER_EVENT_DISCONNECTED;
     httpd_sess_delete(hd, sock_db);
 }
 
@@ -373,6 +375,7 @@ void httpd_sess_delete(struct httpd_data *hd, struct sock_db *session)
     } else {
         close(session->fd);
     }
+    hd->http_server_state = HTTP_SERVER_EVENT_DISCONNECTED;
     esp_http_server_dispatch_event(HTTP_SERVER_EVENT_DISCONNECTED, &session->fd, sizeof(int));
 
     // clear all contexts

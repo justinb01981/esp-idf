@@ -15,7 +15,15 @@ An application on "ESP-Dev-Board" may be upgraded at runtime by downloading a ne
 - Using the native APIs provided by the [`app_update`](../../../components/app_update) component.
 - Using simplified APIs provided by the [`esp_https_ota`](../../../components/esp_https_ota) component, which provides functionality to upgrade over HTTPS.
 
-Use of the native API is demonstrated in the `native_ota_example` directory while the API provided by the `esp_https_ota` component is demonstrated under `simple_ota_example` and `advanced_https_ota`.
+Use of the native API is demonstrated in the `native_ota_example` directory while the API provided by the `esp_https_ota` component is demonstrated under `simple_ota_example`, `advanced_https_ota`, and `partitions_ota`.
+
+The `partitions_ota` demonstrates the OTA update process for any partition type (other examples support only safe updates for application):
+- Application (safe update).
+- Bootloader (unsafe update).
+- Partition table (unsafe update).
+- other data partitions (unsafe update).
+
+**Note:** **Safe updates** are designed to ensure that the device remains operational even if the update process is interrupted. This means that the device can still boot and function normally, minimizing the risk of failure. On the other hand, **unsafe updates** carry a significant risk. If the update is disrupted while copying to the destination partition, it can lead to critical failures, potentially making the device inoperable and unrecoverable. Since the final copying is performed on the user side, this risk can be minimized by ensuring stable power and error-free conditions during this time.
 
 For information regarding the `esp_https_ota` component, please refer to [ESP HTTPS OTA](https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-reference/system/esp_https_ota.html).
 
@@ -58,7 +66,7 @@ See the [Getting Started Guide](https://docs.espressif.com/projects/esp-idf/en/l
 
 ## Example Output
 
-### Configure HTTPS Server
+### Configure and start HTTPS Server
 
 After a successful build, we need to create a self-signed certificate and run a simple HTTPS server as follows:
 
@@ -69,8 +77,23 @@ After a successful build, we need to create a self-signed certificate and run a 
   * When prompted for the `Common Name (CN)`, enter the name of the server that the "ESP-Dev-Board" will connect to. When running this example from a development machine, this is probably the IP address. The HTTPS client will check that the `CN` matches the address given in the HTTPS URL.
 * This directory should contain the firmware (e.g. `hello_world.bin`) to be used in the update process. This can be any valid ESP-IDF application, as long as its filename corresponds to the name configured using `Firmware Upgrade URL` in menuconfig. The only difference to flashing a firmware via the serial interface is that the binary is flashed to the `factory` partition, while OTA update use one of the OTA partitions.
 
-### Start HTTPS Server
 
+You can start the server using either of the following method: 
+
+#### Python based server
+
+* To start python based HTTPS server using [example_test_scipt](simple_ota_example/pytest_simple_ota.py), run `pytest_simple_ota.py <BIN_DIR> <PORT> [CERT_DIR]`, where:
+    - `<BIN_DIR>` is a directory containing the firmware (e.g. `hello_world.bin`) to be used in the update process.`
+    - `<PORT>` is the server's port, here `8070`
+    - `[CERT_DIR]` is an optional argument pointing to a specific directory with the certificate and key file:`ca_cert.pem` and `ca_key.pem`.
+
+Sample console output as:
+``` bash
+$ cd idf/examples/system/ota/simple_ota_example
+$ python pytest_simple_ota.py build 8070
+Starting HTTPS server at "https://:8070"
+192.168.10.106 - - [02/Mar/2021 14:32:26] "GET /simple_ota.bin HTTP/1.1" 200 -
+```
 #### OpenSSL based server
 
 * To start openssl based HTTPS server, run the command `openssl s_server -WWW -key ca_key.pem -cert ca_cert.pem -port 8070`.
@@ -89,20 +112,6 @@ ACCEPT
   * We recommend  using the `openssl` binary bundled in `Git For Windows` from the [ESP-IDF Tool installer](https://docs.espressif.com/projects/esp-idf/en/latest/get-started/windows-setup.html):
   Open the ESP-IDF command prompt and add the internal openssl binary to your path: `set PATH=%LocalAppData%\Git\usr\bin;%PATH%` and run openssl's http server command as above.
 
-#### Python based server
-
-* To start python based HTTPS server using [example_test_scipt](simple_ota_example/pytest_simple_ota.py), run `pytest_simple_ota.py <BIN_DIR> <PORT> [CERT_DIR]`, where:
-    - `<BIN_DIR>` is a directory containing the firmware (e.g. `hello_world.bin`) to be used in the update process.`
-    - `<PORT>` is the server's port, here `8070`
-    - `[CERT_DIR]` is an optional argument pointing to a specific directory with the certificate and key file:`ca_cert.pem` and `ca_key.pem'.
-
-Sample console output as:
-``` bash
-$ cd idf/examples/system/ota/simple_ota_example
-$ python pytest_simple_ota.py build 8070
-Starting HTTPS server at "https://:8070"
-192.168.10.106 - - [02/Mar/2021 14:32:26] "GET /simple_ota.bin HTTP/1.1" 200 -
-```
 
 ### Flash Certificate to "ESP-Dev-Board"
 
@@ -129,7 +138,7 @@ If you want to rollback to the `factory` app after the upgrade (or to the first 
 
 ## Supporting Rollback
 
-This feature allows you to roll back to a previous firmware if new image is not useable. The menuconfig option `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE` allows you to track the first boot of the application (see the ``Over The Air Updates (OTA)`` article).
+This feature allows you to roll back to a previous firmware if new image is not usable. The menuconfig option `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE` allows you to track the first boot of the application (see the ``Over The Air Updates (OTA)`` article).
 
 The ``native_ota_example`` contains code to demonstrate how a rollback works. To use it, enable the `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE` option in the `Example Configuration` submenu of menuconfig to set `Number of the GPIO input for diagnostic` to manipulate the rollback process.
 

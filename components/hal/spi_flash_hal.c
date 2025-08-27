@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2015-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2015-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -11,6 +11,7 @@
 #include <string.h>
 #include <math.h>
 #include "soc/soc_caps.h"
+#include "hal/gpio_ll.h"    //for GPIO_LL_MATRIX_DELAY_NS
 #include "hal/spi_flash_hal.h"
 #include "hal/assert.h"
 #include "hal/log.h"
@@ -22,29 +23,29 @@ static const char *TAG = "flash_hal";
 
 static uint32_t get_flash_clock_divider(const spi_flash_hal_config_t *cfg)
 {
-    const int clk_source   = cfg->clock_src_freq;
-    const int clk_freq_mhz = cfg->freq_mhz;
+    const int src_freq_mhz = cfg->clock_src_freq;
+    const int cfg_freq_mhz = cfg->freq_mhz;
     // On ESP32, ESP32-S2, ESP32-C3, we allow specific frequency 26.666MHz
     // If user passes freq_mhz like 26 or 27, it's allowed to use integer divider 3.
     // However on other chips or on other frequency, we only allow user pass frequency which
     // can be integer divided. If no, the following strategy is round up the division and
     // round down flash frequency to keep it safe.
     int best_div = 0;
-    if (clk_source < clk_freq_mhz) {
-        HAL_LOGE(TAG, "Target frequency %dMHz higher than supported.", clk_freq_mhz);
+    if (src_freq_mhz < cfg_freq_mhz) {
+        HAL_LOGE(TAG, "Target frequency %dMHz higher than src %dMHz.", cfg_freq_mhz, src_freq_mhz);
         abort();
     }
-#if CONFIG_IDF_TARGET_ESP32 || CONFIG_IDF_TARGET_ESP32S2 || CONFIG_IDF_TARGET_ESP32C3
-    if (clk_freq_mhz == 26 || clk_freq_mhz == 27) {
+#if SOC_IS(ESP32) || SOC_IS(ESP32S2) || SOC_IS(ESP32C3)
+    if (cfg_freq_mhz == 26 || cfg_freq_mhz == 27) {
         best_div = 3;
     } else
 #endif
     {
         /* Do not use float/double as the FPU may not have been initialized yet on startup.
          * The values are in MHz, so for sure we won't have an overflow by adding them. */
-        best_div = (clk_source + clk_freq_mhz - 1) / clk_freq_mhz;
+        best_div = (src_freq_mhz + cfg_freq_mhz - 1) / cfg_freq_mhz;
         /* Perform a division that returns both quotient and remainder */
-        const div_t res = div(clk_source, clk_freq_mhz);
+        const div_t res = div(src_freq_mhz, cfg_freq_mhz);
         if (res.rem != 0) {
             HAL_LOGW(TAG, "Flash clock frequency round down to %d", res.quot);
         }
@@ -64,7 +65,10 @@ static inline int get_dummy_n(bool gpio_is_used, int input_delay_ns, int eff_clk
     const int apbclk_kHz = APB_CLK_FREQ / 1000;
     //calculate how many apb clocks a period has
     const int apbclk_n = APB_CLK_FREQ / eff_clk;
-    const int gpio_delay_ns = gpio_is_used ? GPIO_MATRIX_DELAY_NS : 0;
+    int gpio_delay_ns = 0;
+#if GPIO_LL_MATRIX_DELAY_NS
+    gpio_delay_ns = gpio_is_used ? GPIO_LL_MATRIX_DELAY_NS : 0;
+#endif
 
     //calculate how many apb clocks the delay is, the 1 is to compensate in case ``input_delay_ns`` is rounded off.
     int apb_period_n = (1 + input_delay_ns + gpio_delay_ns) * apbclk_kHz / 1000 / 1000;
@@ -113,6 +117,7 @@ esp_err_t spi_flash_hal_init(spi_flash_hal_context_t *data_out, const spi_flash_
 #if SOC_SPI_MEM_SUPPORT_TIMING_TUNING
     if (cfg->using_timing_tuning) {
         data_out->extra_dummy = extra_dummy_under_timing_tuning(cfg);
+        data_out->fdummy_rin = cfg->fdummy_rin;
         data_out->clock_conf = cfg->clock_config;
     } else
 #endif // SOC_SPI_MEM_SUPPORT_TIMING_TUNING
@@ -126,9 +131,15 @@ esp_err_t spi_flash_hal_init(spi_flash_hal_context_t *data_out, const spi_flash_
         data_out->flags |= SPI_FLASH_HOST_CONTEXT_FLAG_AUTO_SUSPEND;
         data_out->flags |= SPI_FLASH_HOST_CONTEXT_FLAG_AUTO_RESUME;
         data_out->tsus_val = cfg->tsus_val;
+        data_out->trs_val = cfg->trs_val;
+        data_out->auto_waiti_pes = cfg->auto_waiti_pes;
     }
 
-#if SOC_SPI_MEM_SUPPORT_OPI_MODE
+    if (cfg->software_resume) {
+        data_out->flags &= ~SPI_FLASH_HOST_CONTEXT_FLAG_AUTO_RESUME;
+    }
+
+#if SOC_SPI_MEM_SUPPORT_FLASH_OPI_MODE
     if (cfg->octal_mode_en) {
         data_out->flags |= SPI_FLASH_HOST_CONTEXT_FLAG_OCTAL_MODE;
     }

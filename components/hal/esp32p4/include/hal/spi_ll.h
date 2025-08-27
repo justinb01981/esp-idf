@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2023-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2023-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -19,11 +19,11 @@
 #include "esp_types.h"
 #include "soc/spi_periph.h"
 #include "soc/spi_struct.h"
-#include "soc/lldesc.h"
 #include "hal/assert.h"
 #include "hal/misc.h"
 #include "hal/spi_types.h"
 #include "soc/hp_sys_clkrst_struct.h"
+#include "soc/hp_sys_clkrst_reg.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -38,10 +38,12 @@ extern "C" {
 #define HAL_SPI_SWAP_DATA_TX(data, len) HAL_SWAP32((uint32_t)(data) << (32 - len))
 #define SPI_LL_GET_HW(ID) (((ID)==1) ? &GPSPI2 : (((ID)==2) ? &GPSPI3 : NULL))
 
-#define SPI_LL_DMA_MAX_BIT_LEN    (1 << 18)    //reg len: 18 bits
+#define SPI_LL_DMA_MAX_BIT_LEN    SPI_MS_DATA_BITLEN
 #define SPI_LL_CPU_MAX_BIT_LEN    (16 * 32)    //Fifo len: 16 words
 #define SPI_LL_SUPPORT_CLK_SRC_PRE_DIV      1  //clock source have divider before peripheral
-#define SPI_LL_CLK_SRC_PRE_DIV_MAX          512//div1(8bit) * div2(8bit but set const 2)
+#define SPI_LL_SRC_PRE_DIV_MAX    (HP_SYS_CLKRST_REG_GPSPI2_MST_CLK_DIV_NUM + 1)   //source pre divider max
+#define SPI_LL_PERIPH_CLK_DIV_MAX ((SPI_CLKCNT_N + 1) * (SPI_CLKDIV_PRE + 1)) //peripheral internal maxmum clock divider
+#define SPI_LL_MOSI_FREE_LEVEL    1            //Default level after bus initialized
 
 /**
  * The data structure holding calculated clock configuration. Since the
@@ -75,7 +77,7 @@ typedef enum {
 
 // SPI base command
 typedef enum {
-     /* Slave HD Only */
+    /* Slave HD Only */
     SPI_LL_BASE_CMD_HD_WRBUF    = 0x01,
     SPI_LL_BASE_CMD_HD_RDBUF    = 0x02,
     SPI_LL_BASE_CMD_HD_WRDMA    = 0x03,
@@ -97,9 +99,9 @@ typedef enum {
  * @param host_id   Peripheral index number, see `spi_host_device_t`
  * @param enable    Enable/Disable
  */
-static inline void spi_ll_enable_bus_clock(spi_host_device_t host_id, bool enable) {
-    switch (host_id)
-    {
+static inline void _spi_ll_enable_bus_clock(spi_host_device_t host_id, bool enable)
+{
+    switch (host_id) {
     case SPI2_HOST:
         HP_SYS_CLKRST.soc_clk_ctrl1.reg_gpspi2_sys_clk_en = enable;
         HP_SYS_CLKRST.soc_clk_ctrl2.reg_gpspi2_apb_clk_en = enable;
@@ -114,16 +116,19 @@ static inline void spi_ll_enable_bus_clock(spi_host_device_t host_id, bool enabl
 
 /// use a macro to wrap the function, force the caller to use it in a critical section
 /// the critical section needs to declare the __DECLARE_RCC_ATOMIC_ENV variable in advance
-#define spi_ll_enable_bus_clock(...) (void)__DECLARE_RCC_ATOMIC_ENV; spi_ll_enable_bus_clock(__VA_ARGS__)
+#define spi_ll_enable_bus_clock(...) do { \
+        (void)__DECLARE_RCC_ATOMIC_ENV; \
+        _spi_ll_enable_bus_clock(__VA_ARGS__); \
+    } while(0)
 
 /**
  * Reset whole peripheral register to init value defined by HW design
  *
  * @param host_id   Peripheral index number, see `spi_host_device_t`
  */
-static inline void spi_ll_reset_register(spi_host_device_t host_id) {
-    switch (host_id)
-    {
+static inline void spi_ll_reset_register(spi_host_device_t host_id)
+{
+    switch (host_id) {
     case SPI2_HOST:
         HP_SYS_CLKRST.hp_rst_en2.reg_rst_en_spi2 = 1;
         HP_SYS_CLKRST.hp_rst_en2.reg_rst_en_spi2 = 0;
@@ -138,7 +143,10 @@ static inline void spi_ll_reset_register(spi_host_device_t host_id) {
 
 /// use a macro to wrap the function, force the caller to use it in a critical section
 /// the critical section needs to declare the __DECLARE_RCC_ATOMIC_ENV variable in advance
-#define spi_ll_reset_register(...) (void)__DECLARE_RCC_ATOMIC_ENV; spi_ll_reset_register(__VA_ARGS__)
+#define spi_ll_reset_register(...) do { \
+        (void)__DECLARE_RCC_ATOMIC_ENV; \
+        spi_ll_reset_register(__VA_ARGS__); \
+    } while(0)
 
 /**
  * Enable functional output clock within peripheral
@@ -146,10 +154,9 @@ static inline void spi_ll_reset_register(spi_host_device_t host_id) {
  * @param host_id   Peripheral index number, see `spi_host_device_t`
  * @param enable    Enable/Disable
  */
-static inline void spi_ll_enable_clock(spi_host_device_t host_id, bool enable)
+static inline void _spi_ll_enable_clock(spi_host_device_t host_id, bool enable)
 {
-    switch (host_id)
-    {
+    switch (host_id) {
     case SPI2_HOST:
         HP_SYS_CLKRST.peri_clk_ctrl116.reg_gpspi2_hs_clk_en = enable;
         HP_SYS_CLKRST.peri_clk_ctrl116.reg_gpspi2_mst_clk_en = enable;
@@ -164,7 +171,10 @@ static inline void spi_ll_enable_clock(spi_host_device_t host_id, bool enable)
 
 /// use a macro to wrap the function, force the caller to use it in a critical section
 /// the critical section needs to declare the __DECLARE_RCC_ATOMIC_ENV variable in advance
-#define spi_ll_enable_clock(...) (void)__DECLARE_RCC_ATOMIC_ENV; spi_ll_enable_clock(__VA_ARGS__)
+#define spi_ll_enable_clock(...) do { \
+        (void)__DECLARE_RCC_ATOMIC_ENV; \
+        _spi_ll_enable_clock(__VA_ARGS__); \
+    } while(0)
 
 /**
  * Select SPI peripheral clock source (master).
@@ -199,7 +209,10 @@ static inline void spi_ll_set_clk_source(spi_dev_t *hw, spi_clock_source_t clk_s
 
 /// use a macro to wrap the function, force the caller to use it in a critical section
 /// the critical section needs to declare the __DECLARE_RCC_ATOMIC_ENV variable in advance
-#define spi_ll_set_clk_source(...) (void)__DECLARE_RCC_ATOMIC_ENV; spi_ll_set_clk_source(__VA_ARGS__)
+#define spi_ll_set_clk_source(...) do { \
+        (void)__DECLARE_RCC_ATOMIC_ENV; \
+        spi_ll_set_clk_source(__VA_ARGS__); \
+    } while(0)
 
 /**
  * Config clock source integrate pre_div before it enter GPSPI peripheral
@@ -215,17 +228,20 @@ __attribute__((always_inline))
 static inline void spi_ll_clk_source_pre_div(spi_dev_t *hw, uint8_t hs_div, uint8_t mst_div)
 {
     if (hw == &GPSPI2) {
-        HP_SYS_CLKRST.peri_clk_ctrl116.reg_gpspi2_hs_clk_div_num = hs_div - 1;
-        HP_SYS_CLKRST.peri_clk_ctrl116.reg_gpspi2_mst_clk_div_num = mst_div - 1;
+        HAL_FORCE_MODIFY_U32_REG_FIELD(HP_SYS_CLKRST.peri_clk_ctrl116, reg_gpspi2_hs_clk_div_num, hs_div - 1);
+        HAL_FORCE_MODIFY_U32_REG_FIELD(HP_SYS_CLKRST.peri_clk_ctrl116, reg_gpspi2_mst_clk_div_num, mst_div - 1);
     } else if (hw == &GPSPI3) {
-        HP_SYS_CLKRST.peri_clk_ctrl117.reg_gpspi3_hs_clk_div_num = hs_div - 1;
-        HP_SYS_CLKRST.peri_clk_ctrl117.reg_gpspi3_mst_clk_div_num = mst_div - 1;
+        HAL_FORCE_MODIFY_U32_REG_FIELD(HP_SYS_CLKRST.peri_clk_ctrl117, reg_gpspi3_hs_clk_div_num, hs_div - 1);
+        HAL_FORCE_MODIFY_U32_REG_FIELD(HP_SYS_CLKRST.peri_clk_ctrl117, reg_gpspi3_mst_clk_div_num, mst_div - 1);
     }
 }
 
 /// use a macro to wrap the function, force the caller to use it in a critical section
 /// the critical section needs to declare the __DECLARE_RCC_ATOMIC_ENV variable in advance
-#define spi_ll_clk_sour_pre_div(...) (void)__DECLARE_RCC_ATOMIC_ENV; spi_ll_clk_sour_pre_div(__VA_ARGS__)
+#define spi_ll_clk_sour_pre_div(...) do { \
+        (void)__DECLARE_RCC_ATOMIC_ENV; \
+        spi_ll_clk_sour_pre_div(__VA_ARGS__); \
+    } while(0)
 
 /**
  * Initialize SPI peripheral (master).
@@ -323,7 +339,7 @@ static inline void spi_ll_apply_config(spi_dev_t *hw)
 
 /**
  * Trigger start of user-defined transaction.
- * The synchronization between two clock domains is required in ESP32-S3
+ * The synchronization between two clock domains is required in ESP32P4
  *
  * @param hw Beginning address of the peripheral registers.
  */
@@ -746,6 +762,25 @@ static inline void spi_ll_master_keep_cs(spi_dev_t *hw, int keep_active)
  * Configs: parameters
  *----------------------------------------------------------------------------*/
 /**
+ * Set the standard clock mode for master.
+ *
+ * @param hw  Beginning address of the peripheral registers.
+ * @param enable_std True for std timing, False for half cycle delay sampling.
+ */
+static inline void spi_ll_master_set_rx_timing_mode(spi_dev_t *hw, spi_sampling_point_t sample_point)
+{
+    //This is not supported
+}
+
+/**
+ * Get if standard clock mode is supported.
+ */
+static inline bool spi_ll_master_is_rx_std_sample_supported(void)
+{
+    return false;
+}
+
+/**
  * Set the clock for master by stored value.
  *
  * @param hw  Beginning address of the peripheral registers.
@@ -765,6 +800,7 @@ static inline void spi_ll_master_set_clock_by_reg(spi_dev_t *hw, const spi_ll_cl
  *
  * @return     Frequency of given dividers.
  */
+__attribute__((always_inline))
 static inline int spi_ll_freq_for_pre_n(int fapb, int pre, int n)
 {
     return (fapb / (pre * n));
@@ -780,9 +816,10 @@ static inline int spi_ll_freq_for_pre_n(int fapb, int pre, int n)
  *
  * @return           Actual (nearest) frequency.
  */
+__attribute__((always_inline))
 static inline int spi_ll_master_cal_clock(int fapb, int hz, int duty_cycle, spi_ll_clock_val_t *out_reg)
 {
-    typeof(GPSPI2.clock) reg;
+    typeof(GPSPI2.clock) reg = {.val = 0};
     int eff_clk;
 
     //In hw, n, h and l are 1-64, pre is 1-8K. Value written to register is one lower than used value.
@@ -881,6 +918,16 @@ static inline void spi_ll_set_mosi_delay(spi_dev_t *hw, int delay_mode, int dela
 }
 
 /**
+ * Determine and unify the default level of mosi line when bus free
+ *
+ * @param hw Beginning address of the peripheral registers.
+ */
+static inline void spi_ll_set_mosi_free_level(spi_dev_t *hw, bool level)
+{
+    hw->ctrl.d_pol = level;     //set default level for MOSI only on IDLE state
+}
+
+/**
  * Set the miso delay applied to the input signal before the internal peripheral. (Preview)
  *
  * The delay mode/num is a Espressif conception, may change in the new chips.
@@ -908,7 +955,7 @@ static inline void spi_ll_master_set_cs_hold(spi_dev_t *hw, int hold)
 /**
  * Set the delay of SPI clocks before the first SPI clock after the CS active edge.
  *
- * Note ESP32 doesn't support to use this feature when command/address phases
+ * Note ESP32P4 doesn't support to use this feature when command/address phases
  * are used in full duplex mode.
  *
  * @param hw    Beginning address of the peripheral registers.
@@ -1067,7 +1114,9 @@ static inline void spi_ll_set_command(spi_dev_t *hw, uint16_t cmd, int cmdlen, b
 static inline void spi_ll_set_dummy(spi_dev_t *hw, int dummy_n)
 {
     hw->user.usr_dummy = dummy_n ? 1 : 0;
-    HAL_FORCE_MODIFY_U32_REG_FIELD(hw->user1, usr_dummy_cyclelen, dummy_n - 1);
+    if (dummy_n > 0) {
+        HAL_FORCE_MODIFY_U32_REG_FIELD(hw->user1, usr_dummy_cyclelen, dummy_n - 1);
+    }
 }
 
 /**
@@ -1233,8 +1282,7 @@ static inline uint32_t spi_ll_slave_hd_get_last_addr(spi_dev_t *hw)
 static inline uint8_t spi_ll_get_slave_hd_base_command(spi_command_t cmd_t)
 {
     uint8_t cmd_base = 0x00;
-    switch (cmd_t)
-    {
+    switch (cmd_t) {
     case SPI_CMD_HD_WRBUF:
         cmd_base = SPI_LL_BASE_CMD_HD_WRBUF;
         break;

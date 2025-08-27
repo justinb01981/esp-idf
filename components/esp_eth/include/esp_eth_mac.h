@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2019-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2019-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -105,7 +105,30 @@ struct esp_eth_mac_s {
     esp_err_t (*transmit)(esp_eth_mac_t *mac, uint8_t *buf, uint32_t length);
 
     /**
+    * @brief Transmit packet with extended control from Ethernet MAC and constructed with special parameters at Layer2.
+    *
+    * @param[in] mac: Ethernet MAC instance
+    * @param[in] ctrl: optional transmit control structure (chip specific), set to NULL when not required
+    * @param[in] argc: number variable arguments
+    * @param[in] args: variable arguments
+    *
+    * @note Typical intended use case is to make possible to construct a frame from multiple higher layer
+    *       buffers without a need of buffer reallocations. However, other use cases are not limited.
+    *
+    * @return
+    *      - ESP_OK: transmit packet successfully
+    *      - ESP_ERR_INVALID_SIZE: number of actually sent bytes differs to expected
+    *      - ESP_FAIL: transmit packet failed because some other error occurred
+    *
+    * @note Returned error codes may differ for each specific MAC chip.
+    *
+    */
+    esp_err_t (*transmit_ctrl_vargs)(esp_eth_mac_t *mac, void *ctrl, uint32_t argc, va_list args);
+
+    /**
     * @brief Transmit packet from Ethernet MAC constructed with special parameters at Layer2.
+    *
+    * @warning Deprecated, use `transmit_ctrl_vargs()` function instead.
     *
     * @param[in] mac: Ethernet MAC instance
     * @param[in] argc: number variable arguments
@@ -122,7 +145,7 @@ struct esp_eth_mac_s {
     * @note Returned error codes may differ for each specific MAC chip.
     *
     */
-    esp_err_t (*transmit_vargs)(esp_eth_mac_t *mac, uint32_t argc, va_list args);
+    esp_err_t (*transmit_vargs)(esp_eth_mac_t *mac, uint32_t argc, va_list args) __attribute__((deprecated("Use transmit_ctrl_vargs instead")));
 
     /**
     * @brief Receive packet from Ethernet MAC
@@ -209,6 +232,30 @@ struct esp_eth_mac_s {
     esp_err_t (*get_addr)(esp_eth_mac_t *mac, uint8_t *addr);
 
     /**
+     * @brief Add Destination address MAC filter
+     *
+     * @param[in] mac: Ethernet MAC instance
+     * @param[in] addr: MAC address
+     *
+     * @return
+     *      - ESP_OK: add MAC filter successfully
+     *      - ESP_FAIL: add MAC filter failed because some error occurred
+     */
+    esp_err_t (*add_mac_filter)(esp_eth_mac_t *mac, uint8_t *addr);
+
+    /**
+     * @brief Remove Destination address MAC filter
+     *
+     * @param[in] mac: Ethernet MAC instance
+     * @param[in] addr: MAC address
+     *
+     * @return
+     *      - ESP_OK: remove MAC filter successfully
+     *      - ESP_FAIL: remove MAC filter failed because some error occurred
+     */
+    esp_err_t (*rm_mac_filter)(esp_eth_mac_t *mac, uint8_t *addr);
+
+    /**
     * @brief Set speed of MAC
     *
     * @param[in] ma:c Ethernet MAC instance
@@ -264,6 +311,18 @@ struct esp_eth_mac_s {
     esp_err_t (*set_promiscuous)(esp_eth_mac_t *mac, bool enable);
 
     /**
+     * @brief Set receive all multicast
+     *
+     * @param[in] mac: Ethernet MAC instance
+     * @param[in] enable: set true to enable receive all multicast; set false to disable receive all multicast
+     *
+     * @return
+     *      - ESP_OK: set receive all multicast successfully
+     *      - ESP_FAIL: set receive all multicast failed because some error occurred
+     */
+    esp_err_t (*set_all_multicast)(esp_eth_mac_t *mac, bool enable);
+
+    /**
     * @brief Enable flow control on MAC layer or not
     *
     * @param[in] mac: Ethernet MAC instance
@@ -317,6 +376,15 @@ struct esp_eth_mac_s {
     */
     esp_err_t (*del)(esp_eth_mac_t *mac);
 };
+
+/**
+ * @brief Ethernet MAC Time Stamp
+ *
+ */
+typedef struct {
+    uint32_t seconds;       /*!< Seconds */
+    uint32_t nanoseconds;   /*!< Nanoseconds */
+} eth_mac_time_t;
 
 /**
 * @brief Configuration of Ethernet MAC object

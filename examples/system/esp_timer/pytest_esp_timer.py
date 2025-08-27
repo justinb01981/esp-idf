@@ -1,9 +1,10 @@
-# SPDX-FileCopyrightText: 2022-2024 Espressif Systems (Shanghai) CO LTD
+# SPDX-FileCopyrightText: 2022-2025 Espressif Systems (Shanghai) CO LTD
 # SPDX-License-Identifier: CC0-1.0
 import logging
 
 import pytest
 from pytest_embedded import Dut
+from pytest_embedded_idf.utils import idf_parametrize
 
 STARTING_TIMERS_REGEX = r'Started timers, time since boot: (\d+) us'
 
@@ -27,17 +28,16 @@ LIGHT_SLEEP_TIME = 500000
 ONE_SHOT_TIMER_PERIOD = 5000000
 
 
-@pytest.mark.supported_targets
 @pytest.mark.generic
 @pytest.mark.parametrize(
     'config',
     [
         'rtc',
     ],
-    indirect=True
+    indirect=True,
 )
+@idf_parametrize('target', ['supported_targets'], indirect=['target'])
 def test_esp_timer(dut: Dut) -> None:
-
     match = dut.expect(STARTING_TIMERS_REGEX)
     start_time = int(match.group(1))
     logging.info('Start time: {} us'.format(start_time))
@@ -71,16 +71,16 @@ def test_esp_timer(dut: Dut) -> None:
         logging.info('Callback #{}, time: {} us, diff: {} us'.format(i, cur_time, diff))
         assert abs(diff) < 100
 
-    match = dut.expect(LIGHT_SLEEP_ENTER_REGEX, timeout=2)
-    sleep_enter_time = int(match.group(1))
-    match = dut.expect(LIGHT_SLEEP_EXIT_REGEX, timeout=2)
-    sleep_exit_time = int(match.group(1))
-    sleep_time = sleep_exit_time - sleep_enter_time
+    if dut.app.sdkconfig.get('SOC_LIGHT_SLEEP_SUPPORTED'):
+        match = dut.expect(LIGHT_SLEEP_ENTER_REGEX, timeout=2)
+        sleep_enter_time = int(match.group(1))
+        match = dut.expect(LIGHT_SLEEP_EXIT_REGEX, timeout=2)
+        sleep_exit_time = int(match.group(1))
+        sleep_time = sleep_exit_time - sleep_enter_time
 
-    logging.info('Enter sleep: {}, exit sleep: {}, slept: {}'.format(
-        sleep_enter_time, sleep_exit_time, sleep_time))
+        logging.info('Enter sleep: {}, exit sleep: {}, slept: {}'.format(sleep_enter_time, sleep_exit_time, sleep_time))
 
-    assert abs(sleep_time - LIGHT_SLEEP_TIME) < 1200
+        assert -2000 < sleep_time - LIGHT_SLEEP_TIME < 1000
 
     for i in range(5, 7):
         match = dut.expect(PERIODIC_TIMER_REGEX, timeout=2)

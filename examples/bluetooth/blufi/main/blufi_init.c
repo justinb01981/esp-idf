@@ -45,6 +45,13 @@ esp_err_t esp_blufi_host_init(void)
     }
     BLUFI_INFO("BD ADDR: "ESP_BD_ADDR_STR"\n", ESP_BD_ADDR_HEX(esp_bt_dev_get_address()));
 
+    /* Set the default device name */
+    ret = esp_ble_gap_set_device_name(BLUFI_DEVICE_NAME);
+    if (ret) {
+        BLUFI_ERROR("%s set device name failed: %s\n", __func__, esp_err_to_name(ret));
+        return ESP_FAIL;
+    }
+
     return ESP_OK;
 
 }
@@ -211,9 +218,11 @@ esp_err_t esp_blufi_host_init(void)
     rc = esp_blufi_gatt_svr_init();
     assert(rc == 0);
 
+#if CONFIG_BT_NIMBLE_GAP_SERVICE
     /* Set the default device name. */
     rc = ble_svc_gap_device_name_set(BLUFI_DEVICE_NAME);
     assert(rc == 0);
+#endif
 
     /* XXX Need to have template for store */
     ble_store_config_init();
@@ -233,17 +242,21 @@ esp_err_t esp_blufi_host_deinit(void)
 {
     esp_err_t ret = ESP_OK;
 
+    esp_blufi_gatt_svr_deinit();
+    ret = nimble_port_stop();
+    if (ret != ESP_OK) {
+        return ret;
+    }
+    if (ret == 0) {
+        esp_nimble_deinit();
+    }
+
     ret = esp_blufi_profile_deinit();
-    if(ret != ESP_OK) {
+    if (ret != ESP_OK) {
         return ret;
     }
 
     esp_blufi_btc_deinit();
-
-    ret = nimble_port_stop();
-    if (ret == 0) {
-        esp_nimble_deinit();
-    }
 
     return ret;
 }

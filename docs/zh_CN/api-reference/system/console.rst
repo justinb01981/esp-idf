@@ -45,12 +45,19 @@ Linenoise 库不需要显式地初始化，但是在调用行编辑函数之前�
 
 - :cpp:func:`linenoiseAllowEmpty`
 
-    设置 linenoise 库收到空行的解析行为，设置为 ``true`` 时返回长度为零的字符串 (``""``) ，设置为 ``false`` 时返回 ``NULL``。默认情况下，将返回长度为零的字符串。
+  设置 linenoise 库收到空行的解析行为，设置为 ``true`` 时返回长度为零的字符串 (``""``) ，设置为 ``false`` 时返回 ``NULL``。默认情况下，将返回长度为零的字符串。
 
 - :cpp:func:`linenoiseSetMaxLineLen`
 
-    设置 linenoise 库中每行的最大长度，默认长度为 4096 字节，可以通过更新该默认值来优化 RAM 内存的使用。
+  设置 linenoise 库中每行的最大长度，默认长度为 4096 字节，可以通过更新该默认值来优化 RAM 内存的使用。
 
+- :cpp:func:`linenoiseSetReadFunction`
+
+  设置 linenoise 使用的读取函数。
+
+- :cpp:func:`linenoiseSetReadCharacteristics`
+
+  设置用于读取的文件描述符的特性（例如，阻塞模式或非阻塞模式）。该函数在 ``linenoise.c`` 中具有一个弱定义，可通过强定义进行覆盖。
 
 主循环
 ^^^^^^
@@ -186,13 +193,12 @@ Linenoise 库不需要显式地初始化，但是在调用行编辑函数之前�
 
     同样，如果 REPL 环境是构建在 USB_SERIAL_JTAG 设备基础上，你只需要先调用 :cpp:func:`esp_console_new_repl_usb_serial_jtag` 函数进行初始化，然后再照常调用其它函数。
 
-应用程序示例
+应用示例
 ------------
 
-:example:`system/console` 目录下提供了 ``console`` 组件的示例应用程序，展示了具体的使用方法。该示例介绍了如何初始化 UART 和 VFS 的功能，设置 linenoise 库，从 UART 中读取命令并加以处理，然后将历史命令存储到 flash 中。更多信息，请参阅示例代码目录中的 README.md 文件。
+- :example:`system/console/basic` 演示了如何使用控制台组件的 REPL（读-评估-打印循环）API 在 {IDF_TARGET_NAME} 上创建一个交互式 Shell，该 Shell 可以通过串行接口控制，支持 UART 和 USB 接口，并可以作为需要命令行接口的应用程序的基础。
 
-此外，ESP-IDF 还提供了众多基于 ``console`` 组件的示例程序，它们可以辅助应用程序的开发。例如，:example:`peripherals/i2c/i2c_tools`，:example:`wifi/iperf` 等等。
-
+- :example:`system/console/advanced` 演示了如何使用控制台组件在 {IDF_TARGET_NAME} 上创建一个交互式 Shell，该 Shell 可以通过串行接口控制，支持 UART 和 USB 接口，可作为需要命令行接口的应用程序的基础。
 
 API 参考
 --------

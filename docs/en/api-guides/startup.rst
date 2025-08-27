@@ -7,18 +7,22 @@ This note explains various steps which happen before ``app_main`` function of an
 
 The high level view of startup process is as follows:
 
-1. :ref:`first-stage-bootloader` in ROM loads second-stage bootloader image to RAM (IRAM & DRAM) from flash offset {IDF_TARGET_CONFIG_BOOTLOADER_OFFSET_IN_FLASH}.
+.. list::
 
-2. :ref:`second-stage-bootloader` loads partition table and main app image from flash. Main app incorporates both RAM segments and read-only segments mapped via flash cache.
+    1. :ref:`first-stage-bootloader` loads the second stage bootloader image to RAM (IRAM & DRAM) from flash offset {IDF_TARGET_CONFIG_BOOTLOADER_OFFSET_IN_FLASH}.
 
-3. :ref:`application-startup` executes. At this point the second CPU and RTOS scheduler are started.
+    2. :ref:`second-stage-bootloader` loads partition table and main app image from flash. Main app incorporates both RAM segments and read-only segments mapped via flash cache.
+
+    :SOC_HP_CPU_HAS_MULTIPLE_CORES: 3. :ref:`application-startup` executes. At this point, the second CPU and RTOS scheduler are started, which then run the ``main_task``, leading to the execution of ``app_main``.
+
+    :not SOC_HP_CPU_HAS_MULTIPLE_CORES: 3. :ref:`application-startup` executes. At this point, the RTOS scheduler is started, which then runs the ``main_task``, leading to the execution of ``app_main``.
 
 This process is explained in detail in the following sections.
 
 .. _first-stage-bootloader:
 
-First Stage Bootloader
-^^^^^^^^^^^^^^^^^^^^^^
+First stage (ROM) bootloader
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 .. only:: SOC_HP_CPU_HAS_MULTIPLE_CORES
 
@@ -32,7 +36,7 @@ Startup code called from the reset vector determines the boot mode by checking `
 
 .. list::
 
-    :SOC_RTC_MEM_SUPPORTED: #. Reset from deep sleep: if the value in ``RTC_CNTL_STORE6_REG`` is non-zero, and CRC value of RTC memory in ``RTC_CNTL_STORE7_REG`` is valid, use ``RTC_CNTL_STORE6_REG`` as an entry point address and jump immediately to it. If ``RTC_CNTL_STORE6_REG`` is zero, or ``RTC_CNTL_STORE7_REG`` contains invalid CRC, or once the code called via ``RTC_CNTL_STORE6_REG`` returns, proceed with boot as if it was a power-on reset. **Note**: to run customized code at this point, a deep sleep stub mechanism is provided. Please see :doc:`deep sleep <deep-sleep-stub>` documentation for this.
+    :ESP_ROM_SUPPORT_DEEP_SLEEP_WAKEUP_STUB: #. Reset from deep sleep: if the value in ``RTC_CNTL_STORE6_REG`` is non-zero, and CRC value of RTC memory in ``RTC_CNTL_STORE7_REG`` is valid, use ``RTC_CNTL_STORE6_REG`` as an entry point address and jump immediately to it. If ``RTC_CNTL_STORE6_REG`` is zero, or ``RTC_CNTL_STORE7_REG`` contains invalid CRC, or once the code called via ``RTC_CNTL_STORE6_REG`` returns, proceed with boot as if it was a power-on reset. **Note**: to run customized code at this point, a deep sleep stub mechanism is provided. Please see :doc:`deep sleep <deep-sleep-stub>` documentation for this.
 
     #. For power-on reset, software SoC reset, and watchdog SoC reset: check the ``GPIO_STRAP_REG`` register if a custom boot mode (such as UART Download Mode) is requested. If this is the case, this custom loader mode is executed from ROM. Otherwise, proceed with boot as if it was due to software CPU reset. Consult {IDF_TARGET_NAME} datasheet for a description of SoC boot modes and how to execute them.
 
@@ -50,11 +54,11 @@ Startup code called from the reset vector determines the boot mode by checking `
 
     Second stage bootloader binary image is loaded from flash starting at address {IDF_TARGET_CONFIG_BOOTLOADER_OFFSET_IN_FLASH}. The 4 kB sector of flash before this address is unused.
 
-.. only:: esp32p4
+.. only:: SOC_KEY_MANAGER_SUPPORTED
 
     Second stage bootloader binary image is loaded from flash starting at address {IDF_TARGET_CONFIG_BOOTLOADER_OFFSET_IN_FLASH}. The 8 kB sector of flash before this address is reserved for the key manager for use with flash encryption (AES-XTS).
 
-.. only:: not (esp32 or esp32s2 or esp32p4)
+.. only:: not (esp32 or esp32s2 or SOC_KEY_MANAGER_SUPPORTED)
 
     Second stage bootloader binary image is loaded from the start of flash at offset {IDF_TARGET_CONFIG_BOOTLOADER_OFFSET_IN_FLASH}.
 
@@ -67,7 +71,7 @@ Second Stage Bootloader
 
 In ESP-IDF, the binary image which resides at offset {IDF_TARGET_CONFIG_BOOTLOADER_OFFSET_IN_FLASH} in flash is the second stage bootloader. Second stage bootloader source code is available in :idf:`components/bootloader` directory of ESP-IDF. Second stage bootloader is used in ESP-IDF to add flexibility to flash layout (using partition tables), and allow for various flows associated with flash encryption, secure boot, and over-the-air updates (OTA) to take place.
 
-When the first stage bootloader is finished checking and loading the second stage bootloader, it jumps to the second stage bootloader entry point found in the binary image header.
+When the first stage (ROM) bootloader is finished checking and loading the second stage bootloader, it jumps to the second stage bootloader entry point found in the binary image header.
 
 Second stage bootloader reads the partition table found by default at offset {IDF_TARGET_CONFIG_PARTITION_TABLE_OFFSET} (:ref:`configurable value <CONFIG_PARTITION_TABLE_OFFSET>`). See :doc:`partition tables <partition-tables>` documentation for more information. The bootloader finds factory and OTA app partitions. If OTA app partitions are found in the partition table, the bootloader consults the ``otadata`` partition to determine which one should be booted. See :doc:`/api-reference/system/ota` for more information.
 

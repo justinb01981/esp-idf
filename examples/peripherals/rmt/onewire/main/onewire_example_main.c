@@ -7,6 +7,7 @@
 #include "freertos/task.h"
 #include "esp_log.h"
 #include "esp_check.h"
+#include "driver/gpio.h"
 #include "onewire_bus.h"
 #include "ds18b20.h"
 
@@ -21,6 +22,9 @@ void app_main(void)
     onewire_bus_handle_t bus;
     onewire_bus_config_t bus_config = {
         .bus_gpio_num = EXAMPLE_ONEWIRE_BUS_GPIO,
+        .flags = {
+            .en_pull_up = true, // enable the internal pull-up resistor in case the external device didn't have one
+        }
     };
     onewire_bus_rmt_config_t rmt_config = {
         .max_rx_bytes = 10, // 1byte ROM command + 8byte ROM number + 1byte device command

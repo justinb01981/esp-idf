@@ -10,6 +10,7 @@ project(rgb_lcd_panel_test)
 target_add_binary_data(rgb_lcd_panel_test.elf "resources/pictures/hello.yuv" BINARY)
 target_add_binary_data(rgb_lcd_panel_test.elf "resources/pictures/world.yuv" BINARY)
 
+idf_build_get_property(elf EXECUTABLE)
 if(CONFIG_COMPILER_DUMP_RTL_FILES)
     add_custom_target(check_test_app_sections ALL
                       COMMAND ${PYTHON} $ENV{IDF_PATH}/tools/ci/check_callgraph.py
@@ -22,3 +23,8 @@ if(CONFIG_COMPILER_DUMP_RTL_FILES)
                       DEPENDS ${elf}
                       )
 endif()
+
+message(STATUS "Checking rgb_lcd registers are not read-write by half-word")
+include($ENV{IDF_PATH}/tools/ci/check_register_rw_half_word.cmake)
+check_register_rw_half_word(SOC_MODULES "*lcd*" "hp_sys_clkrst"
+                            HAL_MODULES "*lcd*")

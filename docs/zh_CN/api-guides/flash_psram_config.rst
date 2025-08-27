@@ -73,7 +73,7 @@ SPI Flash 和片外 SPI RAM 配置
 
 .. note::
 
-    如果配有八线 flash 的开发板在第二阶段引导加载程序之前复位，请参考 :ref:`错误处理章节 <flash-psram-error>`。
+    如果配有八线 flash 的开发板在二级引导加载程序之前复位，请参考 :ref:`错误处理章节 <flash-psram-error>`。
 
 
 .. _flash-psram-combination:
@@ -98,6 +98,10 @@ SPI Flash 和片外 SPI RAM 配置
     如果芯片在某个温度下上电，当温度上升或下降超过 20 摄氏度后，访问 PSRAM/flash 或是从 PSRAM/flash 获取数据的操作将随机崩溃，而 flash 访问的崩溃将导致程序崩溃。
 
     请注意，20 摄氏度并不是一个完全准确的数字，这个值在不同芯片间可能会有所不同。
+
+.. note::
+
+    PSRAM 在 120M 运行时需要相位点校准算法。相位点设置与启动时的温度有关。当芯片运行期间温度大幅上升（下降）时，PSRAM 可能会出现读写错误。为解决这一问题，可以使能 :ref:`CONFIG_SPIRAM_TIMING_TUNING_POINT_VIA_TEMPERATURE_SENSOR`，根据温度值动态调整 PSRAM 相位点。这将创建一个任务，每隔 :ref:`CONFIG_SPIRAM_TIMING_MEASURE_TEMPERATURE_INTERVAL_SECOND` 秒测量一次温度，并相应调整 PSRAM 相位点。
 
 F8R8 硬件
 ^^^^^^^^^
@@ -224,7 +228,7 @@ F4R4 硬件
 错误处理
 --------
 
-1. 如果配有八线 flash 的开发板在第二阶段引导加载程序之前复位:
+1. 如果配有八线 flash 的开发板在二级引导加载程序之前复位:
 
     .. code-block:: c
 
@@ -239,7 +243,7 @@ F4R4 硬件
 
    这可能意味着必要的 efuse 未得到正确烧录。请使用命令 ``espefuse.py summary``，检查芯片的 eFuse 位。
 
-   ROM 引导加载程序可通过 eFuse 位 ``FLASH_TYPE`` 将 flash 复位为默认模式（SPI 模式）。如果未烧录此位，且 flash 处于 OPI 模式，则 ROM 引导加载程序可能无法从 flash 中读取并加载以下图像。
+   一级 (ROM) 引导加载程序可通过 eFuse 位 ``FLASH_TYPE`` 将 flash 复位为默认模式（SPI 模式）。如果未烧录此位，且 flash 处于 OPI 模式，则一级 (ROM) 引导加载程序可能无法从 flash 中读取并加载以下图像。
 
 2. 如果启用 :ref:`CONFIG_ESPTOOLPY_OCT_FLASH` 后出现如下错误日志：
 
@@ -255,9 +259,9 @@ F4R4 硬件
 
 以下是烧录 eFuse 位的方法：
 
-.. code-block:: python
+.. code-block:: shell
 
-    python3 ./espefuse.py -p /dev/<serial_device> --do-not-confirm burn_efuse FLASH_TYPE 1
+    idf.py -p PORT efuse-burn --do-not-confirm FLASH_TYPE 1
 
 .. note::
 

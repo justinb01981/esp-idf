@@ -1,8 +1,10 @@
 /*
- * SPDX-FileCopyrightText: 2015-2022 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2015-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
+
+#include "soc/soc_caps.h"
 
 #pragma once
 
@@ -53,10 +55,17 @@
 #define CMD_RST_EN      0x66
 #define CMD_RST_DEV     0x99
 
-#define SPI_FLASH_DIO_ADDR_BITLEN       24
+#define CMD_RDSFDP     0x5A /* Read the SFDP of the flash */
+
+#if !SOC_SPI_MEM_SUPPORT_WB_MODE_INDEPENDENT_CONTROL
 #define SPI_FLASH_DIO_DUMMY_BITLEN      4
-#define SPI_FLASH_QIO_ADDR_BITLEN       24
 #define SPI_FLASH_QIO_DUMMY_BITLEN      6
+#else
+#define SPI_FLASH_DIO_DUMMY_BITLEN      0
+#define SPI_FLASH_QIO_DUMMY_BITLEN      4
+#endif
+#define SPI_FLASH_DIO_ADDR_BITLEN       24
+#define SPI_FLASH_QIO_ADDR_BITLEN       24
 #define SPI_FLASH_QOUT_ADDR_BITLEN      24
 #define SPI_FLASH_QOUT_DUMMY_BITLEN     8
 #define SPI_FLASH_DOUT_ADDR_BITLEN      24
@@ -71,3 +80,13 @@
 #define SPI_FLASH_OPIDTR_DUMMY_BITLEN   40
 #define SPI_FLASH_QIO_HPM_DUMMY_BITLEN  10
 #define SPI_FLASH_DIO_HPM_DUMMY_BITLEN  8
+
+// Flash vendors.
+#define SPI_FLASH_GD                    0xC8
+#define SPI_FLASH_ISSI                  0x9D
+#define SPI_FLASH_MXIC                  0xC2
+#define SPI_FLASH_XMC_1                 0x20
+#define SPI_FLASH_XMC_2                 0x46
+#define SPI_FLASH_WINBOND               0xEF
+#define SPI_FLASH_TH                    0xCD
+#define SPI_FLASH_BY                    0x68

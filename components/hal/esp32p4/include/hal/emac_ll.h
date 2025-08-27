@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2023-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2023-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -20,6 +20,8 @@
 #include "hal/eth_types.h"
 #include "soc/emac_dma_struct.h"
 #include "soc/emac_mac_struct.h"
+#include "soc/emac_ptp_struct.h"
+#include "soc/clk_tree_defs.h"
 
 #include "soc/hp_system_struct.h"
 #include "soc/hp_sys_clkrst_struct.h"
@@ -90,21 +92,13 @@ extern "C" {
 #define EMAC_LL_DMA_ARBITRATION_ROUNDROBIN_RXTX_3_1 (2)
 #define EMAC_LL_DMA_ARBITRATION_ROUNDROBIN_RXTX_4_1 (3)
 
-/* PTP register bits */
-#define EMAC_LL_DMAPTPRXDESC_PTPMT_SYNC 0x00000100U                      /* SYNC message (all clock types) */
-#define EMAC_LL_DMAPTPRXDESC_PTPMT_FOLLOWUP 0x00000200U                  /* FollowUp message (all clock types) */
-#define EMAC_LL_DMAPTPRXDESC_PTPMT_DELAYREQ 0x00000300U                  /* DelayReq message (all clock types) */
-#define EMAC_LL_DMAPTPRXDESC_PTPMT_DELAYRESP 0x00000400U                 /* DelayResp message (all clock types) */
-#define EMAC_LL_DMAPTPRXDESC_PTPMT_PDELAYREQ_ANNOUNCE 0x00000500U        /* PdelayReq message (peer-to-peer transparent clock) or Announce message (Ordinary or Boundary clock) */
-#define EMAC_LL_DMAPTPRXDESC_PTPMT_PDELAYRESP_MANAG 0x00000600U          /* PdelayResp message (peer-to-peer transparent clock) or Management message (Ordinary or Boundary clock)  */
-#define EMAC_LL_DMAPTPRXDESC_PTPMT_PDELAYRESPFOLLOWUP_SIGNAL 0x00000700U /* PdelayRespFollowUp message (peer-to-peer transparent clock) or Signaling message (Ordinary or Boundary clock) */
-
-#define EMAC_LL_DMAPTPRXDESC_IPPT_UDP 0x00000001U  /* UDP payload encapsulated in the IP datagram */
-#define EMAC_LL_DMAPTPRXDESC_IPPT_TCP 0x00000002U  /* TCP payload encapsulated in the IP datagram */
-#define EMAC_LL_DMAPTPRXDESC_IPPT_ICMP 0x00000003U /* ICMP payload encapsulated in the IP datagram */
-
 #define EMAC_LL_DMADESC_OWNER_CPU  (0)
 #define EMAC_LL_DMADESC_OWNER_DMA  (1)
+
+/* Time stamp status flags */
+#define EMAC_LL_TS_SECONDS_OVERFLOW                    0x00000001U
+#define EMAC_LL_TS_TARGET_TIME_REACHED                 0x00000002U
+#define EMAC_LL_TS_TARGET_TIME_ERROR                   0x00000008U
 
 /* Interrupt flags (referring to dmastatus register in emac_dma_struct.h) */
 #define EMAC_LL_DMA_TRANSMIT_FINISH_INTR               0x00000001U
@@ -125,7 +119,7 @@ extern "C" {
 #define EMAC_LL_DMA_POWER_MANAGE_INTR                  0x10000000U
 #define EMAC_LL_DMA_TIMESTAMP_TRIGGER_INTR             0x20000000U
 
-/* Interrupt enable (referring to dmain_en register in emac_dma_struct.h) */
+/* DMA Interrupt enable (referring to dmain_en register in emac_dma_struct.h) */
 #define EMAC_LL_INTR_TRANSMIT_ENABLE                    0x00000001U
 #define EMAC_LL_INTR_TRANSMIT_STOP_ENABLE               0x00000002U
 #define EMAC_LL_INTR_TRANSMIT_BUFF_UNAVAILABLE_ENABLE   0x00000004U
@@ -142,8 +136,19 @@ extern "C" {
 #define EMAC_LL_INTR_ABNORMAL_SUMMARY_ENABLE            0x00008000U
 #define EMAC_LL_INTR_NORMAL_SUMMARY_ENABLE              0x00010000U
 
-/* Enable needed interrupts (recv/recv_buf_unavailabal/normal must be enabled to make eth work) */
+/* EMAC interrupt enable (referring to emacintmask register in emac_mac_struct.h)*/
+#define EMAC_LL_MAC_INTR_LOW_POWER_IDLE_ENABLE         0x00000400U
+#define EMAC_LL_MAC_INTR_TIME_STAMP_ENABLE             0x00000200U
+#define EMAC_LL_MAC_INTR_POWER_MANAGEMENT_MOD_ENABLE   0x00000008U
+
+/* Enable needed DMA interrupts (recv/recv_buf_unavailabal/normal must be enabled to make eth work) */
 #define EMAC_LL_CONFIG_ENABLE_INTR_MASK    (EMAC_LL_INTR_RECEIVE_ENABLE | EMAC_LL_INTR_NORMAL_SUMMARY_ENABLE)
+
+/* Enable needed MAC interrupts */
+#define EMAC_LL_CONFIG_ENABLE_MAC_INTR_MASK  (EMAC_LL_MAC_INTR_TIME_STAMP_ENABLE)
+
+/* Maximum number of MAC address to be filtered */
+#define EMAC_LL_MAX_MAC_ADDR_NUM 8
 
 /************** Start of mac regs operation ********************/
 /* emacgmiiaddr */
@@ -356,6 +361,22 @@ static inline uint32_t emac_ll_read_debug_reg(emac_mac_dev_t *mac_regs)
     return mac_regs->emacdebug.val;
 }
 
+/* pmt_csr */
+static inline void emac_ll_power_down_enable(emac_mac_dev_t *mac_regs, bool enable)
+{
+    mac_regs->pmt_csr.pwrdwn = enable;
+}
+
+static inline void emac_ll_magic_packet_enable(emac_mac_dev_t *mac_regs, bool enable)
+{
+    mac_regs->pmt_csr.mgkpkten = enable;
+}
+
+static inline bool emac_ll_get_magic_packet_received(emac_mac_dev_t *mac_regs)
+{
+    return mac_regs->pmt_csr.mgkprcvd;
+}
+
 /* emacmiidata */
 static inline void emac_ll_set_phy_data(emac_mac_dev_t *mac_regs, uint32_t data)
 {
@@ -373,6 +394,75 @@ static inline void emac_ll_set_addr(emac_mac_dev_t *mac_regs, const uint8_t *add
     HAL_FORCE_MODIFY_U32_REG_FIELD(mac_regs->emacaddr0high, address0_hi, (addr[5] << 8) | addr[4]);
     mac_regs->emacaddr0low = (addr[3] << 24) | (addr[2] << 16) | (addr[1] << 8) | (addr[0]);
 }
+
+static inline void emac_ll_get_addr(emac_mac_dev_t *mac_regs, uint8_t *addr)
+{
+    addr[0] = mac_regs->emacaddr0low & 0xFF;
+    addr[1] = (mac_regs->emacaddr0low >> 8) & 0xFF;
+    addr[2] = (mac_regs->emacaddr0low >> 16) & 0xFF;
+    addr[3] = (mac_regs->emacaddr0low >> 24) & 0xFF;
+    addr[4] = mac_regs->emacaddr0high.address0_hi & 0xFF;
+    addr[5] = (mac_regs->emacaddr0high.address0_hi >> 8) & 0xFF;
+}
+
+/* emacaddrN */
+static inline void emac_ll_add_addr_filter(emac_mac_dev_t *mac_regs, uint8_t addr_num, const uint8_t *mac_addr, uint8_t mask, bool filter_for_source)
+{
+    addr_num = addr_num - 1; // MAC Address1 is located at emacaddr[0]
+
+    HAL_FORCE_MODIFY_U32_REG_FIELD(mac_regs->emacaddr[addr_num].emacaddrhigh, mac_address_hi, (mac_addr[5] << 8) | mac_addr[4]);
+    mac_regs->emacaddr[addr_num].emacaddrhigh.mask_byte_control = mask;
+    mac_regs->emacaddr[addr_num].emacaddrhigh.source_address = filter_for_source;
+    mac_regs->emacaddr[addr_num].emacaddrhigh.address_enable = 1;
+    mac_regs->emacaddr[addr_num].emacaddrlow = (mac_addr[3] << 24) | (mac_addr[2] << 16) | (mac_addr[1] << 8) | (mac_addr[0]);
+}
+
+static inline bool emac_ll_get_addr_filter(emac_mac_dev_t *mac_regs, uint8_t addr_num, uint8_t *mac_addr, uint8_t *mask, bool *filter_for_source)
+{
+    addr_num = addr_num - 1; // MAC Address1 is located at emacaddr[0]
+    if (mac_regs->emacaddr[addr_num].emacaddrhigh.address_enable) {
+        if (mac_addr != NULL) {
+            mac_addr[0] = mac_regs->emacaddr[addr_num].emacaddrlow & 0xFF;
+            mac_addr[1] = (mac_regs->emacaddr[addr_num].emacaddrlow >> 8) & 0xFF;
+            mac_addr[2] = (mac_regs->emacaddr[addr_num].emacaddrlow >> 16) & 0xFF;
+            mac_addr[3] = (mac_regs->emacaddr[addr_num].emacaddrlow >> 24) & 0xFF;
+            mac_addr[4] = mac_regs->emacaddr[addr_num].emacaddrhigh.mac_address_hi & 0xFF;
+            mac_addr[5] = (mac_regs->emacaddr[addr_num].emacaddrhigh.mac_address_hi >> 8) & 0xFF;
+        }
+        if (mask != NULL) {
+            *mask = mac_regs->emacaddr[addr_num].emacaddrhigh.mask_byte_control;
+        }
+        if (filter_for_source != NULL) {
+            *filter_for_source = mac_regs->emacaddr[addr_num].emacaddrhigh.source_address;
+        }
+        return true;
+    }
+    return false;
+}
+
+static inline void emac_ll_rm_addr_filter(emac_mac_dev_t *mac_regs, uint8_t addr_num)
+{
+    addr_num = addr_num - 1; // MAC Address1 is located at emacaddr[0]
+    mac_regs->emacaddr[addr_num].emacaddrhigh.address_enable = 0;
+    HAL_FORCE_MODIFY_U32_REG_FIELD(mac_regs->emacaddr[addr_num].emacaddrhigh, mac_address_hi, 0);
+    mac_regs->emacaddr[addr_num].emacaddrlow = 0;
+}
+
+/* emacintmask */
+static inline void emac_ll_enable_corresponding_emac_intr(emac_mac_dev_t *mac_regs, uint32_t mask)
+{
+    uint32_t temp_mask = mac_regs->emacintmask.val;
+    temp_mask &= ~mask;
+    mac_regs->emacintmask.val = temp_mask;
+}
+
+static inline void emac_ll_disable_corresponding_emac_intr(emac_mac_dev_t *mac_regs, uint32_t mask)
+{
+    uint32_t temp_mask = mac_regs->emacintmask.val;
+    temp_mask |= mask;
+    mac_regs->emacintmask.val = temp_mask;
+}
+
 /*************** End of mac regs operation *********************/
 
 
@@ -535,12 +625,17 @@ static inline void emac_ll_disable_all_intr(emac_dma_dev_t *dma_regs)
 
 static inline void emac_ll_enable_corresponding_intr(emac_dma_dev_t *dma_regs, uint32_t mask)
 {
-    dma_regs->dmain_en.val |= mask;
+    uint32_t temp_mask = dma_regs->dmain_en.val;
+    temp_mask |= mask;
+    dma_regs->dmain_en.val = temp_mask;
+
 }
 
 static inline void emac_ll_disable_corresponding_intr(emac_dma_dev_t *dma_regs, uint32_t mask)
 {
-    dma_regs->dmain_en.val &= ~mask;
+    uint32_t temp_mask = dma_regs->dmain_en.val;
+    temp_mask &= ~mask;
+    dma_regs->dmain_en.val = temp_mask;
 }
 
 static inline uint32_t emac_ll_get_intr_enable_status(emac_dma_dev_t *dma_regs)
@@ -577,6 +672,175 @@ static inline void emac_ll_receive_poll_demand(emac_dma_dev_t *dma_regs, uint32_
 
 /*************** End of dma regs operation *********************/
 
+/************** Start of ptp regs operation ********************/
+static inline uint32_t emac_ll_get_ts_status(emac_ptp_dev_t *ptp_regs)
+{
+    return ptp_regs->status.val;
+}
+
+/* basic control and setting */
+static inline void emac_ll_ts_enable(emac_ptp_dev_t *ptp_regs, bool enable)
+{
+    ptp_regs->timestamp_ctrl.en_timestamp = enable;
+}
+
+static inline void emac_ll_ts_ptp_ip4_enable(emac_ptp_dev_t *ptp_regs, bool enable)
+{
+    ptp_regs->timestamp_ctrl.en_proc_ptp_ipv4_udp = enable;
+}
+
+static inline void emac_ll_ts_ptp_ether_enable(emac_ptp_dev_t *ptp_regs, bool enable)
+{
+    ptp_regs->timestamp_ctrl.en_proc_ptp_ether_frm = enable;
+}
+
+static inline void emac_ll_ts_ptp_snap_type_sel(emac_ptp_dev_t *ptp_regs, uint8_t sel)
+{
+    ptp_regs->timestamp_ctrl.sel_snap_type = sel;
+}
+
+static inline void emac_ll_ts_ptp_snap_master_only_enable(emac_ptp_dev_t *ptp_regs, bool enable)
+{
+    ptp_regs->timestamp_ctrl.en_snap_msg_relevant_master = enable;
+}
+
+static inline void emac_ll_ts_ptp_snap_event_only_enable(emac_ptp_dev_t *ptp_regs, bool enable)
+{
+    ptp_regs->timestamp_ctrl.en_ts_snap_event_msg = enable;
+}
+
+static inline void emac_ll_ts_all_enable(emac_ptp_dev_t *ptp_regs, bool enable)
+{
+    ptp_regs->timestamp_ctrl.en_ts4all = enable;
+}
+
+static inline void emac_ll_ptp_v2_proc_enable(emac_ptp_dev_t *ptp_regs, bool enable) {
+    ptp_regs->timestamp_ctrl.en_ptp_pkg_proc_ver2_fmt = enable;
+}
+
+static inline void emac_ll_ts_digital_roll_enable(emac_ptp_dev_t *ptp_regs, bool enable)
+{
+    ptp_regs->timestamp_ctrl.ts_digit_bin_roll_ctrl = enable;
+}
+
+static inline bool emac_ll_is_ts_digital_roll_set(emac_ptp_dev_t *ptp_regs)
+{
+    return ptp_regs->timestamp_ctrl.ts_digit_bin_roll_ctrl;
+}
+
+static inline void emac_ll_set_ts_update_method(emac_ptp_dev_t *ptp_regs, eth_mac_ptp_update_method_t method)
+{
+    if (method == ETH_PTP_UPDATE_METHOD_COARSE) {
+        ptp_regs->timestamp_ctrl.ts_fine_coarse_update = 0;
+    } else {
+        ptp_regs->timestamp_ctrl.ts_fine_coarse_update = 1;
+    }
+}
+
+static inline eth_mac_ptp_update_method_t emac_ll_get_ts_update_method(emac_ptp_dev_t *ptp_regs)
+{
+    if (ptp_regs->timestamp_ctrl.ts_fine_coarse_update == 0) {
+        return ETH_PTP_UPDATE_METHOD_COARSE;
+    }
+    return ETH_PTP_UPDATE_METHOD_FINE;
+}
+
+static inline void emac_ll_ts_init_do(emac_ptp_dev_t *ptp_regs)
+{
+    ptp_regs->timestamp_ctrl.ts_initialize = 1;
+}
+
+static inline bool emac_ll_is_ts_init_done(emac_ptp_dev_t *ptp_regs)
+{
+    return !ptp_regs->timestamp_ctrl.ts_initialize;
+}
+
+/* increment value */
+static inline void emac_ll_set_ts_sub_second_incre_val(emac_ptp_dev_t *ptp_regs, uint8_t increment)
+{
+    HAL_FORCE_MODIFY_U32_REG_FIELD(ptp_regs->sub_sec_incre, sub_second_incre_value, increment);
+}
+
+/* addend control */
+static inline void emac_ll_set_ts_addend_val(emac_ptp_dev_t *ptp_regs, uint32_t val)
+{
+    ptp_regs->timestamp_addend.ts_addend_val = val;
+}
+
+static inline uint32_t emac_ll_get_ts_addend_val(emac_ptp_dev_t *ptp_regs)
+{
+    return ptp_regs->timestamp_addend.ts_addend_val;
+}
+
+static inline void emac_ll_ts_addend_do_update(emac_ptp_dev_t *ptp_regs)
+{
+    ptp_regs->timestamp_ctrl.addend_reg_update = 1;
+}
+
+static inline bool emac_ll_is_ts_addend_update_done(emac_ptp_dev_t *ptp_regs)
+{
+    return !ptp_regs->timestamp_ctrl.addend_reg_update;
+}
+
+/* time update */
+static inline void emac_ll_set_ts_update_second_val(emac_ptp_dev_t *ptp_regs, uint32_t val)
+{
+    ptp_regs->sys_seconds_update.ts_second = val;
+}
+
+static inline void emac_ll_set_ts_update_sub_second_val(emac_ptp_dev_t *ptp_regs, uint32_t val)
+{
+    ptp_regs->sys_nanosec_update.ts_sub_seconds = val;
+}
+
+static inline void emac_ll_ts_update_time_add(emac_ptp_dev_t *ptp_regs)
+{
+    ptp_regs->sys_nanosec_update.add_sub = 0;
+}
+
+static inline void emac_ll_ts_update_time_sub(emac_ptp_dev_t *ptp_regs)
+{
+    ptp_regs->sys_nanosec_update.add_sub = 1;
+}
+
+static inline void emac_ll_ts_update_time_do(emac_ptp_dev_t *ptp_regs)
+{
+    ptp_regs->timestamp_ctrl.ts_update = 1;
+}
+
+static inline bool emac_ll_is_ts_update_time_done(emac_ptp_dev_t *ptp_regs)
+{
+    return !ptp_regs->timestamp_ctrl.ts_update;
+}
+
+/* get time */
+static inline uint32_t emac_ll_get_ts_seconds_val(emac_ptp_dev_t *ptp_regs)
+{
+    return ptp_regs->sys_seconds.ts_second;
+}
+
+static inline uint32_t emac_ll_get_ts_sub_seconds_val(emac_ptp_dev_t *ptp_regs)
+{
+    return ptp_regs->sys_nanosec.ts_sub_seconds;
+}
+
+/* target time control */
+static inline void emac_ll_set_ts_target_second_val(emac_ptp_dev_t *ptp_regs, uint32_t val)
+{
+    ptp_regs->tgt_seconds.tgt_time_second_val = val;
+}
+
+static inline void emac_ll_set_ts_target_sub_second_val(emac_ptp_dev_t *ptp_regs, uint32_t val)
+{
+    ptp_regs->tgt_nanosec.tgt_ts_low_reg = val;
+}
+
+static inline void emac_ll_ts_target_int_trig_enable(emac_ptp_dev_t *ptp_regs)
+{
+    ptp_regs->timestamp_ctrl.en_ts_int_trig = 1;
+}
+
+/************** End of ptp regs operation ********************/
 
 /**
  * @brief Enable the bus clock for the EMAC module
@@ -592,7 +856,22 @@ static inline void emac_ll_enable_bus_clock(int group_id, bool enable)
 
 /// use a macro to wrap the function, force the caller to use it in a critical section
 /// the critical section needs to declare the __DECLARE_RCC_ATOMIC_ENV variable in advance
-#define emac_ll_enable_bus_clock(...) (void)__DECLARE_RCC_ATOMIC_ENV; emac_ll_enable_bus_clock(__VA_ARGS__)
+#define emac_ll_enable_bus_clock(...) do { \
+        (void)__DECLARE_RCC_ATOMIC_ENV; \
+        emac_ll_enable_bus_clock(__VA_ARGS__); \
+    } while(0)
+
+static inline void _emac_ll_clock_force_en(bool enable)
+{
+    HP_SYS_CLKRST.clk_force_on_ctrl0.reg_gmac_tx_clk_force_on = enable;
+}
+
+/// use a macro to wrap the function, force the caller to use it in a critical section
+/// the critical section needs to declare the __DECLARE_RCC_ATOMIC_ENV variable in advance
+#define emac_ll_clock_force_en(...) do { \
+        (void)__DECLARE_RCC_ATOMIC_ENV; \
+        _emac_ll_clock_force_en(__VA_ARGS__); \
+    } while(0)
 
 /**
  * @brief Reset the EMAC module
@@ -608,7 +887,10 @@ static inline void emac_ll_reset_register(int group_id)
 
 /// use a macro to wrap the function, force the caller to use it in a critical section
 /// the critical section needs to declare the __DECLARE_RCC_ATOMIC_ENV variable in advance
-#define emac_ll_reset_register(...) (void)__DECLARE_RCC_ATOMIC_ENV; emac_ll_reset_register(__VA_ARGS__)
+#define emac_ll_reset_register(...) do { \
+        (void)__DECLARE_RCC_ATOMIC_ENV; \
+        emac_ll_reset_register(__VA_ARGS__); \
+    } while(0)
 
 static inline eth_data_interface_t emac_ll_get_phy_intf(void *ext_regs)
 {
@@ -628,11 +910,11 @@ static inline void emac_ll_clock_enable_mii(void *ext_regs)
 
     HP_SYS_CLKRST.peri_clk_ctrl00.reg_emac_rx_clk_en = 1;
     HP_SYS_CLKRST.peri_clk_ctrl00.reg_emac_rx_clk_src_sel = 1; // 0-pad_emac_txrx_clk, 1-pad_emac_rx_clk
-    HP_SYS_CLKRST.peri_clk_ctrl01.reg_emac_rx_clk_div_num = 0; // 25MHz
+    HAL_FORCE_MODIFY_U32_REG_FIELD(HP_SYS_CLKRST.peri_clk_ctrl01, reg_emac_rx_clk_div_num, 0); // 25MHz
 
     HP_SYS_CLKRST.peri_clk_ctrl01.reg_emac_tx_clk_en = 1;
     HP_SYS_CLKRST.peri_clk_ctrl01.reg_emac_tx_clk_src_sel = 1; // 0-pad_emac_txrx_clk, 1-pad_emac_tx_clk
-    HP_SYS_CLKRST.peri_clk_ctrl01.reg_emac_tx_clk_div_num = 0; // 25MHz
+    HAL_FORCE_MODIFY_U32_REG_FIELD(HP_SYS_CLKRST.peri_clk_ctrl01, reg_emac_tx_clk_div_num, 0); // 25MHz
 
     LP_AON_CLKRST.hp_clk_ctrl.hp_pad_emac_tx_clk_en = 1;
     LP_AON_CLKRST.hp_clk_ctrl.hp_pad_emac_rx_clk_en = 1;
@@ -640,7 +922,10 @@ static inline void emac_ll_clock_enable_mii(void *ext_regs)
 
 /// use a macro to wrap the function, force the caller to use it in a critical section
 /// the critical section needs to declare the __DECLARE_RCC_ATOMIC_ENV variable in advance
-#define emac_ll_clock_enable_mii(...) (void)__DECLARE_RCC_ATOMIC_ENV; emac_ll_clock_enable_mii(__VA_ARGS__)
+#define emac_ll_clock_enable_mii(...) do { \
+        (void)__DECLARE_RCC_ATOMIC_ENV; \
+        emac_ll_clock_enable_mii(__VA_ARGS__); \
+    } while(0)
 
 static inline void emac_ll_clock_enable_rmii_input(void *ext_regs)
 {
@@ -653,11 +938,11 @@ static inline void emac_ll_clock_enable_rmii_input(void *ext_regs)
 
     HP_SYS_CLKRST.peri_clk_ctrl00.reg_emac_rx_clk_en = 1;
     HP_SYS_CLKRST.peri_clk_ctrl00.reg_emac_rx_clk_src_sel = 0; // 0-pad_emac_txrx_clk, 1-pad_emac_rx_clk
-    HP_SYS_CLKRST.peri_clk_ctrl01.reg_emac_rx_clk_div_num = 1; // set default divider
+    HAL_FORCE_MODIFY_U32_REG_FIELD(HP_SYS_CLKRST.peri_clk_ctrl01, reg_emac_rx_clk_div_num, 1); // set default divider
 
-    HP_SYS_CLKRST.peri_clk_ctrl01.reg_emac_tx_clk_en = 1;
+    HP_SYS_CLKRST.peri_clk_ctrl01.reg_emac_tx_clk_en  = 1;
     HP_SYS_CLKRST.peri_clk_ctrl01.reg_emac_tx_clk_src_sel = 0; // 0-pad_emac_txrx_clk, 1-pad_emac_tx_clk
-    HP_SYS_CLKRST.peri_clk_ctrl01.reg_emac_tx_clk_div_num = 1; // set default divider
+    HAL_FORCE_MODIFY_U32_REG_FIELD(HP_SYS_CLKRST.peri_clk_ctrl01, reg_emac_tx_clk_div_num, 1); // set default divider
 
     LP_AON_CLKRST.hp_clk_ctrl.hp_pad_emac_tx_clk_en = 0;
     LP_AON_CLKRST.hp_clk_ctrl.hp_pad_emac_rx_clk_en = 0;
@@ -666,17 +951,23 @@ static inline void emac_ll_clock_enable_rmii_input(void *ext_regs)
 
 /// use a macro to wrap the function, force the caller to use it in a critical section
 /// the critical section needs to declare the __DECLARE_RCC_ATOMIC_ENV variable in advance
-#define emac_ll_clock_enable_rmii_input(...) (void)__DECLARE_RCC_ATOMIC_ENV; emac_ll_clock_enable_rmii_input(__VA_ARGS__)
+#define emac_ll_clock_enable_rmii_input(...) do { \
+        (void)__DECLARE_RCC_ATOMIC_ENV; \
+        emac_ll_clock_enable_rmii_input(__VA_ARGS__); \
+    } while(0)
 
 static inline void emac_ll_clock_rmii_rx_tx_div(void *ext_regs, int div)
 {
-    HP_SYS_CLKRST.peri_clk_ctrl01.reg_emac_rx_clk_div_num = div;
-    HP_SYS_CLKRST.peri_clk_ctrl01.reg_emac_tx_clk_div_num = div;
+    HAL_FORCE_MODIFY_U32_REG_FIELD(HP_SYS_CLKRST.peri_clk_ctrl01, reg_emac_rx_clk_div_num, div);
+    HAL_FORCE_MODIFY_U32_REG_FIELD(HP_SYS_CLKRST.peri_clk_ctrl01, reg_emac_tx_clk_div_num, div);
 }
 
 /// use a macro to wrap the function, force the caller to use it in a critical section
 /// the critical section needs to declare the __DECLARE_RCC_ATOMIC_ENV variable in advance
-#define emac_ll_clock_rmii_rx_tx_div(...) (void)__DECLARE_RCC_ATOMIC_ENV; emac_ll_clock_rmii_rx_tx_div(__VA_ARGS__)
+#define emac_ll_clock_rmii_rx_tx_div(...) do { \
+        (void)__DECLARE_RCC_ATOMIC_ENV; \
+        emac_ll_clock_rmii_rx_tx_div(__VA_ARGS__); \
+    } while(0)
 
 static inline void emac_ll_clock_enable_rmii_output(void *ext_regs)
 {
@@ -687,11 +978,41 @@ static inline void emac_ll_clock_enable_rmii_output(void *ext_regs)
 
 /// use a macro to wrap the function, force the caller to use it in a critical section
 /// the critical section needs to declare the __DECLARE_RCC_ATOMIC_ENV variable in advance
-#define emac_ll_clock_enable_rmii_output(...) (void)__DECLARE_RCC_ATOMIC_ENV; emac_ll_clock_enable_rmii_output(__VA_ARGS__)
+#define emac_ll_clock_enable_rmii_output(...) do { \
+        (void)__DECLARE_RCC_ATOMIC_ENV; \
+        emac_ll_clock_enable_rmii_output(__VA_ARGS__); \
+    } while(0)
+
+static inline void emac_ll_clock_enable_ptp(void *ext_regs, soc_periph_emac_ptp_clk_src_t clk_src, bool enable)
+{
+    uint8_t clk_src_val;
+
+    switch (clk_src)
+    {
+    case EMAC_PTP_CLK_SRC_XTAL:
+        clk_src_val = 0;
+        break;
+    case EMAC_PTP_CLK_SRC_PLL_F80M:
+        clk_src_val = 1;
+        break;
+    default:
+        clk_src_val = 0;
+        break;
+    }
+    HP_SYS_CLKRST.peri_clk_ctrl01.reg_emac_ptp_ref_clk_src_sel = clk_src_val;
+    HP_SYS_CLKRST.peri_clk_ctrl01.reg_emac_ptp_ref_clk_en = enable;
+}
+
+/// use a macro to wrap the function, force the caller to use it in a critical section
+/// the critical section needs to declare the __DECLARE_RCC_ATOMIC_ENV variable in advance
+#define emac_ll_clock_enable_ptp(...) do { \
+        (void)__DECLARE_RCC_ATOMIC_ENV; \
+        emac_ll_clock_enable_ptp(__VA_ARGS__); \
+    } while(0)
 
 static inline void emac_ll_pause_frame_enable(void *ext_regs, bool enable)
 {
-    HP_SYSTEM.sys_gmac_ctrl0.sys_phy_intf_sel = enable;
+    HP_SYSTEM.sys_gmac_ctrl0.sys_sbd_flowctrl = enable;
 }
 
 #ifdef __cplusplus

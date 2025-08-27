@@ -249,6 +249,13 @@ DUT2 (slave) 终端::
 
 第一次执行此用例时，输入 ``1`` 来运行第一阶段（触发深度睡眠）。在重启 DUT 并再次选择运行此用例后，输入 ``2`` 来运行第二阶段。只有在最后一个阶段通过并且之前所有的阶段都成功触发了复位的情况下，该测试才算通过。
 
+项目构建与自动化流程
+--------------------
+
+`Github ESP Test Template <https://github.com/espressif/gh-esp-test-template>`_ 提供了应用程序的构建和测试示例，介绍了如何使用 GitHub CI 在仿真环境和现实硬件上运行测试。
+
+对于更复杂的项目，可将测试拆分为多个独立的测试应用 (test-apps)，分别验证各组件。此时，可使用 `IDF Build Apps <https://github.com/espressif/idf-build-apps>`_ 自动查找并构建所有测试应用，提高测试效率。
+
 
 .. _cache-compensated-timer:
 
@@ -368,3 +375,8 @@ Mocks
 这两种方法都会让组件模拟覆盖 ESP-IDF 中的现有组件。如果你使用的是 ESP-IDF 提供的组件模拟，则第二个方法更加方便。
 
 可参考 ``esp_event`` 基于主机的单元测试及其 :component_file:`esp_event/host_test/esp_event_unit_test/CMakeLists.txt` 作为组件模拟的示例。
+
+应用示例
+--------------------
+
+:example:`system/unit_test` 演示了如何在 {IDF_TARGET_NAME} 开发环境中使用 Unity 库为自定义组件添加单元测试，展示了如断言、测试注册等功能，以及如何使用 UNITY_BEGIN() 和 UNITY_END() 宏。

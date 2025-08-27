@@ -1,4 +1,5 @@
 idf_build_get_property(target IDF_TARGET)
+idf_build_get_property(non_os_build NON_OS_BUILD)
 
 # On Linux, we only support a few features, hence this simple component registration
 if(${target} STREQUAL "linux")
@@ -17,7 +18,7 @@ if(${target} STREQUAL "esp32c6")
 endif()
 
 set(srcs "cpu.c" "port/${IDF_TARGET}/esp_cpu_intr.c" "esp_memory_utils.c" "port/${IDF_TARGET}/cpu_region_protect.c")
-if(NOT BOOTLOADER_BUILD)
+if(NOT non_os_build)
     list(APPEND srcs "esp_clk.c"
                      "clk_ctrl_os.c"
                      "hw_random.c"
@@ -26,34 +27,44 @@ if(NOT BOOTLOADER_BUILD)
                      "periph_ctrl.c"
                      "revision.c"
                      "rtc_module.c"
-                     "sleep_modem.c"
-                     "sleep_modes.c"
-                     "sleep_console.c"
-                     "sleep_gpio.c"
-                     "sleep_event.c"
                      "regi2c_ctrl.c"
                      "esp_gpio_reserve.c"
-                     "sar_periph_ctrl_common.c"
+                     "sar_tsens_ctrl.c"
                      "port/${target}/io_mux.c"
                      "port/${target}/esp_clk_tree.c"
-                     "port/esp_clk_tree_common.c"
                      "dma/esp_dma_utils.c"
-                     "spi_share_hw_ctrl.c"
-                     "spi_bus_lock.c")
-
+                     "dma/gdma_link.c"
+                     "spi_bus_lock.c"
+                     "clk_utils.c")
+    if(CONFIG_SOC_USB_OTG_SUPPORTED)
+        list(APPEND srcs "usb_phy/usb_phy.c")
+    endif()
+    if(CONFIG_SOC_CLK_TREE_SUPPORTED)
+        list(APPEND srcs "port/esp_clk_tree_common.c")
+    endif()
+    if(CONFIG_SOC_GPSPI_SUPPORTED)
+        list(APPEND srcs "spi_share_hw_ctrl.c")
+    endif()
     if(CONFIG_SOC_ADC_SUPPORTED)
         list(APPEND srcs "adc_share_hw_ctrl.c")
     endif()
-
     if(CONFIG_SOC_ISP_SHARE_CSI_BRG)
         list(APPEND srcs "mipi_csi_share_hw_ctrl.c")
     endif()
     if(CONFIG_SOC_PAU_SUPPORTED)
-        list(APPEND srcs "sleep_retention.c"
-                         "sleep_system_peripheral.c"
-                         "sleep_clock.c"
-                         "port/${target}/clock_retention_init.c"
-                         )
+        list(APPEND srcs "sleep_retention.c")
+    endif()
+    if(CONFIG_SOC_LIGHT_SLEEP_SUPPORTED)
+        list(APPEND srcs "sleep_modem.c"
+                         "sleep_modes.c"
+                         "sleep_console.c"
+                         "sleep_usb.c"
+                         "sleep_gpio.c"
+                         "sleep_event.c"
+            )
+        if(CONFIG_SOC_PAU_SUPPORTED AND CONFIG_SOC_PM_SUPPORT_TOP_PD)
+            list(APPEND srcs "sleep_system_peripheral.c")
+        endif()
     endif()
 
     # [refactor-todo]
@@ -69,16 +80,23 @@ if(NOT BOOTLOADER_BUILD)
 
     if(CONFIG_SOC_GDMA_SUPPORTED)
         list(APPEND srcs "dma/gdma.c")
-        if(CONFIG_SOC_GDMA_SUPPORT_SLEEP_RETENTION)
+        if(CONFIG_SOC_GDMA_SUPPORT_SLEEP_RETENTION AND CONFIG_SOC_PAU_SUPPORTED)
             list(APPEND srcs "dma/gdma_sleep_retention.c")
         endif()
         if(CONFIG_SOC_GDMA_SUPPORT_ETM)
             list(APPEND srcs "dma/gdma_etm.c")
         endif()
+        if(CONFIG_SOC_GDMA_SUPPORT_CRC)
+            list(APPEND srcs "dma/gdma_crc.c")
+        endif()
     endif()
 
     if(CONFIG_SOC_GP_LDO_SUPPORTED)
         list(APPEND srcs "ldo/esp_ldo_regulator.c")
+    endif()
+
+    if(CONFIG_SOC_DEBUG_PROBE_SUPPORTED)
+        list(APPEND srcs "debug_probe/debug_probe.c")
     endif()
 
     if(CONFIG_SOC_ASYNC_MEMCPY_SUPPORTED)
@@ -103,24 +121,8 @@ if(NOT BOOTLOADER_BUILD)
         list(APPEND srcs "port/${target}/systimer.c")
     endif()
 
-    if(CONFIG_SOC_HMAC_SUPPORTED)
-        list(APPEND srcs "esp_hmac.c")
-    endif()
-
     if(CONFIG_SOC_ETM_SUPPORTED)
         list(APPEND srcs "esp_etm.c")
-    endif()
-
-    if(CONFIG_SOC_CRYPTO_DPA_PROTECTION_SUPPORTED)
-        list(APPEND srcs "esp_dpa_protection.c")
-    endif()
-
-    if(CONFIG_SOC_DIG_SIGN_SUPPORTED)
-        list(APPEND srcs "esp_ds.c")
-    endif()
-
-    if(CONFIG_SOC_KEY_MANAGER_SUPPORTED)
-        list(APPEND srcs "esp_key_mgr.c")
     endif()
 
     if(CONFIG_SOC_PAU_SUPPORTED)
@@ -133,12 +135,18 @@ if(NOT BOOTLOADER_BUILD)
     endif()
 
     if(NOT CONFIG_APP_BUILD_TYPE_PURE_RAM_APP)
-        list(APPEND srcs "mspi_timing_tuning.c")
-        if(CONFIG_SOC_MEMSPI_TIMING_TUNING_BY_MSPI_DELAY)
-            list(APPEND srcs "mspi_timing_by_mspi_delay.c")
+        list(APPEND srcs "mspi_timing_tuning/mspi_timing_tuning.c")
+        if(CONFIG_SOC_MEMSPI_TIMING_TUNING_BY_MSPI_DELAY AND NOT CONFIG_IDF_TARGET_ESP32S3)
+            if(EXISTS "${CMAKE_CURRENT_LIST_DIR}/mspi_timing_tuning/tuning_scheme_impl/mspi_timing_by_mspi_delay.c")
+                list(APPEND srcs "mspi_timing_tuning/tuning_scheme_impl/mspi_timing_by_mspi_delay.c")
+            endif()
         endif()
+
         if(CONFIG_SOC_MEMSPI_TIMING_TUNING_BY_DQS)
-            list(APPEND srcs "mspi_timing_by_dqs.c")
+            list(APPEND srcs "mspi_timing_tuning/tuning_scheme_impl/mspi_timing_by_dqs.c")
+        endif()
+        if(CONFIG_SOC_MEMSPI_TIMING_TUNING_BY_FLASH_DELAY)
+            list(APPEND srcs "mspi_timing_tuning/tuning_scheme_impl/mspi_timing_by_flash_delay.c")
         endif()
     endif()
 
@@ -150,52 +158,60 @@ if(NOT BOOTLOADER_BUILD)
         list(APPEND srcs "esp_clock_output.c")
     endif()
 
-    if(CONFIG_IDF_TARGET_ESP32C5_BETA3_VERSION)
-        list(REMOVE_ITEM srcs
-                "sleep_gpio.c"        # TODO: [ESP32C5] IDF-8638
-                "port/esp_clk_tree_common.c"    # TODO: [ESP32C5] IDF-8638
-            )
+    if(CONFIG_SOC_BOD_SUPPORTED)
+        list(APPEND srcs "power_supply/brownout.c")
     endif()
-    if(CONFIG_IDF_TARGET_ESP32C5_MP_VERSION)
-        list(REMOVE_ITEM srcs
-                "sleep_modes.c"       # TODO: [ESP32C5] IDF-8638
-                "sleep_modem.c"       # TODO: [ESP32C5] IDF-8638
-                "sleep_wake_stub.c"   # TODO: [ESP32C5] IDF-8638
-                "sleep_gpio.c"        # TODO: [ESP32C5] IDF-8638
-                "port/esp_clk_tree_common.c"    # TODO: [ESP32C5] IDF-8638
-            )
+
+    if(CONFIG_SOC_VBAT_SUPPORTED)
+        list(APPEND srcs "power_supply/vbat.c")
     endif()
-    if(CONFIG_IDF_TARGET_ESP32C61)  # TODO: [ESP32C61] IDF-9245, IDF-9247, IDF-9248
-        list(REMOVE_ITEM srcs
-                "sleep_cpu.c"
-                "sleep_modem.c"
-                "sleep_modes.c"
-                "sleep_wake_stub.c"
-                "sleep_gpio.c"
-                "port/esp_clk_tree_common.c"
-            )
-    endif()
+
 else()
+    if(ESP_TEE_BUILD)
+        list(APPEND srcs "esp_clk.c" "hw_random.c")
+    endif()
     # Requires "_esp_error_check_failed()" function
     list(APPEND priv_requires "esp_system")
 endif()
 
+set(public_include_dirs "include" "include/soc"
+                        "dma/include" "ldo/include" "debug_probe/include"
+                        "mspi_timing_tuning/include" "mspi_timing_tuning/tuning_scheme_impl/include"
+                        "power_supply/include")
+
+if(EXISTS "${CMAKE_CURRENT_LIST_DIR}/include/soc/${target}")
+    list(APPEND public_include_dirs
+        "include/soc/${target}"
+    )
+endif()
+
+if(CONFIG_IDF_TARGET_ESP32H4)
+    list(REMOVE_ITEM srcs
+        "sleep_modes.c"
+        "sleep_gpio.c" # TODO: [ESP32H4] IDF-12279, IDF-12281
+    )
+endif()
+
 idf_component_register(SRCS ${srcs}
-                       INCLUDE_DIRS include include/soc include/soc/${target} dma/include ldo/include
+                       INCLUDE_DIRS ${public_include_dirs}
                        PRIV_INCLUDE_DIRS port/include include/esp_private
                        REQUIRES ${requires}
                        PRIV_REQUIRES "${priv_requires}"
-                       LDFRAGMENTS linker.lf dma/linker.lf ldo/linker.lf)
+                       LDFRAGMENTS linker.lf dma/linker.lf ldo/linker.lf mspi_timing_tuning/linker.lf)
 
 idf_build_get_property(target IDF_TARGET)
 add_subdirectory(port/${target})
+if(CONFIG_SOC_SPI_MEM_SUPPORT_TIMING_TUNING)
+    add_subdirectory(mspi_timing_tuning/port/${target})
+endif()
 add_subdirectory(lowpower)
 
-if(NOT BOOTLOADER_BUILD)
+if(CONFIG_ESP_SLEEP_GPIO_RESET_WORKAROUND OR CONFIG_PM_SLP_DISABLE_GPIO)
+    target_link_libraries(${COMPONENT_LIB} INTERFACE "-u esp_sleep_gpio_include")
+endif()
+
+if(NOT non_os_build)
     if(CONFIG_SPIRAM)
         idf_component_optional_requires(PRIVATE esp_psram)
-    endif()
-    if(CONFIG_SOC_CRYPTO_DPA_PROTECTION_SUPPORTED)
-        target_link_libraries(${COMPONENT_LIB} PRIVATE "-u esp_crypto_dpa_prot_include_impl")
     endif()
 endif()

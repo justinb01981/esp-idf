@@ -202,6 +202,10 @@ static int ieee802_11_parse_vendor_specific(struct wpa_supplicant *wpa_s, const 
 		case SAE_PK_OUI_TYPE:
 			wpa_s->sae_pk_elems.sae_pk_len = elem->datalen - 4;
 			wpa_s->sae_pk_elems.sae_pk = (u8*)os_zalloc(sizeof(u8)*(elem->datalen-4));
+			if (!wpa_s->sae_pk_elems.sae_pk) {
+			    wpa_printf(MSG_EXCESSIVE, "Can not allocate memory for sae_pk");
+			    return -1;
+			}
 			os_memcpy(wpa_s->sae_pk_elems.sae_pk, pos+4, elem->datalen-4);
 			break;
 		default:
@@ -264,7 +268,7 @@ static int ieee802_11_parse_extension(struct wpa_supplicant *wpa_s, const struct
  */
 int ieee802_11_parse_elems(struct wpa_supplicant *wpa_s, const u8 *start, size_t len)
 {
-#if defined(CONFIG_RRM) ||  defined(CONFIG_SAE_PK)
+#if defined(CONFIG_RRM) || defined(CONFIG_WNM) || defined(CONFIG_SAE_PK)
 	const struct element *elem;
 	u8 unknown = 0;
 
@@ -293,7 +297,7 @@ int ieee802_11_parse_elems(struct wpa_supplicant *wpa_s, const u8 *start, size_t
 			}
 			break;
 #endif /*CONFIG_SAE_PK*/
-#ifdef CONFIG_RRM
+#ifdef CONFIG_WNM
 		case WLAN_EID_EXT_CAPAB:
 			/* extended caps can go beyond 8 octacts but we aren't using them now */
 			os_memcpy(wpa_s->extend_caps, pos, 5);
@@ -307,7 +311,7 @@ int ieee802_11_parse_elems(struct wpa_supplicant *wpa_s, const u8 *start, size_t
 	if (unknown)
 		return -1;
 
-#endif /* defined(CONFIG_RRM) ||  defined(CONFIG_SAE_PK) */
+#endif /* defined(CONFIG_RRM) || defined(CONFIG_WNM) || defined(CONFIG_SAE_PK) */
 	return 0;
 }
 
@@ -351,18 +355,80 @@ int ieee802_11_ext_capab(const u8 *ie, unsigned int capab)
 	return !!(ie[2 + capab / 8] & BIT(capab % 8));
 }
 
+const struct oper_class_map global_op_class[] = {
+        { HOSTAPD_MODE_IEEE80211G, 81, 1, 13, 1, BW20, P2P_SUPP },
+        { HOSTAPD_MODE_IEEE80211G, 82, 14, 14, 1, BW20, NO_P2P_SUPP },
+
+        { HOSTAPD_MODE_IEEE80211G, 83, 1, 9, 1, BW40PLUS, NO_P2P_SUPP },
+        { HOSTAPD_MODE_IEEE80211G, 84, 5, 13, 1, BW40MINUS, NO_P2P_SUPP },
+
+        { HOSTAPD_MODE_IEEE80211A, 115, 36, 48, 4, BW20, P2P_SUPP },
+        { HOSTAPD_MODE_IEEE80211A, 116, 36, 44, 8, BW40PLUS, P2P_SUPP },
+        { HOSTAPD_MODE_IEEE80211A, 117, 40, 48, 8, BW40MINUS, P2P_SUPP },
+        { HOSTAPD_MODE_IEEE80211A, 118, 52, 64, 4, BW20, NO_P2P_SUPP },
+        { HOSTAPD_MODE_IEEE80211A, 119, 52, 60, 8, BW40PLUS, NO_P2P_SUPP },
+        { HOSTAPD_MODE_IEEE80211A, 120, 56, 64, 8, BW40MINUS, NO_P2P_SUPP },
+        { HOSTAPD_MODE_IEEE80211A, 121, 100, 144, 4, BW20, NO_P2P_SUPP },
+        { HOSTAPD_MODE_IEEE80211A, 122, 100, 140, 8, BW40PLUS, NO_P2P_SUPP },
+        { HOSTAPD_MODE_IEEE80211A, 123, 104, 144, 8, BW40MINUS, NO_P2P_SUPP },
+        { HOSTAPD_MODE_IEEE80211A, 124, 149, 161, 4, BW20, P2P_SUPP },
+        { HOSTAPD_MODE_IEEE80211A, 125, 149, 177, 4, BW20, P2P_SUPP },
+        { HOSTAPD_MODE_IEEE80211A, 126, 149, 173, 8, BW40PLUS, P2P_SUPP },
+        { HOSTAPD_MODE_IEEE80211A, 127, 153, 177, 8, BW40MINUS, P2P_SUPP }
+};
+
+size_t global_op_class_size = ARRAY_SIZE(global_op_class);
+
 u8 get_operating_class(u8 chan, int sec_channel)
 {
-	u8 op_class;
+	u8 op_class = 0;
 
-	if (chan < 1 || chan > 14)
-		return 0;
-	if (sec_channel == 1)
-		op_class = 83;
-	else if (sec_channel == -1)
-		op_class = 84;
-	else
-		op_class = 81;
+	if (chan >= 1 && chan < 14) {
+		if (sec_channel == 1)
+			op_class = 83;
+		else if (sec_channel == -1)
+			op_class = 84;
+		else
+			op_class = 81;
+	}
+
+	if (chan == 14)
+		op_class = 82;
+
+#if CONFIG_SOC_WIFI_SUPPORT_5G
+	if (chan >= 36 && chan <= 48) {
+		if (sec_channel == 1)
+			op_class = 116;
+		else if (sec_channel == -1)
+			op_class = 117;
+		else
+			op_class = 115;
+	}
+	if (chan >= 52 && chan <= 64) {
+		if (sec_channel == 1)
+			op_class = 119;
+		else if (sec_channel == -1)
+			op_class = 120;
+		else
+			op_class = 118;
+	}
+	if (chan >= 149 && chan <= 177) {
+		if (sec_channel == 1)
+			op_class = 126;
+		else if (sec_channel == -1)
+			op_class = 127;
+		else
+			op_class = 125;
+	}
+	if (chan >= 100 && chan <= 144) {
+		if (sec_channel == 1)
+			op_class = 122;
+		else if (sec_channel == -1)
+			op_class = 123;
+		else
+			op_class = 121;
+	}
+#endif
 
 	return op_class;
 }

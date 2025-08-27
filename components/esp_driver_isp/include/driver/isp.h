@@ -12,5 +12,14 @@
 #pragma once
 
 #include "driver/isp_core.h"
+#include "driver/isp_ae.h"
 #include "driver/isp_af.h"
+#include "driver/isp_awb.h"
 #include "driver/isp_bf.h"
+#include "driver/isp_ccm.h"
+#include "driver/isp_demosaic.h"
+#include "driver/isp_gamma.h"
+#include "driver/isp_hist.h"
+#include "driver/isp_sharpen.h"
+#include "driver/isp_color.h"
+#include "driver/isp_lsc.h"

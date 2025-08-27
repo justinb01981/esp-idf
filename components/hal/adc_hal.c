@@ -5,13 +5,12 @@
  */
 
 #include <sys/param.h>
-#include "sdkconfig.h"
 #include "hal/adc_hal.h"
 #include "hal/assert.h"
 #include "soc/lldesc.h"
-#include "soc/soc_caps.h"
+#include "soc/soc_caps_full.h"
 
-#if CONFIG_IDF_TARGET_ESP32
+#if SOC_IS(ESP32)
 //ADC utilises I2S0 DMA on ESP32
 #include "hal/i2s_hal.h"
 #include "hal/i2s_types.h"
@@ -58,7 +57,7 @@ void adc_hal_digi_init(adc_hal_dma_ctx_t *hal)
     adc_ll_digi_set_clk_div(ADC_LL_DIGI_SAR_CLK_DIV_DEFAULT);
 
     adc_ll_digi_dma_set_eof_num(hal->eof_num);
-#if CONFIG_IDF_TARGET_ESP32
+#if SOC_IS(ESP32)
     i2s_ll_rx_set_sample_bit(adc_hal_i2s_dev, SAMPLE_BITS, SAMPLE_BITS);
     i2s_ll_rx_enable_mono_mode(adc_hal_i2s_dev, 1);
     i2s_ll_rx_force_enable_fifo_mod(adc_hal_i2s_dev, 1);
@@ -74,6 +73,10 @@ void adc_hal_digi_init(adc_hal_dma_ctx_t *hal)
 
 void adc_hal_digi_deinit()
 {
+#if ADC_LL_POWER_MANAGE_SUPPORTED
+    adc_ll_set_power_manage(ADC_UNIT_1, ADC_LL_POWER_SW_OFF);
+    adc_ll_set_power_manage(ADC_UNIT_2, ADC_LL_POWER_SW_OFF);
+#endif
     adc_ll_digi_trigger_disable();
     adc_ll_digi_dma_disable();
     adc_ll_digi_clear_pattern_table(ADC_UNIT_1);
@@ -87,20 +90,20 @@ void adc_hal_digi_deinit()
 ---------------------------------------------------------------*/
 static adc_ll_digi_convert_mode_t get_convert_mode(adc_digi_convert_mode_t convert_mode)
 {
-#if CONFIG_IDF_TARGET_ESP32 || SOC_ADC_DIGI_CONTROLLER_NUM == 1
+#if SOC_IS(ESP32) || SOC_ADC_DIGI_CONTROLLER_NUM == 1
     return ADC_LL_DIGI_CONV_ONLY_ADC1;
 #elif (SOC_ADC_DIGI_CONTROLLER_NUM >= 2)
     switch (convert_mode) {
-        case ADC_CONV_SINGLE_UNIT_1:
-            return ADC_LL_DIGI_CONV_ONLY_ADC1;
-        case ADC_CONV_SINGLE_UNIT_2:
-            return ADC_LL_DIGI_CONV_ONLY_ADC2;
-        case ADC_CONV_BOTH_UNIT:
-            return ADC_LL_DIGI_CONV_BOTH_UNIT;
-        case ADC_CONV_ALTER_UNIT:
-            return ADC_LL_DIGI_CONV_ALTER_UNIT;
-        default:
-            abort();
+    case ADC_CONV_SINGLE_UNIT_1:
+        return ADC_LL_DIGI_CONV_ONLY_ADC1;
+    case ADC_CONV_SINGLE_UNIT_2:
+        return ADC_LL_DIGI_CONV_ONLY_ADC2;
+    case ADC_CONV_BOTH_UNIT:
+        return ADC_LL_DIGI_CONV_BOTH_UNIT;
+    case ADC_CONV_ALTER_UNIT:
+        return ADC_LL_DIGI_CONV_ALTER_UNIT;
+    default:
+        abort();
     }
 #endif
 }
@@ -114,7 +117,7 @@ static adc_ll_digi_convert_mode_t get_convert_mode(adc_digi_convert_mode_t conve
  */
 static void adc_hal_digi_sample_freq_config(adc_hal_dma_ctx_t *hal, adc_continuous_clk_src_t clk_src, uint32_t clk_src_freq_hz, uint32_t sample_freq_hz)
 {
-#if !CONFIG_IDF_TARGET_ESP32
+#if !SOC_IS(ESP32)
     uint32_t interval = clk_src_freq_hz / (ADC_LL_CLKM_DIV_NUM_DEFAULT + ADC_LL_CLKM_DIV_A_DEFAULT / ADC_LL_CLKM_DIV_B_DEFAULT + 1) / 2 / sample_freq_hz;
     //set sample interval
     adc_ll_digi_set_trigger_interval(interval);
@@ -144,6 +147,9 @@ void adc_hal_digi_controller_config(adc_hal_dma_ctx_t *hal, const adc_hal_digi_c
     for (int i = 0; i < cfg->adc_pattern_len; i++) {
         adc_ll_digi_set_pattern_table(pattern_both, i, cfg->adc_pattern[i]);
     }
+#if ADC_LL_POWER_MANAGE_SUPPORTED
+    adc_ll_set_power_manage(0, ADC_LL_POWER_SW_ON);
+#endif
 
 #elif (SOC_ADC_DIGI_CONTROLLER_NUM >= 2)
     uint32_t adc1_pattern_idx = 0;
@@ -154,9 +160,15 @@ void adc_hal_digi_controller_config(adc_hal_dma_ctx_t *hal, const adc_hal_digi_c
 
     for (int i = 0; i < cfg->adc_pattern_len; i++) {
         if (cfg->adc_pattern[i].unit == ADC_UNIT_1) {
+#if ADC_LL_POWER_MANAGE_SUPPORTED
+            adc_ll_set_power_manage(ADC_UNIT_1, ADC_LL_POWER_SW_ON);
+#endif
             adc_ll_digi_set_pattern_table(ADC_UNIT_1, adc1_pattern_idx, cfg->adc_pattern[i]);
             adc1_pattern_idx++;
         } else if (cfg->adc_pattern[i].unit == ADC_UNIT_2) {
+#if ADC_LL_POWER_MANAGE_SUPPORTED
+            adc_ll_set_power_manage(ADC_UNIT_2, ADC_LL_POWER_SW_ON);
+#endif
             adc_ll_digi_set_pattern_table(ADC_UNIT_2, adc2_pattern_idx, cfg->adc_pattern[i]);
             adc2_pattern_idx++;
         } else {
@@ -205,14 +217,14 @@ void adc_hal_digi_dma_link(adc_hal_dma_ctx_t *hal, uint8_t *data_buf)
                 .dw0.suc_eof = 0,
                 .dw0.owner = 1,
                 .buffer = data_buf,
-                .next = &desc[n+1]
+                .next = &desc[n + 1]
             };
             eof_size -= this_len;
             data_buf += this_len;
             n++;
         }
     }
-    desc[n-1].next = desc_head;
+    desc[n - 1].next = desc_head;
 }
 
 adc_hal_dma_desc_status_t adc_hal_get_reading_result(adc_hal_dma_ctx_t *hal, const intptr_t eof_desc_addr, uint8_t **buffer, uint32_t *len)
@@ -287,3 +299,14 @@ void adc_hal_digi_clr_eof(void)
     adc_ll_digi_dma_clr_eof();
 }
 #endif
+
+#if SOC_ADC_MONITOR_SUPPORTED
+void adc_hal_digi_monitor_set_thres(adc_monitor_id_t monitor_id, adc_unit_t adc_n, uint8_t adc_ch, int32_t h_thres, int32_t l_thres)
+{
+    adc_ll_digi_monitor_set_thres(monitor_id, adc_n, adc_ch, h_thres, l_thres);
+
+    // enable peripheral intr_ena accordingly
+    adc_ll_digi_monitor_enable_intr(monitor_id, ADC_MONITOR_MODE_HIGH, (h_thres >= 0));
+    adc_ll_digi_monitor_enable_intr(monitor_id, ADC_MONITOR_MODE_LOW, (l_thres >= 0));
+}
+#endif  //SOC_ADC_MONITOR_SUPPORTED

@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2015-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2015-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -13,6 +13,7 @@
 #include "soc/rtc_cntl_reg.h"
 #include "hal/regi2c_ctrl.h"
 #include "soc/regi2c_bbpll.h"
+#include "soc/timer_group_struct.h"
 #include "hal/assert.h"
 #include "hal/log.h"
 #include "esp32c3/rom/rtc.h"
@@ -86,17 +87,18 @@ static inline __attribute__((always_inline)) void clk_ll_bbpll_disable(void)
  */
 static inline __attribute__((always_inline)) void clk_ll_xtal32k_enable(clk_ll_xtal32k_enable_mode_t mode)
 {
-    // Configure xtal32k
-    clk_ll_xtal32k_config_t cfg = CLK_LL_XTAL32K_CONFIG_DEFAULT();
-    REG_SET_FIELD(RTC_CNTL_EXT_XTL_CONF_REG, RTC_CNTL_DAC_XTAL_32K, cfg.dac);
-    REG_SET_FIELD(RTC_CNTL_EXT_XTL_CONF_REG, RTC_CNTL_DRES_XTAL_32K, cfg.dres);
-    REG_SET_FIELD(RTC_CNTL_EXT_XTL_CONF_REG, RTC_CNTL_DGM_XTAL_32K, cfg.dgm);
-    REG_SET_FIELD(RTC_CNTL_EXT_XTL_CONF_REG, RTC_CNTL_DBUF_XTAL_32K, cfg.dbuf);
-    // Enable xtal32k xpd status
-    SET_PERI_REG_MASK(RTC_CNTL_EXT_XTL_CONF_REG, RTC_CNTL_XPD_XTAL_32K);
     if (mode == CLK_LL_XTAL32K_ENABLE_MODE_EXTERNAL) {
-        /* TODO ESP32-C3 IDF-2408:: external 32k source may need different settings */
-        ;
+        SET_PERI_REG_MASK(RTC_CNTL_EXT_XTL_CONF_REG, RTC_CNTL_XTAL32K_GPIO_SEL);
+    } else {
+        // Configure xtal32k
+        CLEAR_PERI_REG_MASK(RTC_CNTL_EXT_XTL_CONF_REG, RTC_CNTL_XTAL32K_GPIO_SEL);
+        clk_ll_xtal32k_config_t cfg = CLK_LL_XTAL32K_CONFIG_DEFAULT();
+        REG_SET_FIELD(RTC_CNTL_EXT_XTL_CONF_REG, RTC_CNTL_DAC_XTAL_32K, cfg.dac);
+        REG_SET_FIELD(RTC_CNTL_EXT_XTL_CONF_REG, RTC_CNTL_DRES_XTAL_32K, cfg.dres);
+        REG_SET_FIELD(RTC_CNTL_EXT_XTL_CONF_REG, RTC_CNTL_DGM_XTAL_32K, cfg.dgm);
+        REG_SET_FIELD(RTC_CNTL_EXT_XTL_CONF_REG, RTC_CNTL_DBUF_XTAL_32K, cfg.dbuf);
+        // Enable xtal32k xpd status
+        SET_PERI_REG_MASK(RTC_CNTL_EXT_XTL_CONF_REG, RTC_CNTL_XPD_XTAL_32K);
     }
 }
 
@@ -491,6 +493,29 @@ static inline __attribute__((always_inline)) void clk_ll_cpu_set_divider(uint32_
 static inline __attribute__((always_inline)) uint32_t clk_ll_cpu_get_divider(void)
 {
     return REG_GET_FIELD(SYSTEM_SYSCLK_CONF_REG, SYSTEM_PRE_DIV_CNT) + 1;
+}
+
+/**
+ * @brief Select the frequency calculation clock source for timergroup0
+ *
+ * @param clk_sel One of the clock sources in soc_clk_freq_calculation_src_t
+ */
+static inline __attribute__((always_inline)) void clk_ll_freq_calulation_set_target(soc_clk_freq_calculation_src_t clk_sel)
+{
+    switch (clk_sel) {
+    case CLK_CAL_RC_SLOW:
+        TIMERG0.rtccalicfg.rtc_cali_clk_sel = 0;
+        break;
+    case CLK_CAL_RC_FAST_D256:
+        TIMERG0.rtccalicfg.rtc_cali_clk_sel = 1;
+        break;
+    case CLK_CAL_32K_XTAL:
+        TIMERG0.rtccalicfg.rtc_cali_clk_sel = 2;
+        break;
+    default:
+        // Unsupported CLK_CAL mux input
+        abort();
+    }
 }
 
 /**

@@ -15,6 +15,8 @@
 #include "esp_timer.h"
 #include "esp_sleep.h"
 #include "esp_private/sleep_cpu.h"
+#include "esp_private/esp_sleep_internal.h"
+#include "esp_private/esp_pmu.h"
 #include "test_util_rmt_encoders.h"
 #include "test_board.h"
 
@@ -40,9 +42,9 @@ static bool test_rmt_rx_done_callback(rmt_channel_handle_t channel, const rmt_rx
 /**
  * @brief Test the RMT driver can still work after light sleep
  *
- * @param back_up_before_sleep Whether to back up RMT registers before sleep
+ * @param allow_pd Whether to allow power down the peripheral in light sleep
  */
-static void test_rmt_tx_rx_sleep_retention(bool back_up_before_sleep)
+static void test_rmt_tx_rx_sleep_retention(bool allow_pd)
 {
     uint32_t const test_rx_buffer_symbols = 128;
     rmt_symbol_word_t *remote_codes = heap_caps_aligned_calloc(64, test_rx_buffer_symbols, sizeof(rmt_symbol_word_t),
@@ -54,8 +56,7 @@ static void test_rmt_tx_rx_sleep_retention(bool back_up_before_sleep)
         .resolution_hz = 1000000,
         .mem_block_symbols = SOC_RMT_MEM_WORDS_PER_CHANNEL,
         .gpio_num = TEST_RMT_GPIO_NUM_A,
-        .flags.io_loop_back = true,
-        .flags.backup_before_sleep = back_up_before_sleep,
+        .flags.allow_pd = allow_pd,
     };
     printf("install rx channel\r\n");
     rmt_channel_handle_t rx_channel = NULL;
@@ -75,8 +76,7 @@ static void test_rmt_tx_rx_sleep_retention(bool back_up_before_sleep)
         .mem_block_symbols = SOC_RMT_MEM_WORDS_PER_CHANNEL,
         .trans_queue_depth = 4,
         .gpio_num = TEST_RMT_GPIO_NUM_A,
-        .flags.io_loop_back = true,
-        .flags.backup_before_sleep = back_up_before_sleep,
+        .flags.allow_pd = allow_pd,
     };
     printf("install tx channel\r\n");
     rmt_channel_handle_t tx_channel = NULL;
@@ -91,18 +91,29 @@ static void test_rmt_tx_rx_sleep_retention(bool back_up_before_sleep)
 
     // Note: don't enable the RMT channel before going to sleep, ensure no power management lock is acquired by RMT
 
+    esp_sleep_context_t sleep_ctx;
+    esp_sleep_set_sleep_context(&sleep_ctx);
     printf("go to light sleep for 2 seconds\r\n");
-#if CONFIG_PM_POWER_DOWN_CPU_IN_LIGHT_SLEEP
+#if ESP_SLEEP_POWER_DOWN_CPU
     TEST_ESP_OK(sleep_cpu_configure(true));
 #endif
     TEST_ESP_OK(esp_sleep_enable_timer_wakeup(2 * 1000 * 1000));
     TEST_ESP_OK(esp_light_sleep_start());
 
     printf("Waked up! Let's see if RMT driver can still work...\r\n");
-#if CONFIG_PM_POWER_DOWN_CPU_IN_LIGHT_SLEEP
+#if ESP_SLEEP_POWER_DOWN_CPU
     TEST_ESP_OK(sleep_cpu_configure(false));
 #endif
 
+    printf("check if the sleep happened as expected\r\n");
+    TEST_ASSERT_EQUAL(0, sleep_ctx.sleep_request_result);
+#if SOC_RMT_SUPPORT_SLEEP_RETENTION && !SOC_PM_TOP_PD_NOT_ALLOWED
+    // check if the power domain also is powered down
+    TEST_ASSERT_EQUAL(allow_pd ? PMU_SLEEP_PD_TOP : 0, (sleep_ctx.sleep_flags) & PMU_SLEEP_PD_TOP);
+#endif
+    esp_sleep_set_sleep_context(NULL);
+
+    // enable both channels, pm lock will be acquired, so no light sleep will even happen during the transaction
     TEST_ESP_OK(rmt_enable(tx_channel));
     TEST_ESP_OK(rmt_enable(rx_channel));
 

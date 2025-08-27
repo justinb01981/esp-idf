@@ -1,7 +1,7 @@
 LED PWM 控制器
 ==============
 
-{IDF_TARGET_LEDC_MAX_FADE_RANGE_NUM: default="1", esp32c6="16", esp32h2="16", esp32p4="16"}
+{IDF_TARGET_LEDC_MAX_FADE_RANGE_NUM: default="1", esp32c6="16", esp32h2="16", esp32p4="16", esp32c5="16", esp32c61="16"}
 
 :link_to_translation:`en:[English]`
 
@@ -147,10 +147,10 @@ LED PWM 控制器可在无需 CPU 干预的情况下自动改变占空比，实�
          - ~ 20 MHz
          - 支持动态调频 (DFS) 功能，支持 Light-sleep 模式
        * - XTAL_CLK
-         - 40 MHz
+         - 40/26 MHz
          - 支持动态调频 (DFS) 功能
 
-.. only:: esp32c6
+.. only:: esp32c5
 
     .. list-table:: {IDF_TARGET_NAME} LEDC 时钟源特性
        :widths: 10 10 30
@@ -166,10 +166,10 @@ LED PWM 控制器可在无需 CPU 干预的情况下自动改变占空比，实�
          - ~ 17.5 MHz
          - 支持动态调频 (DFS) 功能，支持 Light-sleep 模式
        * - XTAL_CLK
-         - 40 MHz
+         - 48 MHz
          - 支持动态调频 (DFS) 功能
 
-.. only:: esp32p4
+.. only:: esp32c6 or esp32c61 or esp32p4
 
     .. list-table:: {IDF_TARGET_NAME} LEDC 时钟源特性
        :widths: 10 10 30
@@ -182,7 +182,7 @@ LED PWM 控制器可在无需 CPU 干预的情况下自动改变占空比，实�
          - 80 MHz
          - /
        * - RC_FAST_CLK
-         - ~ 20 MHz
+         - ~ 17.5 MHz
          - 支持动态调频 (DFS) 功能，支持 Light-sleep 模式
        * - XTAL_CLK
          - 40 MHz
@@ -275,6 +275,10 @@ LEDC 驱动提供了一个辅助函数 :cpp:func:`ledc_find_suitable_duty_resolu
 
         在 {IDF_TARGET_NAME} 上，当通道绑定的定时器配置了其最大 PWM 占空比分辨率（ ``MAX_DUTY_RES`` ），通道的占空比不能被设置到 ``(2 ** MAX_DUTY_RES)`` 。否则，硬件内部占空比计数器会溢出，并导致占空比计算错误。
 
+    .. only:: esp32h2
+
+        以上硬件限制仅在芯片版本低于 v1.2 的 ESP32H2 上存在。
+
 
 使用硬件改变 PWM 占空比
 """"""""""""""""""""""""""""""""""""
@@ -319,22 +323,25 @@ LED PWM 控制器 API 有多种方式即时改变 PWM 频率：
 控制 PWM 的更多方式
 """""""""""""""""""""
 
-有一些较底层的定时器特定函数可用于更改 PWM 设置：
+有一些较独立的定时器特定函数可用于更改 PWM 输出：
 
-* :cpp:func:`ledc_timer_set`
 * :cpp:func:`ledc_timer_rst`
 * :cpp:func:`ledc_timer_pause`
 * :cpp:func:`ledc_timer_resume`
 
-前两个功能可通过函数 :cpp:func:`ledc_channel_config` 在后台运行，在定时器配置后启动。
+第一个定时器复位函数在函数 :cpp:func:`ledc_timer_config` 内部完成所有定时器配置后会被调用一次。
 
 
-使用中断
-^^^^^^^^^^^^^^
+电源管理
+--------
 
-配置 LED PWM 控制器通道时，可在 :cpp:type:`ledc_channel_config_t` 中选取参数 :cpp:type:`ledc_intr_type_t` ，在渐变完成时触发中断。
+LEDC 驱动不使用电源管理锁来防止系统进入 Light-sleep 。相反，可以通过配置 :cpp:member:`ledc_channel_config_t::sleep_mode` 来选择 LEDC 外设电源域状态和 PWM 信号在睡眠期间的输出行为。默认模式是 :cpp:enumerator:`LEDC_SLEEP_MODE_NO_ALIVE_NO_PD`，它表示没有信号输出，并且 LEDC 电源域在睡眠期间不会下电。
 
-要注册处理程序来处理中断，可调用函数 :cpp:func:`ledc_isr_register`。
+如果需要在 Light-sleep 中保持信号输出，则可以选择 :cpp:enumerator:`LEDC_SLEEP_MODE_KEEP_ALIVE` 模式。只要绑定的 LEDC 定时器时钟源兼容 Light-sleep ， PWM 信号就可以在系统进入 Light-sleep 期间继续输出。其代价是睡眠期间的功耗会更高，这是由于时钟源和 LEDC 所属的电源域无法被下电。值得注意的是，在入睡前未完成的渐变也可以在睡眠期间继续，只是有可能没法准确停在目标占空比上。系统被唤醒后，驱动会调整 PWM 占空比到原来设定的目标占空比上。
+
+.. only:: SOC_LEDC_SUPPORT_SLEEP_RETENTION
+
+    此外还有另一种睡眠模式，:cpp:enumerator:`LEDC_SLEEP_MODE_NO_ALIVE_ALLOW_PD` 。选择此模式可以在睡眠中节省一些功耗，但会消耗更多内存。在进入 Light-sleep 之前，系统会保存 LEDC 寄存器上下文，并在唤醒后恢复它们，从而使 LEDC 电源域可以在睡眠期间被下电。任何未完成的渐变在从睡眠状态唤醒后都不会继续进行，而是输出一个固定占空比的 PWM 信号，该占空比与进入睡眠前的当下占空比相匹配。
 
 
 .. only:: esp32
@@ -344,7 +351,7 @@ LED PWM 控制器 API 有多种方式即时改变 PWM 频率：
     LED PWM 控制器高速和低速模式
     ----------------------------------
 
-    高速模式的优点是可平稳地改变定时器设置。也就是说，高速模式下如定时器设置改变，此变更会自动应用于定时器的下一次溢出中断。而更新低速定时器时，设置变更应由软件显式触发。LED PWM 驱动的设置将在硬件层面被修改，比如在调用函数 :cpp:func:`ledc_timer_config` 或 :cpp:func:`ledc_timer_set` 时。
+    高速模式的优点是可平稳地改变定时器设置。也就是说，高速模式下如定时器设置改变，此变更会自动应用于定时器的下一次溢出中断。而更新低速定时器时，设置变更应由软件显式触发。LED PWM 驱动的设置将在硬件层面被修改，比如在调用函数 :cpp:func:`ledc_timer_config` 时。
 
     更多关于速度模式的详细信息请参阅 **{IDF_TARGET_NAME} 技术参考手册** > **LED PWM 控制器 (LEDC)** [`PDF <{IDF_TARGET_TRM_EN_URL}#ledpwm>`__]。
 
@@ -380,16 +387,15 @@ LED PWM 控制器 API 会在设定的频率和占空比分辨率超过 LED PWM �
 占空比分辨率通常用 :cpp:type:`ledc_timer_bit_t` 设置，范围是 10 至 15 位。如需较低的占空比分辨率（上至 10，下至 1），可直接输入相应数值。
 
 
-应用实例
+应用示例
 -------------------
 
-使用 LEDC 基本实例请参照 :example:`peripherals/ledc/ledc_basic`。
+.. list::
 
-使用 LEDC 改变占空比和渐变控制的实例请参照 :example:`peripherals/ledc/ledc_fade`。
+    * :example:`peripherals/ledc/ledc_basic` 演示了如何使用 LEDC 生成低速模式的 PWM 信号。
+    * :example:`peripherals/ledc/ledc_fade` 演示了如何使用 LEDC 实现 LED 亮度的渐变控制。
+    :SOC_LEDC_GAMMA_CURVE_FADE_SUPPORTED: * :example:`peripherals/ledc/ledc_gamma_curve_fade` 演示了如何使用 LEDC 对 RGB LED 实现带伽马校正的颜色控制。
 
-.. only:: SOC_LEDC_GAMMA_CURVE_FADE_SUPPORTED
-
-    使用 LEDC 对 RGB LED 实现带伽马校正的颜色控制实例请参照 :example:`peripherals/ledc/ledc_gamma_curve_fade`。
 
 API 参考
 -------------

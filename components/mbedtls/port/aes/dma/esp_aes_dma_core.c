@@ -1,38 +1,41 @@
 /*
- * SPDX-FileCopyrightText: 2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2024-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
 #include <string.h>
 #include <sys/param.h>
 #include "esp_attr.h"
-#include "esp_cache.h"
 #include "esp_check.h"
-#include "esp_dma_utils.h"
 #include "esp_err.h"
 #include "esp_heap_caps.h"
 #include "esp_intr_alloc.h"
 #include "esp_log.h"
 #include "esp_memory_utils.h"
-#include "esp_private/esp_cache_private.h"
 #include "esp_private/periph_ctrl.h"
 #include "soc/soc_caps.h"
 #include "sdkconfig.h"
 
-#if CONFIG_PM_ENABLE
-#include "esp_pm.h"
-#endif
 #include "hal/aes_hal.h"
+#include "hal/cache_hal.h"
+#include "hal/cache_ll.h"
 
 #include "esp_aes_dma_priv.h"
 #include "esp_aes_internal.h"
 #include "esp_crypto_dma.h"
 
-#include "freertos/FreeRTOS.h"
-#include "freertos/semphr.h"
-
 #include "mbedtls/aes.h"
 #include "mbedtls/platform_util.h"
+
+#if !ESP_TEE_BUILD
+#include "esp_cache.h"
+#include "esp_private/esp_cache_private.h"
+#if CONFIG_PM_ENABLE
+#include "esp_pm.h"
+#endif
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+#endif
 
 #if SOC_AES_SUPPORT_GCM
 #include "aes/esp_aes_gcm.h"
@@ -61,12 +64,16 @@
  */
 #define AES_WAIT_INTR_TIMEOUT_MS 2000
 
+#if !ESP_TEE_BUILD
 #if defined(CONFIG_MBEDTLS_AES_USE_INTERRUPT)
 static SemaphoreHandle_t op_complete_sem;
 #if defined(CONFIG_PM_ENABLE)
 static esp_pm_lock_handle_t s_pm_cpu_lock;
 static esp_pm_lock_handle_t s_pm_sleep_lock;
 #endif
+#endif
+#else
+extern bool intr_flag;
 #endif
 
 static const char *TAG = "esp-aes";
@@ -83,6 +90,7 @@ static bool s_check_dma_capable(const void *p)
 }
 
 #if defined (CONFIG_MBEDTLS_AES_USE_INTERRUPT)
+#if !ESP_TEE_BUILD
 static IRAM_ATTR void esp_aes_complete_isr(void *arg)
 {
     BaseType_t higher_woken;
@@ -92,9 +100,11 @@ static IRAM_ATTR void esp_aes_complete_isr(void *arg)
         portYIELD_FROM_ISR();
     }
 }
+#endif
 
 void esp_aes_intr_alloc(void)
 {
+#if !ESP_TEE_BUILD
     if (op_complete_sem == NULL) {
         const int isr_flags = esp_intr_level_to_flags(CONFIG_MBEDTLS_AES_INTERRUPT_LEVEL);
 
@@ -112,13 +122,21 @@ void esp_aes_intr_alloc(void)
         // Static semaphore creation is unlikely to fail but still basic sanity
         assert(op_complete_sem != NULL);
     }
+#else
+    // NOTE: Need to extern since the mbedtls component does not depend on
+    // the esp_tee (main) component
+    extern void esp_tee_aes_intr_alloc(void);
+    esp_tee_aes_intr_alloc();
+#endif
 }
+
 
 static esp_err_t esp_aes_isr_initialise( void )
 {
     aes_hal_interrupt_clear();
     aes_hal_interrupt_enable(true);
 
+#if !ESP_TEE_BUILD
     /* AES is clocked proportionally to CPU clock, take power management lock */
 #ifdef CONFIG_PM_ENABLE
     if (s_pm_cpu_lock == NULL) {
@@ -133,6 +151,9 @@ static esp_err_t esp_aes_isr_initialise( void )
     }
     esp_pm_lock_acquire(s_pm_cpu_lock);
     esp_pm_lock_acquire(s_pm_sleep_lock);
+#endif
+#else
+    intr_flag = true;
 #endif
 
     return ESP_OK;
@@ -154,6 +175,7 @@ static int esp_aes_dma_wait_complete(bool use_intr, crypto_dma_desc_t *output_de
 {
 #if defined (CONFIG_MBEDTLS_AES_USE_INTERRUPT)
     if (use_intr) {
+#if !ESP_TEE_BUILD
         if (!xSemaphoreTake(op_complete_sem, AES_WAIT_INTR_TIMEOUT_MS / portTICK_PERIOD_MS)) {
             /* indicates a fundamental problem with driver */
             ESP_LOGE(TAG, "Timed out waiting for completion of AES Interrupt");
@@ -163,6 +185,15 @@ static int esp_aes_dma_wait_complete(bool use_intr, crypto_dma_desc_t *output_de
         esp_pm_lock_release(s_pm_cpu_lock);
         esp_pm_lock_release(s_pm_sleep_lock);
 #endif  // CONFIG_PM_ENABLE
+#else
+    /* NOTE: ESP-TEE does not support multitasking - secure service calls are serialized.
+     * When waiting for AES interrupt here, we simply busy-wait since there are no
+     * other tasks to switch to. Note that REE interrupts could still preempt us.
+     */
+    while (intr_flag) {
+        esp_rom_delay_us(1);
+    }
+#endif
     }
 #endif
     /* Checking this if interrupt is used also, to avoid
@@ -176,23 +207,14 @@ static int esp_aes_dma_wait_complete(bool use_intr, crypto_dma_desc_t *output_de
 
 static inline size_t get_cache_line_size(const void *addr)
 {
-    esp_err_t ret = ESP_FAIL;
-    size_t cache_line_size = 0;
-
+    uint32_t cache_level =
 #if (CONFIG_SPIRAM && SOC_PSRAM_DMA_CAPABLE)
-    if (esp_ptr_external_ram(addr)) {
-        ret = esp_cache_get_alignment(MALLOC_CAP_SPIRAM, &cache_line_size);
-    } else
+        esp_ptr_external_ram(addr) ? CACHE_LL_LEVEL_EXT_MEM : CACHE_LL_LEVEL_INT_MEM;
+#else
+        CACHE_LL_LEVEL_INT_MEM;
 #endif
-    {
-        ret = esp_cache_get_alignment(MALLOC_CAP_DMA, &cache_line_size);
-    }
 
-    if (ret != ESP_OK) {
-        return 0;
-    }
-
-    return cache_line_size;
+    return (size_t)cache_hal_get_cache_line_size(cache_level, CACHE_TYPE_DATA);
 }
 
 /* Output buffers in external ram needs to be 16-byte aligned and DMA can't access input in the iCache mem range,
@@ -323,34 +345,23 @@ static inline void dma_desc_append(crypto_dma_desc_t **head, crypto_dma_desc_t *
 
 static inline void *aes_dma_calloc(size_t num, size_t size, uint32_t caps, size_t *actual_size)
 {
-    void *ptr = NULL;
-    esp_dma_mem_info_t dma_mem_info = {
-        .extra_heap_caps = caps,
-        .dma_alignment_bytes = DMA_DESC_MEM_ALIGN_SIZE,
-    };
-    esp_dma_capable_calloc(num, size, &dma_mem_info, &ptr, actual_size);
-    return ptr;
+    return heap_caps_aligned_calloc(DMA_DESC_MEM_ALIGN_SIZE, num, size, caps);
 }
 
-static inline esp_err_t dma_desc_link(crypto_dma_desc_t *dmadesc, size_t crypto_dma_desc_num, size_t cache_line_size)
+static inline esp_err_t dma_desc_link(crypto_dma_desc_t *dmadesc, size_t crypto_dma_desc_num, size_t buffer_cache_line_size)
 {
     esp_err_t ret = ESP_OK;
     for (int i = 0; i < crypto_dma_desc_num; i++) {
         dmadesc[i].dw0.suc_eof = ((i == crypto_dma_desc_num - 1) ? 1 : 0);
         dmadesc[i].next = ((i == crypto_dma_desc_num - 1) ? NULL : &dmadesc[i+1]);
 #if SOC_CACHE_INTERNAL_MEM_VIA_L1CACHE
-        /*  Write back both input buffers and output buffers to clear any cache dirty bit if set
-            If we want to remove `ESP_CACHE_MSYNC_FLAG_UNALIGNED` aligned flag then we need to pass
-            cache msync size = ALIGN_UP(dma_desc.size, cache_line_size), instead of dma_desc.size
-            Keeping the `ESP_CACHE_MSYNC_FLAG_UNALIGNED` flag just because it should not look like
-            we are syncing extra bytes due to ALIGN_UP'ed size but just the number of bytes that
-            are needed in the operation. */
-        ret = esp_cache_msync(dmadesc[i].buffer, dmadesc[i].dw0.length, ESP_CACHE_MSYNC_FLAG_DIR_C2M | ESP_CACHE_MSYNC_FLAG_UNALIGNED);
+        /* Write back both input buffers and output buffers to clear any cache dirty bit if set */
+        ret = esp_cache_msync(dmadesc[i].buffer, ALIGN_UP(dmadesc[i].dw0.length, buffer_cache_line_size), ESP_CACHE_MSYNC_FLAG_DIR_C2M);
         if (ret != ESP_OK) {
             return ret;
         }
     }
-    ret = esp_cache_msync(dmadesc, ALIGN_UP(crypto_dma_desc_num * sizeof(crypto_dma_desc_t), cache_line_size), ESP_CACHE_MSYNC_FLAG_DIR_C2M);
+    ret = esp_cache_msync(dmadesc, crypto_dma_desc_num * sizeof(crypto_dma_desc_t), ESP_CACHE_MSYNC_FLAG_DIR_C2M | ESP_CACHE_MSYNC_FLAG_UNALIGNED);
 #else
     }
 #endif
@@ -452,7 +463,7 @@ static esp_err_t generate_descriptor_list(const uint8_t *buffer, const size_t le
 
         // add start alignment node to the DMA linked list
         dma_desc_populate(dma_descriptors, start_alignment_stream_buffer, unaligned_start_bytes, max_desc_size, populated_dma_descs);
-        populated_dma_descs += (unaligned_start_bytes ? 1 : 0);
+        populated_dma_descs += 1;
     }
 
     if (aligned_block_bytes) {
@@ -474,7 +485,7 @@ static esp_err_t generate_descriptor_list(const uint8_t *buffer, const size_t le
 
         // add end alignment node to the DMA linked list
         dma_desc_populate(dma_descriptors, end_alignment_stream_buffer, unaligned_end_bytes, max_desc_size, populated_dma_descs);
-        populated_dma_descs += (unaligned_end_bytes ? 1 : 0);
+        populated_dma_descs += 1;
     }
 
     if (dma_desc_link(dma_descriptors, dma_descs_needed, cache_line_size) != ESP_OK) {
@@ -607,6 +618,10 @@ int esp_aes_process_dma(esp_aes_context *ctx, const unsigned char *input, unsign
         aes_hal_interrupt_enable(false);
     }
 
+#ifdef CONFIG_MBEDTLS_AES_USE_PSEUDO_ROUND_FUNC
+    esp_aes_enable_pseudo_rounds(CONFIG_MBEDTLS_AES_USE_PSEUDO_ROUND_FUNC_STRENGTH);
+#endif /* CONFIG_MBEDTLS_AES_USE_PSEUDO_ROUND_FUNC */
+
     if (esp_aes_dma_start(input_desc, output_desc) != ESP_OK) {
         ESP_LOGE(TAG, "esp_aes_dma_start failed, no DMA channel available");
         ret = -1;
@@ -622,7 +637,8 @@ int esp_aes_process_dma(esp_aes_context *ctx, const unsigned char *input, unsign
     }
 
 #if SOC_CACHE_INTERNAL_MEM_VIA_L1CACHE
-    if (esp_cache_msync(output_desc, ALIGN_UP(output_dma_desc_num * sizeof(crypto_dma_desc_t), output_cache_line_size), ESP_CACHE_MSYNC_FLAG_DIR_M2C) != ESP_OK) {
+    size_t output_desc_cache_line_size = get_cache_line_size(output_desc);
+    if (esp_cache_msync(output_desc, ALIGN_UP(output_dma_desc_num * sizeof(crypto_dma_desc_t), output_desc_cache_line_size), ESP_CACHE_MSYNC_FLAG_DIR_M2C) != ESP_OK) {
         ESP_LOGE(TAG, "Output DMA descriptor cache sync M2C failed");
         ret = -1;
         goto cleanup;
@@ -771,14 +787,14 @@ int esp_aes_process_dma_gcm(esp_aes_context *ctx, const unsigned char *input, un
 
     out_desc_tail = &output_desc[output_dma_desc_num - 1];
 
-    len_desc = aes_dma_calloc(1, sizeof(crypto_dma_desc_t), MALLOC_CAP_DMA, NULL);
+    len_desc = aes_dma_calloc(1, sizeof(crypto_dma_desc_t), AES_DMA_ALLOC_CAPS, NULL);
     if (len_desc == NULL) {
         mbedtls_platform_zeroize(output, len);
         ESP_LOGE(TAG, "Failed to allocate memory for len descriptor");
         return -1;
     }
 
-    uint32_t *len_buf = aes_dma_calloc(4, sizeof(uint32_t), MALLOC_CAP_DMA, NULL);
+    uint32_t *len_buf = aes_dma_calloc(4, sizeof(uint32_t), AES_DMA_ALLOC_CAPS, NULL);
     if (len_buf == NULL) {
         mbedtls_platform_zeroize(output, len);
         ESP_LOGE(TAG, "Failed to allocate memory for len buffer");
@@ -825,6 +841,10 @@ int esp_aes_process_dma_gcm(esp_aes_context *ctx, const unsigned char *input, un
         aes_hal_interrupt_enable(false);
     }
 
+#ifdef CONFIG_MBEDTLS_AES_USE_PSEUDO_ROUND_FUNC
+    esp_aes_enable_pseudo_rounds(CONFIG_MBEDTLS_AES_USE_PSEUDO_ROUND_FUNC_STRENGTH);
+#endif /* CONFIG_MBEDTLS_AES_USE_PSEUDO_ROUND_FUNC */
+
     /* Start AES operation */
     if (esp_aes_dma_start(in_desc_head, output_desc) != ESP_OK) {
         ESP_LOGE(TAG, "esp_aes_dma_start failed, no DMA channel available");
@@ -841,7 +861,8 @@ int esp_aes_process_dma_gcm(esp_aes_context *ctx, const unsigned char *input, un
     }
 
 #if SOC_CACHE_INTERNAL_MEM_VIA_L1CACHE
-    if (esp_cache_msync(output_desc, ALIGN_UP(output_dma_desc_num * sizeof(crypto_dma_desc_t), output_cache_line_size), ESP_CACHE_MSYNC_FLAG_DIR_M2C) != ESP_OK) {
+    size_t output_desc_cache_line_size = get_cache_line_size(output_desc);
+    if (esp_cache_msync(output_desc, ALIGN_UP(output_dma_desc_num * sizeof(crypto_dma_desc_t), output_desc_cache_line_size), ESP_CACHE_MSYNC_FLAG_DIR_M2C) != ESP_OK) {
         ESP_LOGE(TAG, "Output DMA descriptor cache sync M2C failed");
         ret = -1;
         goto cleanup;
@@ -1079,6 +1100,10 @@ int esp_aes_process_dma(esp_aes_context *ctx, const unsigned char *input, unsign
         aes_hal_interrupt_enable(false);
     }
 
+#ifdef CONFIG_MBEDTLS_AES_USE_PSEUDO_ROUND_FUNC
+    esp_aes_enable_pseudo_rounds(CONFIG_MBEDTLS_AES_USE_PSEUDO_ROUND_FUNC_STRENGTH);
+#endif /* CONFIG_MBEDTLS_AES_USE_PSEUDO_ROUND_FUNC */
+
     if (esp_aes_dma_start(in_desc_head, out_desc_head) != ESP_OK) {
         ESP_LOGE(TAG, "esp_aes_dma_start failed, no DMA channel available");
         ret = -1;
@@ -1256,6 +1281,10 @@ int esp_aes_process_dma_gcm(esp_aes_context *ctx, const unsigned char *input, un
     {
         aes_hal_interrupt_enable(false);
     }
+
+#ifdef CONFIG_MBEDTLS_AES_USE_PSEUDO_ROUND_FUNC
+    esp_aes_enable_pseudo_rounds(CONFIG_MBEDTLS_AES_USE_PSEUDO_ROUND_FUNC_STRENGTH);
+#endif /* CONFIG_MBEDTLS_AES_USE_PSEUDO_ROUND_FUNC */
 
     /* Start AES operation */
     if (esp_aes_dma_start(in_desc_head, out_desc_head) != ESP_OK) {

@@ -1,17 +1,18 @@
 /*
- * SPDX-FileCopyrightText: 2022 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2022-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
 
 #include "sdkconfig.h"
 #include <stddef.h>
+#include "esp_rom_caps.h"
 #include "hal/systimer_hal.h"
 #include "hal/systimer_ll.h"
 
 #if CONFIG_HAL_SYSTIMER_USE_ROM_IMPL
 
-#if CONFIG_IDF_TARGET_ESP32C2
+#if CONFIG_IDF_TARGET_ESP32C2 && (CONFIG_ESP32C2_REV_MIN_FULL < 200)
 void systimer_hal_init(systimer_hal_context_t *hal)
 {
     hal->dev = &SYSTIMER;
@@ -62,9 +63,9 @@ void systimer_hal_counter_value_advance(systimer_hal_context_t *hal, uint32_t co
     systimer_ll_set_counter_value(hal->dev, counter_id, new_count.val);
     systimer_ll_apply_counter_value(hal->dev, counter_id);
 }
-#endif // CONFIG_IDF_TARGET_ESP32C2
+#endif // CONFIG_IDF_TARGET_ESP32C2 && (CONFIG_ESP32C2_REV_MIN_FULL < 200)
 
-#if CONFIG_IDF_TARGET_ESP32C6 || CONFIG_IDF_TARGET_ESP32H2 || CONFIG_IDF_TARGET_ESP32P4 || CONFIG_IDF_TARGET_ESP32C5
+#if ESP_ROM_SYSTIMER_INIT_PATCH
 void systimer_hal_init(systimer_hal_context_t *hal)
 {
     hal->dev = &SYSTIMER;
@@ -78,6 +79,6 @@ void systimer_hal_deinit(systimer_hal_context_t *hal)
     systimer_ll_enable_clock(hal->dev, false);
     hal->dev = NULL;
 }
-#endif // CONFIG_IDF_TARGET_ESP32C6 || CONFIG_IDF_TARGET_ESP32H2 || CONFIG_IDF_TARGET_ESP32P4
+#endif // ESP_ROM_SYSTIMER_INIT_PATCH
 
 #endif // CONFIG_HAL_SYSTIMER_USE_ROM_IMPL

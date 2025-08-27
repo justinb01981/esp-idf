@@ -84,7 +84,7 @@ portMUX_TYPE port_xISRLock = portMUX_INITIALIZER_UNLOCKED;
 
 // --------------------- Interrupts ------------------------
 
-BaseType_t IRAM_ATTR xPortInterruptedFromISRContext(void)
+BaseType_t xPortInterruptedFromISRContext(void)
 {
     return (port_interruptNesting[xPortGetCoreID()] != 0);
 }
@@ -139,15 +139,20 @@ BaseType_t xPortEnterCriticalTimeout(portMUX_TYPE *lock, BaseType_t timeout)
 void vPortExitCriticalIDF(portMUX_TYPE *lock)
 {
     /* This function may be called in a nested manner. Therefore, we only need
-     * to reenable interrupts if this is the last call to exit the critical. We
+     * to re-enable interrupts if this is the last call to exit the critical. We
      * can use the nesting count to determine whether this is the last exit call.
      */
     spinlock_release(lock);
     BaseType_t coreID = xPortGetCoreID();
     BaseType_t nesting = port_uxCriticalNestingIDF[coreID];
+
+    /* Critical section nesting count must never be negative */
+    configASSERT( nesting > 0 );
+
     if (nesting > 0) {
         nesting--;
         port_uxCriticalNestingIDF[coreID] = nesting;
+
         //This is the last exit call, restore the saved interrupt level
         if ( nesting == 0 ) {
             XTOS_RESTORE_JUST_INTLEVEL((int) port_uxCriticalOldInterruptStateIDF[coreID]);
@@ -202,6 +207,12 @@ BaseType_t xPortCheckIfInISR(void)
     ret = (port_interruptNesting[xPortGetCoreID()] != 0) ? pdTRUE : pdFALSE;
     portRESTORE_INTERRUPTS(prev_int_level);
     return ret;
+}
+
+void vPortAssertIfInISR(void)
+{
+    /* Assert if the interrupt nesting count is > 0 */
+    configASSERT(xPortCheckIfInISR() == 0);
 }
 
 // ------------------ Critical Sections --------------------
@@ -336,6 +347,11 @@ BaseType_t xPortStartScheduler( void )
         prvStartSchedulerOtherCores();
     }
 #endif // configNUM_CORES > 1
+
+    // Windows contain references to the startup stack which will be reclaimed by the main task
+    // Spill the windows to create a clean environment to ensure we do not carry over any such references
+    // to invalid SPs which will cause problems if main_task does a windowoverflow to them
+    xthal_window_spill();
 
     // Cannot be directly called from C; never returns
     __asm__ volatile ("call0    _frxt_dispatch\n");
@@ -614,7 +630,7 @@ StackType_t * pxPortInitialiseStack( StackType_t * pxTopOfStack,
     | Coproc Save Area          | (CPSA MUST BE FIRST)
     | ------------------------- |
     | TLS Variables             |
-    | ------------------------- | <- Start of useable stack
+    | ------------------------- | <- Start of usable stack
     | Starting stack frame      |
     | ------------------------- | <- pxTopOfStack on return (which is the tasks current SP)
     |             |             |

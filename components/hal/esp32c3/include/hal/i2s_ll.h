@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2021-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2021-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -33,6 +33,7 @@ extern "C" {
 
 #define I2S_LL_CLK_FRAC_DIV_N_MAX  256 // I2S_MCLK = I2S_SRC_CLK / (N + b/a), the N register is 8 bit-width
 #define I2S_LL_CLK_FRAC_DIV_AB_MAX 512 // I2S_MCLK = I2S_SRC_CLK / (N + b/a), the a/b register is 9 bit-width
+#define I2S_LL_SLOT_FRAME_BIT_MAX  128 // Up-to 128 bits in one frame, determined by MAX(half_sample_bits) * 2
 
 #define I2S_LL_PLL_F160M_CLK_FREQ      (160 * 1000000) // PLL_F160M_CLK: 160MHz
 #define I2S_LL_DEFAULT_CLK_FREQ     I2S_LL_PLL_F160M_CLK_FREQ    // The default PLL clock frequency while using I2S_CLK_SRC_DEFAULT
@@ -47,12 +48,15 @@ extern "C" {
 static inline void i2s_ll_enable_bus_clock(int i2s_id, bool enable)
 {
     (void)i2s_id;
-    SYSTEM.perip_clk_en0.reg_i2s1_clk_en = enable;
+    SYSTEM.perip_clk_en0.reg_i2s0_clk_en = enable;
 }
 
 /// use a macro to wrap the function, force the caller to use it in a critical section
 /// the critical section needs to declare the __DECLARE_RCC_ATOMIC_ENV variable in advance
-#define i2s_ll_enable_bus_clock(...) (void)__DECLARE_RCC_ATOMIC_ENV; i2s_ll_enable_bus_clock(__VA_ARGS__)
+#define i2s_ll_enable_bus_clock(...) do { \
+        (void)__DECLARE_RCC_ATOMIC_ENV; \
+        i2s_ll_enable_bus_clock(__VA_ARGS__); \
+    } while(0)
 
 
 /**
@@ -63,13 +67,16 @@ static inline void i2s_ll_enable_bus_clock(int i2s_id, bool enable)
 static inline void i2s_ll_reset_register(int i2s_id)
 {
     (void)i2s_id;
-    SYSTEM.perip_rst_en0.reg_i2s1_rst = 1;
-    SYSTEM.perip_rst_en0.reg_i2s1_rst = 0;
+    SYSTEM.perip_rst_en0.reg_i2s0_rst = 1;
+    SYSTEM.perip_rst_en0.reg_i2s0_rst = 0;
 }
 
 /// use a macro to wrap the function, force the caller to use it in a critical section
 /// the critical section needs to declare the __DECLARE_RCC_ATOMIC_ENV variable in advance
-#define i2s_ll_reset_register(...) (void)__DECLARE_RCC_ATOMIC_ENV; i2s_ll_reset_register(__VA_ARGS__)
+#define i2s_ll_reset_register(...) do { \
+        (void)__DECLARE_RCC_ATOMIC_ENV; \
+        i2s_ll_reset_register(__VA_ARGS__); \
+    } while(0)
 
 /**
  * @brief I2S module general init, enable I2S clock.
@@ -84,7 +91,10 @@ static inline void i2s_ll_enable_core_clock(i2s_dev_t *hw, bool enable)
 
 /// use a macro to wrap the function, force the caller to use it in a critical section
 /// the critical section needs to declare the __DECLARE_RCC_ATOMIC_ENV variable in advance
-#define i2s_ll_enable_core_clock(...) (void)__DECLARE_RCC_ATOMIC_ENV; i2s_ll_enable_core_clock(__VA_ARGS__)
+#define i2s_ll_enable_core_clock(...) do { \
+        (void)__DECLARE_RCC_ATOMIC_ENV; \
+        i2s_ll_enable_core_clock(__VA_ARGS__); \
+    } while(0)
 
 /**
  * @brief Enable I2S tx module clock
@@ -285,15 +295,21 @@ static inline void i2s_ll_tx_set_bck_div_num(i2s_dev_t *hw, uint32_t val)
  */
 static inline void i2s_ll_tx_set_raw_clk_div(i2s_dev_t *hw, uint32_t div_int, uint32_t x, uint32_t y, uint32_t z, uint32_t yn1)
 {
-    /* Set the integer part of mclk division */
+    /* Workaround for the double division issue.
+     * The division coefficients must be set in particular sequence.
+     * And it has to switch to a small division first before setting the target division. */
+    HAL_FORCE_MODIFY_U32_REG_FIELD(hw->tx_clkm_conf, tx_clkm_div_num, 2);
+    hw->tx_clkm_div_conf.tx_clkm_div_yn1 = 0;
+    hw->tx_clkm_div_conf.tx_clkm_div_y = 1;
+    hw->tx_clkm_div_conf.tx_clkm_div_z = 0;
+    hw->tx_clkm_div_conf.tx_clkm_div_x = 0;
+
+    /* Set the target mclk division coefficients */
+    hw->tx_clkm_div_conf.tx_clkm_div_yn1 = yn1;
+    hw->tx_clkm_div_conf.tx_clkm_div_z = z;
+    hw->tx_clkm_div_conf.tx_clkm_div_y = y;
+    hw->tx_clkm_div_conf.tx_clkm_div_x = x;
     HAL_FORCE_MODIFY_U32_REG_FIELD(hw->tx_clkm_conf, tx_clkm_div_num, div_int);
-    /* Set the decimal part of the mclk division */
-    typeof(hw->tx_clkm_div_conf) div = {};
-    div.tx_clkm_div_x = x;
-    div.tx_clkm_div_y = y;
-    div.tx_clkm_div_z = z;
-    div.tx_clkm_div_yn1 = yn1;
-    hw->tx_clkm_div_conf.val = div.val;
 }
 
 /**
@@ -308,15 +324,21 @@ static inline void i2s_ll_tx_set_raw_clk_div(i2s_dev_t *hw, uint32_t div_int, ui
  */
 static inline void i2s_ll_rx_set_raw_clk_div(i2s_dev_t *hw, uint32_t div_int, uint32_t x, uint32_t y, uint32_t z, uint32_t yn1)
 {
-    /* Set the integer part of mclk division */
+    /* Workaround for the double division issue.
+     * The division coefficients must be set in particular sequence.
+     * And it has to switch to a small division first before setting the target division. */
+    HAL_FORCE_MODIFY_U32_REG_FIELD(hw->rx_clkm_conf, rx_clkm_div_num, 2);
+    hw->rx_clkm_div_conf.rx_clkm_div_yn1 = 0;
+    hw->rx_clkm_div_conf.rx_clkm_div_y = 1;
+    hw->rx_clkm_div_conf.rx_clkm_div_z = 0;
+    hw->rx_clkm_div_conf.rx_clkm_div_x = 0;
+
+    /* Set the target mclk division coefficients */
+    hw->rx_clkm_div_conf.rx_clkm_div_yn1 = yn1;
+    hw->rx_clkm_div_conf.rx_clkm_div_z = z;
+    hw->rx_clkm_div_conf.rx_clkm_div_y = y;
+    hw->rx_clkm_div_conf.rx_clkm_div_x = x;
     HAL_FORCE_MODIFY_U32_REG_FIELD(hw->rx_clkm_conf, rx_clkm_div_num, div_int);
-    /* Set the decimal part of the mclk division */
-    typeof(hw->rx_clkm_div_conf) div = {};
-    div.rx_clkm_div_x = x;
-    div.rx_clkm_div_y = y;
-    div.rx_clkm_div_z = z;
-    div.rx_clkm_div_yn1 = yn1;
-    hw->rx_clkm_div_conf.val = div.val;
 }
 
 /**
@@ -327,12 +349,6 @@ static inline void i2s_ll_rx_set_raw_clk_div(i2s_dev_t *hw, uint32_t div_int, ui
  */
 static inline void i2s_ll_tx_set_mclk(i2s_dev_t *hw, const hal_utils_clk_div_t *mclk_div)
 {
-    /* Workaround for inaccurate clock while switching from a relatively low sample rate to a high sample rate
-     * Set to particular coefficients first then update to the target coefficients,
-     * otherwise the clock division might be inaccurate.
-     * the general idea is to set a value that impossible to calculate from the regular decimal */
-    i2s_ll_tx_set_raw_clk_div(hw, 7, 317, 7, 3, 0);
-
     uint32_t div_x = 0;
     uint32_t div_y = 0;
     uint32_t div_z = 0;
@@ -360,19 +376,13 @@ static inline void i2s_ll_rx_set_bck_div_num(i2s_dev_t *hw, uint32_t val)
 
 /**
  * @brief Configure I2S RX module clock divider
- * @note mclk on ESP32 is shared by both TX and RX channel
+ * @note mclk on ESP32C3 is shared by both TX and RX channel
  *
  * @param hw Peripheral I2S hardware instance address.
  * @param mclk_div The mclk division coefficients
  */
 static inline void i2s_ll_rx_set_mclk(i2s_dev_t *hw, const hal_utils_clk_div_t *mclk_div)
 {
-    /* Workaround for inaccurate clock while switching from a relatively low sample rate to a high sample rate
-     * Set to particular coefficients first then update to the target coefficients,
-     * otherwise the clock division might be inaccurate.
-     * the general idea is to set a value that impossible to calculate from the regular decimal */
-    i2s_ll_rx_set_raw_clk_div(hw, 7, 317, 7, 3, 0);
-
     uint32_t div_x = 0;
     uint32_t div_y = 0;
     uint32_t div_z = 0;
@@ -388,6 +398,28 @@ static inline void i2s_ll_rx_set_mclk(i2s_dev_t *hw, const hal_utils_clk_div_t *
 }
 
 /**
+ * @brief Update the TX configuration
+ *
+ * @param hw Peripheral I2S hardware instance address.
+ */
+static inline void i2s_ll_tx_update(i2s_dev_t *hw)
+{
+    hw->tx_conf.tx_update = 1;
+    while (hw->tx_conf.tx_update);
+}
+
+/**
+ * @brief Update the RX configuration
+ *
+ * @param hw Peripheral I2S hardware instance address.
+ */
+static inline void i2s_ll_rx_update(i2s_dev_t *hw)
+{
+    hw->rx_conf.rx_update = 1;
+    while (hw->rx_conf.rx_update);
+}
+
+/**
  * @brief Start I2S TX
  *
  * @param hw Peripheral I2S hardware instance address.
@@ -395,8 +427,7 @@ static inline void i2s_ll_rx_set_mclk(i2s_dev_t *hw, const hal_utils_clk_div_t *
 static inline void i2s_ll_tx_start(i2s_dev_t *hw)
 {
     // Have to update registers before start
-    hw->tx_conf.tx_update = 1;
-    while (hw->tx_conf.tx_update);
+    i2s_ll_tx_update(hw);
     hw->tx_conf.tx_start = 1;
 }
 
@@ -408,8 +439,7 @@ static inline void i2s_ll_tx_start(i2s_dev_t *hw)
 static inline void i2s_ll_rx_start(i2s_dev_t *hw)
 {
     // Have to update registers before start
-    hw->rx_conf.rx_update = 1;
-    while (hw->rx_conf.rx_update);
+    i2s_ll_rx_update(hw);
     hw->rx_conf.rx_start = 1;
 }
 
@@ -467,7 +497,7 @@ static inline void i2s_ll_rx_set_eof_num(i2s_dev_t *hw, int eof_num)
 }
 
 /**
- * @brief Congfigure TX chan bit and audio data bit
+ * @brief Configure TX chan bit and audio data bit
  *
  * @param hw Peripheral I2S hardware instance address.
  * @param chan_bit The chan bit width
@@ -480,7 +510,7 @@ static inline void i2s_ll_tx_set_sample_bit(i2s_dev_t *hw, uint8_t chan_bit, int
 }
 
 /**
- * @brief Congfigure RX chan bit and audio data bit
+ * @brief Configure RX chan bit and audio data bit
  *
  * @param hw Peripheral I2S hardware instance address.
  * @param chan_bit The chan bit width
@@ -733,15 +763,29 @@ static inline void i2s_ll_rx_enable_std(i2s_dev_t *hw)
 }
 
 /**
- * @brief Enable TX PDM mode.
+ * @brief Enable I2S TX PDM mode
  *
  * @param hw Peripheral I2S hardware instance address.
+ * @param pcm2pdm_en Set true to enable TX PCM to PDM filter
  */
-static inline void i2s_ll_tx_enable_pdm(i2s_dev_t *hw)
+static inline void i2s_ll_tx_enable_pdm(i2s_dev_t *hw, bool pcm2pdm_en)
 {
     hw->tx_conf.tx_pdm_en = true;
     hw->tx_conf.tx_tdm_en = false;
-    hw->tx_pcm2pdm_conf.pcm2pdm_conv_en = true;
+    hw->tx_pcm2pdm_conf.pcm2pdm_conv_en = pcm2pdm_en;
+}
+
+/**
+ * @brief Enable I2S RX PDM mode
+ *
+ * @param hw Peripheral I2S hardware instance address.
+ * @param pdm2pcm_en Set true to enable RX PDM to PCM filter
+ */
+static inline void i2s_ll_rx_enable_pdm(i2s_dev_t *hw, bool pdm2pcm_en)
+{
+    HAL_ASSERT(!pdm2pcm_en);  // C3 does not have PDM2PCM filter
+    hw->rx_conf.rx_pdm_en = true;
+    hw->rx_conf.rx_tdm_en = false;
 }
 
 /**
@@ -880,11 +924,11 @@ static inline void i2s_ll_tx_set_pdm_fpfs(i2s_dev_t *hw, uint32_t fp, uint32_t f
 }
 
 /**
- * @brief Get I2S TX PDM fp configuration paramater
+ * @brief Get I2S TX PDM fp configuration parameter
  *
  * @param hw Peripheral I2S hardware instance address.
  * @return
- *        - fp configuration paramater
+ *        - fp configuration parameter
  */
 static inline uint32_t i2s_ll_tx_get_pdm_fp(i2s_dev_t *hw)
 {
@@ -892,11 +936,11 @@ static inline uint32_t i2s_ll_tx_get_pdm_fp(i2s_dev_t *hw)
 }
 
 /**
- * @brief Get I2S TX PDM fs configuration paramater
+ * @brief Get I2S TX PDM fs configuration parameter
  *
  * @param hw Peripheral I2S hardware instance address.
  * @return
- *        - fs configuration paramater
+ *        - fs configuration parameter
  */
 static inline uint32_t i2s_ll_tx_get_pdm_fs(i2s_dev_t *hw)
 {
@@ -904,25 +948,10 @@ static inline uint32_t i2s_ll_tx_get_pdm_fs(i2s_dev_t *hw)
 }
 
 /**
- * @brief Enable RX PDM mode.
- * @note  ESP32-C3 doesn't support pdm in rx mode, disable anyway
- *
- * @param hw Peripheral I2S hardware instance address.
- * @param pdm_enable Set true to RX enable PDM mode (ignored)
- */
-static inline void i2s_ll_rx_enable_pdm(i2s_dev_t *hw, bool pdm_enable)
-{
-    // Due to the lack of `PDM to PCM` module on ESP32-C3, PDM RX is not available
-    HAL_ASSERT(!pdm_enable);
-    hw->rx_conf.rx_pdm_en = 0;
-    hw->rx_conf.rx_tdm_en = 1;
-}
-
-/**
  * @brief Configura TX a/u-law decompress or compress
  *
  * @param hw Peripheral I2S hardware instance address.
- * @param pcm_cfg PCM configuration paramater
+ * @param pcm_cfg PCM configuration parameter
  */
 static inline void i2s_ll_tx_set_pcm_type(i2s_dev_t *hw, i2s_pcm_compress_t pcm_cfg)
 {
@@ -934,7 +963,7 @@ static inline void i2s_ll_tx_set_pcm_type(i2s_dev_t *hw, i2s_pcm_compress_t pcm_
  * @brief Configure RX a/u-law decompress or compress
  *
  * @param hw Peripheral I2S hardware instance address.
- * @param pcm_cfg PCM configuration paramater
+ * @param pcm_cfg PCM configuration parameter
  */
 static inline void i2s_ll_rx_set_pcm_type(i2s_dev_t *hw, i2s_pcm_compress_t pcm_cfg)
 {
@@ -1106,7 +1135,7 @@ static inline void i2s_ll_tx_pdm_dma_take_mode(i2s_dev_t *hw, bool is_mono, bool
  * @param is_mono   The DMA data only has one slot (mono) or contains two slots (stereo)
  * @param is_copy   Whether the un-selected slot copies the data from the selected one
  *                  If not, the un-selected slot will transmit the data from 'conf_single_data'
- * @param mask      The slot mask to selet the slot
+ * @param mask      The slot mask to select the slot
  */
 static inline void i2s_ll_tx_pdm_slot_mode(i2s_dev_t *hw, bool is_mono, bool is_copy, i2s_pdm_slot_mask_t mask)
 {

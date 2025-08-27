@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2019-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2019-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -73,6 +73,8 @@ static const char *TAG = "esp-tls";
 #define _esp_tls_free_client_session        esp_mbedtls_free_client_session
 #define _esp_tls_get_ssl_context            esp_mbedtls_get_ssl_context
 #define _esp_tls_server_session_create      esp_mbedtls_server_session_create
+#define _esp_tls_server_session_init        esp_mbedtls_server_session_init
+#define _esp_tls_server_session_continue_async     esp_mbedtls_server_session_continue_async
 #define _esp_tls_server_session_delete      esp_mbedtls_server_session_delete
 #define _esp_tls_server_session_ticket_ctx_init    esp_mbedtls_server_session_ticket_ctx_init
 #define _esp_tls_server_session_ticket_ctx_free    esp_mbedtls_server_session_ticket_ctx_free
@@ -132,7 +134,7 @@ static ssize_t tcp_write(esp_tls_t *tls, const char *data, size_t datalen)
 
 ssize_t esp_tls_conn_read(esp_tls_t *tls, void  *data, size_t datalen)
 {
-    if (!tls || !data) {
+    if (!tls) {
         return -1;
     }
     return tls->read(tls, (char *)data, datalen);
@@ -158,6 +160,11 @@ int esp_tls_conn_destroy(esp_tls_t *tls)
             ret = close(tls->sockfd);
         }
         esp_tls_internal_event_tracker_destroy(tls->error_handle);
+#if CONFIG_MBEDTLS_SSL_PROTO_TLS1_3 && CONFIG_ESP_TLS_CLIENT_SESSION_TICKETS
+        if (tls->client_session) {
+            free(tls->client_session);
+        }
+#endif // CONFIG_MBEDTLS_SSL_PROTO_TLS1_3 && CONFIG_ESP_TLS_CLIENT_SESSION_TICKETS
         free(tls);
         tls = NULL;
         return ret;
@@ -178,6 +185,10 @@ esp_tls_t *esp_tls_init(void)
     }
     _esp_tls_net_init(tls);
     tls->sockfd = -1;
+#if CONFIG_MBEDTLS_SSL_PROTO_TLS1_3 && CONFIG_ESP_TLS_CLIENT_SESSION_TICKETS
+    tls->client_session = NULL;
+    tls->client_session_len = 0;
+#endif // CONFIG_MBEDTLS_SSL_PROTO_TLS1_3 && CONFIG_ESP_TLS_CLIENT_SESSION_TICKETS
     return tls;
 }
 
@@ -376,7 +387,15 @@ static inline esp_err_t tcp_connect(const char *host, int hostlen, int port, con
 
     ret = ESP_ERR_ESP_TLS_FAILED_CONNECT_TO_HOST;
     ESP_LOGD(TAG, "[sock=%d] Connecting to server. HOST: %s, Port: %d", fd, host, port);
-    if (connect(fd, (struct sockaddr *)&address, sizeof(struct sockaddr)) < 0) {
+#if IPV4_ENABLED && IPV6_ENABLED
+    socklen_t addr_len = (address.ss_family == AF_INET) ? sizeof(struct sockaddr_in) : sizeof(struct sockaddr_in6);
+#elif IPV6_ENABLED
+    socklen_t addr_len = sizeof(struct sockaddr_in6);
+#else
+    /* IPv4 only */
+    socklen_t addr_len = sizeof(struct sockaddr_in);
+#endif
+    if (connect(fd, (struct sockaddr *)&address, addr_len) < 0) {
         if (errno == EINPROGRESS) {
             fd_set fdset;
             struct timeval tv = { .tv_usec = 0, .tv_sec = ESP_TLS_DEFAULT_CONN_TIMEOUT }; // Default connection timeout is 10 s
@@ -652,6 +671,17 @@ const int *esp_tls_get_ciphersuites_list(void)
 {
     return _esp_tls_get_ciphersuites_list();
 }
+
+esp_err_t esp_tls_server_session_init(esp_tls_cfg_server_t *cfg, int sockfd, esp_tls_t *tls)
+{
+    return _esp_tls_server_session_init(cfg, sockfd, tls);
+}
+
+int esp_tls_server_session_continue_async(esp_tls_t *tls)
+{
+    return _esp_tls_server_session_continue_async(tls);
+}
+
 #endif /* CONFIG_ESP_TLS_USING_MBEDTLS */
 
 #ifdef CONFIG_ESP_TLS_CLIENT_SESSION_TICKETS
@@ -703,6 +733,7 @@ int esp_tls_server_session_create(esp_tls_cfg_server_t *cfg, int sockfd, esp_tls
 {
     return _esp_tls_server_session_create(cfg, sockfd, tls);
 }
+
 /**
  * @brief      Close the server side TLS/SSL connection and free any allocated resources.
  */

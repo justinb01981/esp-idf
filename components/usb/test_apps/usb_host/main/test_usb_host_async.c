@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2015-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2015-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -10,10 +10,10 @@
 #include "freertos/semphr.h"
 #include "esp_err.h"
 #include "esp_intr_alloc.h"
-#include "test_usb_common.h"
 #include "dev_msc.h"
 #include "msc_client.h"
 #include "ctrl_client.h"
+#include "multiconf_client.h"
 #include "usb/usb_host.h"
 #include "unity.h"
 
@@ -21,6 +21,7 @@
 #define TEST_MSC_NUM_SECTORS_PER_XFER       2
 #define TEST_MSC_SCSI_TAG                   0xDEADBEEF
 #define TEST_CTRL_NUM_TRANSFERS             30
+#define B_CONFIGURATION_VALUE               1
 
 // --------------------------------------------------- Test Cases ------------------------------------------------------
 
@@ -180,7 +181,7 @@ static void test_async_client_cb(const usb_host_client_event_msg_t *event_msg, v
     }
 }
 
-TEST_CASE("Test USB Host async API", "[usb_host][full_speed][low_speed]")
+TEST_CASE("Test USB Host async API", "[usb_host][low_speed][full_speed][high_speed]")
 {
     // Register two clients
     client_test_stage_t client0_stage = CLIENT_TEST_STAGE_NONE;
@@ -250,8 +251,9 @@ TEST_CASE("Test USB Host async API", "[usb_host][full_speed][low_speed]")
                                                              client0_dev_hdl,
                                                              dev_info->bInterfaceNumber));
 
+    // Trigger a disconnect by powering OFF the root port
+    usb_host_lib_set_root_port_power(false);
     // Wait until the device disconnects and the clients receive the event
-    test_usb_set_phy_state(false, 0);
     while (!(client0_stage == CLIENT_TEST_STAGE_DCONN && client1_stage == CLIENT_TEST_STAGE_DCONN)) {
         usb_host_lib_handle_events(0, NULL);
         usb_host_client_handle_events(client0_hdl, 0);
@@ -274,4 +276,73 @@ TEST_CASE("Test USB Host async API", "[usb_host][full_speed][low_speed]")
         }
         vTaskDelay(10);
     }
+}
+
+/*
+Test USB Host Asynchronous API single client
+
+Purpose:
+    - Test that client can read configuration descriptor by request
+
+Procedure:
+    - Install USB Host Library
+    - Create a task to run a multiconfig client
+    - Create a task to handle system events
+    - Start the MSC client task. It will open the device and start handling client events
+    - Wait for the main task requests client to read configuration descriptor
+    - Compare the requested configuration descriptor with the active configuration descriptor
+    - Wait for the host library event handler to report a USB_HOST_LIB_EVENT_FLAGS_NO_CLIENTS event
+    - Free all devices
+    - Uninstall USB Host Library
+*/
+static void host_lib_task(void *arg)
+{
+    TaskHandle_t pending_task = (TaskHandle_t)arg;
+    while (1) {
+        // Start handling system events
+        uint32_t event_flags;
+        usb_host_lib_handle_events(portMAX_DELAY, &event_flags);
+        if (event_flags & USB_HOST_LIB_EVENT_FLAGS_NO_CLIENTS) {
+            printf("No more clients\n");
+            TEST_ASSERT_EQUAL(ESP_ERR_NOT_FINISHED, usb_host_device_free_all());
+        }
+        if (event_flags & USB_HOST_LIB_EVENT_FLAGS_ALL_FREE) {
+            printf("All devices freed\n");
+            break;
+        }
+    }
+    // Notify the main task that the host library task is done
+    xTaskNotifyGive(pending_task);
+    printf("Deleting host_lib_task\n");
+    vTaskDelete(NULL);
+}
+
+TEST_CASE("Test USB Host multiconfig client (single client)", "[usb_host][full_speed][high_speed]")
+{
+    SemaphoreHandle_t dev_open_smp = xSemaphoreCreateBinary();
+    TaskHandle_t client_task;
+
+    multiconf_client_test_param_t multiconf_params = {
+        .dev_open_smp = dev_open_smp,
+        .bConfigurationValue = B_CONFIGURATION_VALUE,
+    };
+
+    xTaskCreatePinnedToCore(multiconf_client_async_task, "async client", 4096, (void *)&multiconf_params, 2, &client_task, 0);
+    TEST_ASSERT_NOT_NULL_MESSAGE(client_task, "Failed to create async client task");
+    // Start the task
+    xTaskNotifyGive(client_task);
+
+    TaskHandle_t host_lib_task_hdl;
+    // Get Current task handle
+    TaskHandle_t pending_task = xTaskGetCurrentTaskHandle();
+    xTaskCreatePinnedToCore(host_lib_task, "host lib", 4096, (void *)pending_task, 2, &host_lib_task_hdl, 0);
+    TEST_ASSERT_NOT_NULL_MESSAGE(host_lib_task_hdl, "Failed to create host lib task");
+
+    // Wait for the device to be open
+    xSemaphoreTake(dev_open_smp, portMAX_DELAY);
+    multiconf_client_get_conf_desc();
+    // Wait for the host library task to finish
+    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    // Cleanup
+    vSemaphoreDelete(dev_open_smp);
 }

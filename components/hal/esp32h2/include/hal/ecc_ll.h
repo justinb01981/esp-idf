@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2023-2024 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -11,6 +11,9 @@
 #include "hal/ecc_types.h"
 #include "soc/ecc_mult_reg.h"
 #include "soc/pcr_struct.h"
+#include "soc/pcr_reg.h"
+#include "soc/chip_revision.h"
+#include "hal/efuse_hal.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -45,6 +48,18 @@ static inline void ecc_ll_reset_register(void)
 
     // Clear reset on ECDSA, otherwise ECC is held in reset
     PCR.ecdsa_conf.ecdsa_rst_en = 0;
+}
+
+static inline void ecc_ll_power_up(void)
+{
+    REG_CLR_BIT(PCR_ECC_PD_CTRL_REG, PCR_ECC_MEM_PD);
+    REG_CLR_BIT(PCR_ECC_PD_CTRL_REG, PCR_ECC_MEM_FORCE_PD);
+}
+
+static inline void ecc_ll_power_down(void)
+{
+    REG_CLR_BIT(PCR_ECC_PD_CTRL_REG, PCR_ECC_MEM_FORCE_PU);
+    REG_SET_BIT(PCR_ECC_PD_CTRL_REG, PCR_ECC_MEM_PD);
 }
 
 static inline void ecc_ll_enable_interrupt(void)
@@ -196,6 +211,18 @@ static inline ecc_curve_t ecc_ll_get_curve(void)
 static inline ecc_mod_base_t ecc_ll_get_mod_base(void)
 {
     return (ecc_mod_base_t)(REG_GET_FIELD(ECC_MULT_CONF_REG, ECC_MULT_MOD_BASE));
+}
+
+static inline void ecc_ll_enable_constant_time_point_mul(bool enable)
+{
+    // ECC constant time point multiplication is supported only on rev 1.2 and above
+    if (ESP_CHIP_REV_ABOVE(efuse_hal_chip_revision(), 102)){
+        if (enable) {
+            REG_SET_BIT(ECC_MULT_CONF_REG, ECC_MULT_SECURITY_MODE);
+        } else {
+            REG_CLR_BIT(ECC_MULT_CONF_REG, ECC_MULT_SECURITY_MODE);
+        }
+    }
 }
 
 static inline void ecc_ll_read_param(ecc_ll_param_t param, uint8_t *buf, uint16_t len)

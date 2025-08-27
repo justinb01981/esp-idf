@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2020-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2020-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -22,6 +22,7 @@
 #include "soc/dport_access.h"
 #include "hal/i2s_types.h"
 #include "hal/hal_utils.h"
+#include "hal/assert.h"
 
 
 #ifdef __cplusplus
@@ -72,7 +73,7 @@ static inline void i2s_ll_dma_enable_auto_write_back(i2s_dev_t *hw, bool en)
 }
 
 /**
- * @brief I2S DMA generate EOF event on data in FIFO poped out
+ * @brief I2S DMA generate EOF event on data in FIFO popped out
  *
  * @param hw Peripheral I2S hardware instance address.
  * @param en True to enable, False to disable
@@ -90,24 +91,20 @@ static inline void i2s_ll_dma_enable_eof_on_fifo_empty(i2s_dev_t *hw, bool en)
  */
 static inline void i2s_ll_enable_bus_clock(int i2s_id, bool enable)
 {
+    (void) i2s_id;
     if (enable) {
-        if (i2s_id == 0) {
-            DPORT_SET_PERI_REG_MASK(DPORT_PERIP_CLK_EN_REG, DPORT_I2S0_CLK_EN);
-        } else {
-            DPORT_SET_PERI_REG_MASK(DPORT_PERIP_CLK_EN_REG, DPORT_I2S1_CLK_EN);
-        }
+        DPORT_SET_PERI_REG_MASK(DPORT_PERIP_CLK_EN_REG, DPORT_I2S0_CLK_EN);
     } else {
-        if (i2s_id == 0) {
-            DPORT_CLEAR_PERI_REG_MASK(DPORT_PERIP_CLK_EN_REG, DPORT_I2S0_CLK_EN);
-        } else {
-            DPORT_CLEAR_PERI_REG_MASK(DPORT_PERIP_CLK_EN_REG, DPORT_I2S1_CLK_EN);
-        }
+        DPORT_CLEAR_PERI_REG_MASK(DPORT_PERIP_CLK_EN_REG, DPORT_I2S0_CLK_EN);
     }
 }
 
 /// use a macro to wrap the function, force the caller to use it in a critical section
 /// the critical section needs to declare the __DECLARE_RCC_ATOMIC_ENV variable in advance
-#define i2s_ll_enable_bus_clock(...) (void)__DECLARE_RCC_ATOMIC_ENV; i2s_ll_enable_bus_clock(__VA_ARGS__)
+#define i2s_ll_enable_bus_clock(...) do { \
+        (void)__DECLARE_RCC_ATOMIC_ENV; \
+        i2s_ll_enable_bus_clock(__VA_ARGS__); \
+    } while(0)
 
 /**
  * @brief Reset the I2S module
@@ -116,18 +113,17 @@ static inline void i2s_ll_enable_bus_clock(int i2s_id, bool enable)
  */
 static inline void i2s_ll_reset_register(int i2s_id)
 {
-    if (i2s_id == 0) {
-        DPORT_SET_PERI_REG_MASK(DPORT_PERIP_RST_EN_REG, DPORT_I2S0_RST);
-        DPORT_CLEAR_PERI_REG_MASK(DPORT_PERIP_RST_EN_REG, DPORT_I2S0_RST);
-    } else {
-        DPORT_SET_PERI_REG_MASK(DPORT_PERIP_RST_EN_REG, DPORT_I2S1_RST);
-        DPORT_CLEAR_PERI_REG_MASK(DPORT_PERIP_RST_EN_REG, DPORT_I2S1_RST);
-    }
+    (void) i2s_id;
+    DPORT_SET_PERI_REG_MASK(DPORT_PERIP_RST_EN_REG, DPORT_I2S0_RST);
+    DPORT_CLEAR_PERI_REG_MASK(DPORT_PERIP_RST_EN_REG, DPORT_I2S0_RST);
 }
 
 /// use a macro to wrap the function, force the caller to use it in a critical section
 /// the critical section needs to declare the __DECLARE_RCC_ATOMIC_ENV variable in advance
-#define i2s_ll_reset_register(...) (void)__DECLARE_RCC_ATOMIC_ENV; i2s_ll_reset_register(__VA_ARGS__)
+#define i2s_ll_reset_register(...) do { \
+        (void)__DECLARE_RCC_ATOMIC_ENV; \
+        i2s_ll_reset_register(__VA_ARGS__); \
+    } while(0)
 
 /**
  * @brief I2S module general init, enable I2S clock.
@@ -148,7 +144,10 @@ static inline void i2s_ll_enable_core_clock(i2s_dev_t *hw, bool enable)
 
 /// use a macro to wrap the function, force the caller to use it in a critical section
 /// the critical section needs to declare the __DECLARE_RCC_ATOMIC_ENV variable in advance
-#define i2s_ll_enable_core_clock(...) (void)__DECLARE_RCC_ATOMIC_ENV; i2s_ll_enable_core_clock(__VA_ARGS__)
+#define i2s_ll_enable_core_clock(...) do { \
+        (void)__DECLARE_RCC_ATOMIC_ENV; \
+        i2s_ll_enable_core_clock(__VA_ARGS__); \
+    } while(0)
 
 /**
  * @brief I2S tx msb right enable
@@ -341,11 +340,6 @@ static inline void i2s_ll_set_raw_mclk_div(i2s_dev_t *hw, uint32_t mclk_div, uin
  */
 static inline void i2s_ll_tx_set_mclk(i2s_dev_t *hw, const hal_utils_clk_div_t *mclk_div)
 {
-    /* Workaround for inaccurate clock while switching from a relatively low sample rate to a high sample rate
-     * Set to particular coefficients first then update to the target coefficients,
-     * otherwise the clock division might be inaccurate.
-     * the general idea is to set a value that unlike to calculate from the regular decimal */
-    i2s_ll_set_raw_mclk_div(hw, 7, 47, 3);
     i2s_ll_set_raw_mclk_div(hw, mclk_div->integer, mclk_div->denominator, mclk_div->numerator);
 }
 
@@ -362,7 +356,7 @@ static inline void i2s_ll_rx_set_bck_div_num(i2s_dev_t *hw, uint32_t val)
 
 /**
  * @brief Configure I2S RX module clock divider
- * @note mclk on ESP32 is shared by both TX and RX channel
+ * @note mclk on ESP32S2 is shared by both TX and RX channel
  *
  * @param hw Peripheral I2S hardware instance address.
  * @param mclk_div The mclk division coefficients
@@ -518,27 +512,31 @@ static inline void i2s_ll_rx_enable_std(i2s_dev_t *hw)
 }
 
 /**
- * @brief Enable TX PDM mode.
+ * @brief Enable I2S TX PDM mode
  * @note  ESP32-S2 doesn't support pdm
  *        This function is used to be compatible with those support pdm
- *
- * @param hw Peripheral I2S hardware instance address (ignored)
+ * @param hw Peripheral I2S hardware instance address.
+ * @param pcm2pdm_en Set true to enable TX PCM to PDM filter
  */
-static inline void i2s_ll_tx_enable_pdm(i2s_dev_t *hw)
+static inline void i2s_ll_tx_enable_pdm(i2s_dev_t *hw, bool pcm2pdm_en)
 {
-    // Remain empty
+    // remain empty
+    (void)hw;
+    (void)pcm2pdm_en;
 }
 
 /**
- * @brief Enable RX PDM mode.
+ * @brief Enable I2S RX PDM mode
  * @note  ESP32-S2 doesn't support pdm
  *        This function is used to be compatible with those support pdm
- *
- * @param hw Peripheral I2S hardware instance address (ignored)
+ * @param hw Peripheral I2S hardware instance address.
+ * @param pdm2pcm_en Set true to enable RX PDM to PCM filter
  */
-static inline void i2s_ll_rx_enable_pdm(i2s_dev_t *hw)
+static inline void i2s_ll_rx_enable_pdm(i2s_dev_t *hw, bool pdm2pcm_en)
 {
-    // Remain empty
+    // remain empty
+    (void)hw;
+    (void)pdm2pcm_en;
 }
 
 /**
@@ -682,7 +680,7 @@ static inline void i2s_ll_rx_set_eof_num(i2s_dev_t *hw, uint32_t eof_num)
 }
 
 /**
- * @brief Congfigure TX chan bit and audio data bit, on ESP32-S2, sample_bit should equals to data_bit
+ * @brief Configure TX chan bit and audio data bit, on ESP32-S2, sample_bit should equals to data_bit
  *
  * @param hw Peripheral I2S hardware instance address.
  * @param chan_bit The chan bit width
@@ -695,7 +693,7 @@ static inline void i2s_ll_tx_set_sample_bit(i2s_dev_t *hw, uint8_t chan_bit, int
 }
 
 /**
- * @brief Congfigure RX chan bit and audio data bit, on ESP32-S2, sample_bit should equals to data_bit
+ * @brief Configure RX chan bit and audio data bit, on ESP32-S2, sample_bit should equals to data_bit
  *
  * @param hw Peripheral I2S hardware instance address.
  * @param chan_bit The chan bit width
@@ -995,17 +993,6 @@ static inline void i2s_ll_enable_lcd(i2s_dev_t *hw, bool enable)
 static inline void i2s_ll_tx_stop_on_fifo_empty(i2s_dev_t *hw, bool en)
 {
     hw->conf1.tx_stop_en = en;
-}
-
-/**
- * @brief Set whether to bypass the internal PCM module
- *
- * @param hw Peripheral I2S hardware instance address.
- * @param bypass whether to bypass the PCM module
- */
-static inline void i2s_ll_tx_bypass_pcm(i2s_dev_t *hw, bool bypass)
-{
-    hw->conf1.tx_pcm_bypass = bypass;
 }
 
 #ifdef __cplusplus

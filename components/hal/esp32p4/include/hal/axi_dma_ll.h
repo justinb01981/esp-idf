@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2022-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2022-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -125,7 +125,7 @@ static inline void axi_dma_ll_rx_enable_owner_check(axi_dma_dev_t *dev, uint32_t
 }
 
 /**
- * @brief Enable DMA RX channel burst reading data, disabled by default
+ * @brief Enable DMA RX channel burst reading data, always enabled
  */
 static inline void axi_dma_ll_rx_enable_data_burst(axi_dma_dev_t *dev, uint32_t channel, bool enable)
 {
@@ -137,6 +137,16 @@ static inline void axi_dma_ll_rx_enable_data_burst(axi_dma_dev_t *dev, uint32_t 
 static inline void axi_dma_ll_rx_enable_descriptor_burst(axi_dma_dev_t *dev, uint32_t channel, bool enable)
 {
     dev->in[channel].conf.in_conf0.indscr_burst_en_chn = enable;
+}
+
+/**
+ * @brief Set the RX channel burst size
+ */
+static inline void axi_dma_ll_rx_set_burst_size(axi_dma_dev_t *dev, uint32_t channel, uint32_t sz)
+{
+    HAL_ASSERT(sz >= 8 && sz <= 128);
+    int ctz = __builtin_ctz(sz);
+    dev->in[channel].conf.in_conf0.in_burst_size_sel_chn = ctz - 3;
 }
 
 /**
@@ -183,6 +193,15 @@ __attribute__((always_inline))
 static inline void axi_dma_ll_rx_stop(axi_dma_dev_t *dev, uint32_t channel)
 {
     dev->in[channel].conf.in_link1.inlink_stop_chn = 1;
+}
+
+/**
+ * @brief Abort the RX channel, stop the undergoing transfer immediately
+ */
+__attribute__((always_inline))
+static inline void axi_dma_ll_rx_abort(axi_dma_dev_t *dev, uint32_t channel, bool abort)
+{
+    dev->in[channel].conf.in_conf0.in_cmd_disable_chn = abort;
 }
 
 /**
@@ -274,11 +293,20 @@ static inline void axi_dma_ll_rx_enable_etm_task(axi_dma_dev_t *dev, uint32_t ch
 }
 
 /**
- * @brief Whether to enable the mean access ecc or aes domain
+ * @brief Whether to enable access to ecc or aes memory
  */
 static inline void axi_dma_ll_rx_enable_ext_mem_ecc_aes_access(axi_dma_dev_t *dev, uint32_t channel, bool enable)
 {
-    dev->in[channel].conf.in_conf0.in_ecc_aec_en_chn = enable;
+    dev->in[channel].conf.in_conf0.in_ecc_aes_en_chn = enable;
+}
+
+/**
+ * @brief Return if the channel is ready to be reset
+ */
+__attribute__((always_inline))
+static inline bool axi_dma_ll_rx_is_reset_avail(axi_dma_dev_t *dev, uint32_t channel)
+{
+    return dev->in_reset_avail_chn[channel].in_reset_avail_chn;
 }
 
 ///////////////////////////////////// TX /////////////////////////////////////////
@@ -333,7 +361,7 @@ static inline void axi_dma_ll_tx_enable_owner_check(axi_dma_dev_t *dev, uint32_t
 }
 
 /**
- * @brief Enable DMA TX channel burst sending data, disabled by default
+ * @brief Enable DMA TX channel burst sending data, always enabled
  */
 static inline void axi_dma_ll_tx_enable_data_burst(axi_dma_dev_t *dev, uint32_t channel, bool enable)
 {
@@ -345,6 +373,16 @@ static inline void axi_dma_ll_tx_enable_data_burst(axi_dma_dev_t *dev, uint32_t 
 static inline void axi_dma_ll_tx_enable_descriptor_burst(axi_dma_dev_t *dev, uint32_t channel, bool enable)
 {
     dev->out[channel].conf.out_conf0.outdscr_burst_en_chn = enable;
+}
+
+/**
+ * @brief Set the TX channel burst size
+ */
+static inline void axi_dma_ll_tx_set_burst_size(axi_dma_dev_t *dev, uint32_t channel, uint32_t sz)
+{
+    HAL_ASSERT(sz >= 8 && sz <= 128);
+    int ctz = __builtin_ctz(sz);
+    dev->out[channel].conf.out_conf0.out_burst_size_sel_chn = ctz - 3;
 }
 
 /**
@@ -407,6 +445,15 @@ __attribute__((always_inline))
 static inline void axi_dma_ll_tx_stop(axi_dma_dev_t *dev, uint32_t channel)
 {
     dev->out[channel].conf.out_link1.outlink_stop_chn = 1;
+}
+
+/**
+ * @brief Abort the TX channel, stop the undergoing transfer immediately
+ */
+__attribute__((always_inline))
+static inline void axi_dma_ll_tx_abort(axi_dma_dev_t *dev, uint32_t channel, bool abort)
+{
+    dev->out[channel].conf.out_conf0.out_cmd_disable_chn = abort;
 }
 
 /**
@@ -480,11 +527,20 @@ static inline void axi_dma_ll_tx_enable_etm_task(axi_dma_dev_t *dev, uint32_t ch
 }
 
 /**
- * @brief Whether to enable the mean access ecc or aes domain
+ * @brief Whether to enable access to ecc or aes memory
  */
 static inline void axi_dma_ll_tx_enable_ext_mem_ecc_aes_access(axi_dma_dev_t *dev, uint32_t channel, bool enable)
 {
-    dev->out[channel].conf.out_conf0.out_ecc_aec_en_chn = enable;
+    dev->out[channel].conf.out_conf0.out_ecc_aes_en_chn = enable;
+}
+
+/**
+ * @brief Return if the channel is ready to be reset
+ */
+__attribute__((always_inline))
+static inline bool axi_dma_ll_tx_is_reset_avail(axi_dma_dev_t *dev, uint32_t channel)
+{
+    return dev->out_reset_avail_chn[channel].out_reset_avail_chn;
 }
 
 ///////////////////////////////////// CRC-TX /////////////////////////////////////////

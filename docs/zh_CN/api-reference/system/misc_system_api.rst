@@ -4,12 +4,12 @@
 :link_to_translation:`en:[English]`
 
 {IDF_TARGET_BASE_MAC_BLOCK: default="BLK1", esp32="BLK0"}
-{IDF_TARGET_CPU_RESET_DES: default="CPU 复位", esp32="两个 CPU 均复位", esp32s3="两个 CPU 均复位", esp32p4="两个 CPU 均复位"}
+{IDF_TARGET_CPU_RESET_DES: default="CPU 复位", esp32="两个 CPU 均复位", esp32s3="两个 CPU 均复位", esp32p4="两个 CPU 均复位", esp32h4="两个 CPU 均复位"}
 
 软件复位
 ------------
 
-函数 :cpp:func:`esp_restart` 用于执行芯片的软件复位。调用此函数时，程序停止执行，{IDF_TARGET_CPU_RESET_DES}，应用程序由 bootloader 加载并重启。
+函数 :cpp:func:`esp_restart` 用于执行芯片的软件复位。调用此函数时，程序停止执行，{IDF_TARGET_CPU_RESET_DES}，应用程序由引导加载程序加载并重启。
 
 函数 :cpp:func:`esp_register_shutdown_handler` 用于注册复位前会自动调用的例程（复位过程由 :cpp:func:`esp_restart` 函数触发），这与 ``atexit`` POSIX 函数的功能类似。
 
@@ -223,6 +223,11 @@ SDK 版本
 若需手动设置版本，需要在项目的 ``CMakeLists.txt`` 文件中设置 ``PROJECT_VER`` 变量，即在 ``CMakeLists.txt`` 文件中，在包含 ``project.cmake`` 之前添加 ``set(PROJECT_VER "0.1.0.1")``。
 
 如果设置了 :ref:`CONFIG_APP_PROJECT_VER_FROM_CONFIG` 选项，则将使用 :ref:`CONFIG_APP_PROJECT_VER` 的值。否则，如果在项目中未设置 ``PROJECT_VER`` 变量，则该变量将从 ``$(PROJECT_PATH)/version.txt`` 文件（若有）中检索，或使用 git 命令 ``git describe`` 检索。如果两者都不可用，则 ``PROJECT_VER`` 将被设置为 “1”。应用程序可通过调用 :cpp:func:`esp_app_get_description` 或 :cpp:func:`esp_ota_get_partition_description` 函数来获取应用程序的版本信息。
+
+应用示例
+--------------
+
+- :example:`system/base_mac_address` 演示了如何从非易失性存储器中检索、设置和派生 {IDF_TARGET_NAME} 上每个网络接口的基准 MAC 地址，可以使用 eFuse 或外部存储。
 
 API 参考
 -------------

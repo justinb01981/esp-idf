@@ -7,6 +7,7 @@ ESP-IDF uses the `FatFs <http://elm-chan.org/fsw/ff/00index_e.html>`_ library to
 
 Additionally, FatFs has been modified to support the runtime pluggable disk I/O layer. This allows mapping of FatFs drives to physical disks at runtime.
 
+.. _using-fatfs-with-vfs:
 
 Using FatFs with VFS
 --------------------
@@ -19,7 +20,9 @@ The function :cpp:func:`esp_vfs_fat_unregister_path` deletes the registration wi
 
 Most applications use the following workflow when working with ``esp_vfs_fat_`` functions:
 
-#. Call :cpp:func:`esp_vfs_fat_register` to specify:
+#.
+   Call :cpp:func:`esp_vfs_fat_register` to specify:
+
     - Path prefix where to mount the filesystem (e.g., ``"/sdcard"``, ``"/spiflash"``)
     - FatFs drive number
     - A variable which receives the pointer to the ``FATFS`` structure
@@ -42,10 +45,13 @@ Most applications use the following workflow when working with ``esp_vfs_fat_`` 
 
 The convenience functions :cpp:func:`esp_vfs_fat_sdmmc_mount`, :cpp:func:`esp_vfs_fat_sdspi_mount`, and :cpp:func:`esp_vfs_fat_sdcard_unmount` wrap the steps described above and also handle SD card initialization. These functions are described in the next section.
 
-.. note::
+Differences from the POSIX Standard
+-----------------------------------
 
-   Because FAT filesystem does not support hardlinks, :cpp:func:`link` copies contents of the file instead. (This only applies to files on FatFs volumes.)
+#. :cpp:func:`link`: Because FAT filesystem does not support hardlinks, :cpp:func:`link` copies contents of the file instead. (This only applies to files on FatFs volumes.)
+#. :cpp:func:`unlink`: Attempting to remove an open file will fail with ``EBUSY`` when ``CONFIG_FATFS_FS_LOCK`` is enabled. Otherwise, the behavior is undefined and may cause file system corruption.
 
+.. _using-fatfs-with-vfs-and-sdcards:
 
 Using FatFs with VFS and SD Cards
 ---------------------------------
@@ -66,9 +72,20 @@ Configuration options
 The following configuration options are available for the FatFs component:
 
 * :ref:`CONFIG_FATFS_USE_FASTSEEK` - If enabled, the POSIX :cpp:func:`lseek` function will be performed faster. The fast seek does not work for files in write mode, so to take advantage of fast seek, you should open (or close and then reopen) the file in read-only mode.
-* :ref:`CONFIG_FATFS_IMMEDIATE_FSYNC` - If enabled, the FatFs will automatically call :cpp:func:`f_sync` to flush recent file changes after each call of :cpp:func:`write`, :cpp:func:`pwrite`, :cpp:func:`link`, :cpp:func:`truncate` and :cpp:func:`ftruncate` functions. This feature improves file-consistency and size reporting accuracy for the FatFs, at a price on decreased performance due to frequent disk operations.
+* :ref:`CONFIG_FATFS_IMMEDIATE_FSYNC` - If enabled, the FatFs will automatically call :cpp:func:`f_sync` to flush recent file changes after each call of :cpp:func:`write`, :cpp:func:`pwrite`, :cpp:func:`link`, :cpp:func:`truncate` and :cpp:func:`ftruncate` functions. This feature improves file-consistency and size reporting accuracy for the FatFs, at a price of decreased performance due to frequent disk operations.
 * :ref:`CONFIG_FATFS_LINK_LOCK` - If enabled, this option guarantees the API thread safety, while disabling this option might be necessary for applications that require fast frequent small file operations (e.g., logging to a file). Note that if this option is disabled, the copying performed by :cpp:func:`link` will be non-atomic. In such case, using :cpp:func:`link` on a large file on the same volume in a different task is not guaranteed to be thread safe.
 
+These options set a behavior of how the FatFs filesystem calculates and reports free space:
+
+* :ref:`CONFIG_FATFS_DONT_TRUST_FREE_CLUSTER_CNT` - If 1, free cluster count will be ignored. Default value is 0.
+* :ref:`CONFIG_FATFS_DONT_TRUST_LAST_ALLOC` - If 1, last allocation number will be ignored. Default value is 0.
+
+.. note::
+
+    Setting these options to 1 may increase the accuracy of :cpp:func:`f_getfree` output at a price of decreased performance, e.g., due to performing full FAT scan.
+
+
+.. _fatfs-diskio-layer:
 
 FatFS Disk IO Layer
 -------------------
@@ -118,7 +135,7 @@ If you decide for any reason to use ``fatfs_create_rawflash_image`` (without wea
 
 The arguments of the function are as follows:
 
-#. partition - the name of the partition as defined in the partition table (e.g., :example_file:`storage/fatfsgen/partitions_example.csv`).
+#. partition - the name of the partition as defined in the partition table (e.g., :example_file:`storage/fatfs/fatfsgen/partitions_example.csv`).
 
 #. base_dir - the directory that will be encoded to FatFs partition and optionally flashed into the device. Beware that you have to specify the suitable size of the partition in the partition table.
 
@@ -134,8 +151,10 @@ For example::
 
 If FLASH_IN_PROJECT is not specified, the image will still be generated, but you will have to flash it manually using ``esptool.py`` or a custom build system target.
 
-For an example, see :example:`storage/fatfsgen`.
+For an example, see :example:`storage/fatfs/fatfsgen`.
 
+
+.. _fatfs-partition-analyzer:
 
 FatFs Partition Analyzer
 ------------------------
@@ -149,6 +168,40 @@ Usage::
     ./fatfsparse.py [-h] [--wl-layer {detect,enabled,disabled}] [--verbose] fatfs_image.img
 
 Parameter --verbose prints detailed information from boot sector of the FatFs image to the terminal before folder structure is generated.
+
+FATFS Minimum Partition Size and Limits
+---------------------------------------
+
+The FATFS component supports FAT12, FAT16, and FAT32 file system types. The file system type is determined by the number of clusters (calculated as data sectors divided by sectors per cluster) on the volume. The minimum partition size is defined by the number of sectors allocated to FAT tables, root directories and data clusters.
+
+* The minimum supported size for a FAT partition with wear leveling enabled is 32 KB for a sector size of 4096 bytes. For a sector size of 512 bytes, the minimum partition size varies based on the WL configuration: 20 KB for Performance mode and 28 KB for Safety mode (requiring 2 extra sectors).
+* For a partition with wear leveling enabled, 4 sectors will be reserved for wear-leveling operations, and 4 sectors will be used by the FATFS (1 reserved sector, 1 FAT sector, 1 root directory sector and 1 data sector).
+* Increasing the partition size will allocate additional data sectors, allowing for more storage space.
+* For partition sizes less than 528 KB, 1 root directory sector will be allocated; for larger partitions, 4 root directory sectors will be used.
+* By default, two FAT sectors are created, increasing the partition size by one sector to accommodate the extra FAT sector. To enable a single FAT sector, configure the `use_one_fat` option in `struct esp_vfs_fat_mount_config_t` (see :component_file:`fatfs/vfs/esp_vfs_fat.h`). Enabling this option allows the minimum partition size to be reduced to 32 KB.
+* The general formula for calculating the partition size for a wear-leveled partition is::
+
+    partition_size = Wear-levelling sectors * FLASH_SEC_SIZE + FATFS partition sectors * FAT_SEC_SIZE
+
+  Where:
+
+  - Wear-leveling sectors are fixed at 4
+  - FLASH_SEC_SIZE is 4096 bytes
+  - FATFS partition sectors include: 1 reserved sector + FAT sectors + root directory sectors + data sectors
+  - FAT_SEC_SIZE can be either 512 bytes or 4096 bytes, depending on the configuration
+
+* For read-only partitions without wear leveling enabled and a sector size of 512 bytes, the minimum partition size can be reduced to as low as 2 KB.
+
+Please refer :doc:`File System Considerations <../../api-guides/file-system-considerations>` for further details.
+
+Application Examples
+--------------------
+
+- :example:`storage/fatfs/getting_started` demonstrates the minimal setup required to store persistent data on SPI flash using the FatFS, including mounting the file system, opening a file, performing basic read and write operations, and unmounting the file system.
+
+- :example:`storage/fatfs/fs_operations` demonstrates more advanced FatFS operations, including reading and writing files, creating, moving, and deleting files and directories, and inspecting file details.
+
+- :example:`storage/fatfs/ext_flash` demonstrates how to operate an external SPI flash formatted with FatFS, including initializing the SPI bus, configuring the flash chip, registering it as a partition, and performing read and write operations.
 
 High-level API Reference
 ------------------------

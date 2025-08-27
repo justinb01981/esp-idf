@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2021-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2021-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -83,6 +83,31 @@ TEST_CASE("Test esp_sha()", "[hw_crypto]")
     ESP_LOGI(TAG, "esp_sha() 32KB SHA512 in %" PRIu32 " us", us_sha512);
 #endif
 
+/* NOTE: The Mbed TLS ROM implementation needs to updated to support SHA224 operations */
+#if !CONFIG_MBEDTLS_USE_CRYPTO_ROM_IMPL
+#if SOC_SHA_SUPPORT_SHA224
+    uint8_t sha224_result[28] = { 0 };
+    const uint8_t sha224_expected[28] = { 0xc0, 0x2a, 0x54, 0x2f, 0x70, 0x93, 0xaa, 0x3e,
+                                          0xb6, 0xec, 0xe6, 0xb2, 0xb8, 0xe6, 0x57, 0x27,
+                                          0xf9, 0x34, 0x9e, 0xb7, 0xbc, 0x96, 0x0d, 0xf5,
+                                          0xd9, 0x87, 0xa8, 0x17 };
+    esp_sha(SHA2_224, buffer, BUFFER_SZ, sha224_result);
+    TEST_ASSERT_EQUAL_HEX8_ARRAY(sha224_expected, sha224_result, sizeof(sha224_expected));
+#endif
+#endif
+
+#if SOC_SHA_SUPPORT_SHA384
+    uint8_t sha384_result[48] = { 0 };
+    const uint8_t sha384_expected[48] = { 0x72, 0x13, 0xc8, 0x09, 0x7b, 0xbc, 0x9e, 0x65,
+                                          0x02, 0xf8, 0x1d, 0xd2, 0x02, 0xd3, 0xd1, 0x80,
+                                          0x48, 0xb9, 0xfb, 0x10, 0x2f, 0x1b, 0xd1, 0x40,
+                                          0x4c, 0xc6, 0x3c, 0xfe, 0xcf, 0xa0, 0x83, 0x1b,
+                                          0x6e, 0xfb, 0x97, 0x17, 0x65, 0x08, 0x28, 0x04,
+                                          0x2f, 0x06, 0x2c, 0x97, 0x4e, 0xf8, 0x26, 0x86 };
+    esp_sha(SHA2_384, buffer, BUFFER_SZ, sha384_result);
+    TEST_ASSERT_EQUAL_HEX8_ARRAY(sha384_expected, sha384_result, sizeof(sha384_expected));
+#endif
+
     free(buffer);
 
     TEST_PERFORMANCE_CCOMP_LESS_THAN(TIME_SHA1_32KB, "%" PRId32 " us", us_sha1);
@@ -94,14 +119,17 @@ TEST_CASE("Test esp_sha()", "[hw_crypto]")
 
 TEST_CASE("Test esp_sha() function with long input", "[hw_crypto]")
 {
+    int r = -1;
     const void* ptr;
     spi_flash_mmap_handle_t handle;
+#if CONFIG_MBEDTLS_SHA1_C
     uint8_t sha1_espsha[20] = { 0 };
     uint8_t sha1_mbedtls[20] = { 0 };
+#endif
     uint8_t sha256_espsha[32] = { 0 };
     uint8_t sha256_mbedtls[32] = { 0 };
 
-#if SOC_SHA_SUPPORT_SHA512
+#if SOC_SHA_SUPPORT_SHA512 && CONFIG_MBEDTLS_SHA512_C
     uint8_t sha512_espsha[64] = { 0 };
     uint8_t sha512_mbedtls[64] = { 0 };
 #endif
@@ -115,16 +143,17 @@ TEST_CASE("Test esp_sha() function with long input", "[hw_crypto]")
     TEST_ASSERT_NOT_NULL(ptr);
 
     /* Compare esp_sha() result to the mbedTLS result, should always be the same */
-
+#if CONFIG_MBEDTLS_SHA1_C
     esp_sha(SHA1, ptr, LEN, sha1_espsha);
-    int r = mbedtls_sha1(ptr, LEN, sha1_mbedtls);
+    r = mbedtls_sha1(ptr, LEN, sha1_mbedtls);
     TEST_ASSERT_EQUAL(0, r);
+#endif
 
     esp_sha(SHA2_256, ptr, LEN, sha256_espsha);
     r = mbedtls_sha256(ptr, LEN, sha256_mbedtls, 0);
     TEST_ASSERT_EQUAL(0, r);
 
-#if SOC_SHA_SUPPORT_SHA512
+#if SOC_SHA_SUPPORT_SHA512 && CONFIG_MBEDTLS_SHA512_C
     esp_sha(SHA2_512, ptr, LEN, sha512_espsha);
     r = mbedtls_sha512(ptr, LEN, sha512_mbedtls, 0);
     TEST_ASSERT_EQUAL(0, r);
@@ -133,11 +162,13 @@ TEST_CASE("Test esp_sha() function with long input", "[hw_crypto]")
     /* munmap() 1MB of flash when the usge of memory-mapped ptr is over */
     spi_flash_munmap(handle);
 
+#if CONFIG_MBEDTLS_SHA1_C
     TEST_ASSERT_EQUAL_MEMORY_MESSAGE(sha1_espsha, sha1_mbedtls, sizeof(sha1_espsha), "SHA1 results should match");
+#endif
 
     TEST_ASSERT_EQUAL_MEMORY_MESSAGE(sha256_espsha, sha256_mbedtls, sizeof(sha256_espsha), "SHA256 results should match");
 
-#if SOC_SHA_SUPPORT_SHA512
+#if SOC_SHA_SUPPORT_SHA512 && CONFIG_MBEDTLS_SHA512_C
     TEST_ASSERT_EQUAL_MEMORY_MESSAGE(sha512_espsha, sha512_mbedtls, sizeof(sha512_espsha), "SHA512 results should match");
 #endif
 }

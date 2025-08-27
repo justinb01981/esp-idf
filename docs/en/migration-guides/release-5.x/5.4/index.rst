@@ -6,4 +6,9 @@ Migration from 5.3 to 5.4
 .. toctree::
     :maxdepth: 1
 
+    gcc
     system
+    bluetooth-classic
+    storage
+    wifi
+    protocols

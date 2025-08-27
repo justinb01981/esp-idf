@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2022-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2022-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -8,7 +8,11 @@
 #include_next <sys/lock.h>
 #include "sdkconfig.h"
 
-#ifdef _RETARGETABLE_LOCKING
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#if defined(_RETARGETABLE_LOCKING) || defined(CONFIG_LIBC_PICOLIBC)
 
 /* Actual platfrom-specific definition of struct __lock.
  * The size here should be sufficient for a FreeRTOS mutex.
@@ -49,3 +53,7 @@ void _lock_release(_lock_t *plock);
 void _lock_release_recursive(_lock_t *plock);
 
 #endif // _RETARGETABLE_LOCKING
+
+#ifdef __cplusplus
+}
+#endif

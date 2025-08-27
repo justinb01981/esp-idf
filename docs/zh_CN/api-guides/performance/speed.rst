@@ -4,7 +4,7 @@
 :link_to_translation:`en:[English]`
 
 {IDF_TARGET_CONTROLLER_CORE_CONFIG:default="CONFIG_BT_CTRL_PINNED_TO_CORE", esp32="CONFIG_BTDM_CTRL_PINNED_TO_CORE_CHOICE", esp32s3="CONFIG_BT_CTRL_PINNED_TO_CORE_CHOICE"}
-{IDF_TARGET_RF_TYPE:default="Wi-Fi/蓝牙", esp32s2="Wi-Fi", esp32c6="Wi-Fi/蓝牙/802.15.4", esp32h2="蓝牙/802.15.4, esp32c5="Wi-Fi/蓝牙/802.15.4"}
+{IDF_TARGET_RF_TYPE:default="Wi-Fi/蓝牙", esp32s2="Wi-Fi", esp32c6="Wi-Fi/蓝牙/802.15.4", esp32c61="Wi-Fi/蓝牙", esp32h2="蓝牙/802.15.4", esp32h21="蓝牙/802.15.4", esp32h4="蓝牙/802.15.4", esp32c5="Wi-Fi/蓝牙/802.15.4"}
 
 概述
 -----------
@@ -87,6 +87,7 @@
     :SOC_CPU_HAS_FPU: - 避免使用浮点运算 ``float``。尽管 {IDF_TARGET_NAME} 具备单精度浮点运算器，但是浮点运算总是慢于整数运算。因此可以考虑使用不同的整数表示方法进行运算，如定点表示法，或者将部分计算用整数运算后再切换为浮点运算。
     :not SOC_CPU_HAS_FPU: - 避免使用浮点运算 ``float``。{IDF_TARGET_NAME} 通过软件模拟进行浮点运算，因此速度非常慢。可以考虑使用不同的整数表示方法进行运算，如定点表示法，或者将部分计算用整数运算后再切换为浮点运算。
     - 避免使用双精度浮点运算 ``double``。{IDF_TARGET_NAME} 通过软件模拟进行双精度浮点运算，因此速度非常慢。可以考虑使用基于整数的表示方法或单精度浮点数。
+    :CONFIG_ESP_ROM_HAS_SUBOPTIMAL_NEWLIB_ON_MISALIGNED_MEMORY: - 在性能要求较高的代码段中，应避免执行未对齐的 4 字节内存访问。为提升性能，可以考虑启用 :ref:`CONFIG_LIBC_OPTIMIZED_MISALIGNED_ACCESS`。启用此选项将额外占用约 190 字节的 IRAM 和 870 字节的 flash 存储。请注意，正确对齐的内存操作始终能够以全速执行，且不会产生性能损耗。
 
 
 .. only:: esp32s2 or esp32s3 or esp32p4
@@ -128,6 +129,7 @@
     - 通过调低应用日志默认等级 :ref:`CONFIG_LOG_DEFAULT_LEVEL` （引导加载程序日志等级的相应配置为 :ref:`CONFIG_BOOTLOADER_LOG_LEVEL`）来减少日志输出量。这样做不仅可以减小二进制文件大小，还可以节省一些 CPU 用于格式化字符串的时间。
     :not SOC_USB_OTG_SUPPORTED: - 增加 :ref:`CONFIG_ESP_CONSOLE_UART_BAUDRATE` ，可以提高日志输出速度。
     :SOC_USB_OTG_SUPPORTED: - 增加 :ref:`CONFIG_ESP_CONSOLE_UART_BAUDRATE` ，可以提高日志输出速度。如果使用内置 USB-CDC 作为串口控制台，那么串口传输速率不会受配置的波特率影响。
+    - 如果应用程序不需要动态更改日志级别，并且不需要使用标签来控制每个模块的日志，建议禁用 :ref:`CONFIG_LOG_DYNAMIC_LEVEL_CONTROL` 并更改 :ref:`CONFIG_LOG_TAG_LEVEL_IMPL`。与默认选项相比，这可以减少内存使用，并且将应用程序中的日志操作速度提高约 10 倍。
 
 不建议的选项
 ^^^^^^^^^^^^^^^^^^
@@ -153,6 +155,8 @@
       IRAM 资源有限，使用更多的 IRAM 可能会减少可用的 DRAM。因此，将代码移动到 IRAM 需要有所取舍。更多信息参见 :ref:`iram` 。
 
     -  针对不需要放置在 IRAM 中的单个源文件，可以重新启用跳转表优化。这将提高大型 ``switch cases`` 代码中的热路径性能。关于如何在编译单个源文件时添加 -fjump-tables -ftree-switch-conversion 选项，参见 :ref:`component_build_control` 。
+
+    - 许多 ESP-IDF 组件和驱动程序提供配置选项，将性能关键函数放置在 IRAM 中以减少延迟并提高速度。这些选项通常具有类似 ``CONFIG_*_IN_IRAM``、``CONFIG_*_ISR_IN_IRAM`` 或 ``CONFIG_*_IRAM_OPT`` 的名称。一些示例包括 :ref:`CONFIG_FREERTOS_IN_IRAM` 用于 FreeRTOS 函数，:ref:`CONFIG_ESP_WIFI_IRAM_OPT` 用于 Wi-Fi 操作，:ref:`CONFIG_UART_ISR_IN_IRAM` 用于 UART 中断处理，:ref:`CONFIG_SPI_MASTER_ISR_IN_IRAM` 用于 SPI 操作。这些选项以 IRAM 使用量换取速度，因此应根据应用程序的性能要求和可用 IRAM 空间有选择地使用。
 
 减少启动时间
 ----------------------------
@@ -231,7 +235,7 @@ ESP-IDF 启动的系统任务预设了固定优先级。启动时，一些任务
 
         - 以太网驱动程序会创建一个 MAC 任务，用于接收以太网帧。如果使用默认配置 ``ETH_MAC_DEFAULT_CONFIG`` ，则该任务为中高优先级 (15) 且并未固定在特定内核上执行。可以在以太网 MAC 初始化时输入自定义 :cpp:class:`eth_mac_config_t` 结构体来更改此设置。
         - 如果使用 :doc:`/api-reference/protocols/mqtt` 组件，它会创建优先级默认为 5 的任务（ :ref:`可配置 <CONFIG_MQTT_TASK_PRIORITY>` ，也可通过 :ref:`CONFIG_MQTT_USE_CUSTOM_CONFIG` 调整）。该任务未固定在特定内核上执行（ :ref:`可配置 <CONFIG_MQTT_TASK_CORE_SELECTION_ENABLED>` ）。
-        - 关于 ``mDNS`` 服务的任务优先级，参见 `性能优化 <https://espressif.github.io/esp-protocols/mdns/en/index.html#performance-optimization>`__ 。
+        - 关于 ``mDNS`` 服务的任务优先级，参见 `性能优化 <https://docs.espressif.com/projects/esp-protocols/mdns/docs/latest/en/index.html#performance-optimization>`__ 。
 
 
 设定应用程序任务优先级
@@ -298,15 +302,20 @@ ESP-IDF 支持动态 :doc:`/api-reference/system/intr_alloc` 和中断抢占。�
 提高 I/O 性能
 ----------------------------------
 
-使用标准 C 库函数，如 ``fread`` 和 ``fwrite`` 时，相较于使用平台特定的不带缓冲系统调用，I/O 性能可能更慢，如 ``read`` 和 ``write`` 。标准 C 库函数是为可移植性而设计的，它们会在执行时会引入一定开销和缓冲延迟，因此并不适用需要较高执行速度的场景。
+使用标准 C 库函数，如 ``fread`` 和 ``fwrite``，相较于使用平台特定的不带缓冲系统调用，如 ``read`` 和 ``write``，可能会导致 I/O 性能下降。
 
-:doc:`/api-reference/storage/fatfs` 具体信息和提示如下:
+``fread`` 与 ``fwrite`` 函数是为可移植性而设计的，而非速度，其缓冲性质会引入一些额外的开销。关于如何使用这两个函数，请参考示例 :example:`storage/fatfs/getting_started`。
+
+与之相比，``read`` 与 ``write`` 函数是标准的 POSIX API，可直接通过 VFS 处理 FatFs，由 ESP-IDF 负责底层实现。关于如何使用这两个函数，请参考示例 :example:`storage/fatfs/fs_operations`。
+
+下面提供了一些提示，更多信息请见 :doc:`/api-reference/storage/fatfs`。
 
 .. list::
 
     - 读取/写入请求的最大大小等于 FatFS 簇大小（分配单元大小）。
-    - 使用 ``read`` 和 ``write`` 而非 ``fread`` 和 ``fwrite`` 可以提高性能。
-    - 要提高诸如 ``fread`` 和 ``fgets`` 等缓冲读取函数的执行速度，可以增加文件缓冲区的大小（Newlib 的默认值为 128 字节），例如 4096、8192 或 16384 字节。为此，可以在特定文件的指针上使用 ``setvbuf`` 函数进行局部更改，或者修改 :ref:`CONFIG_FATFS_VFS_FSTAT_BLKSIZE` 实现全局应用。
+    - 为了获得更好的性能，建议使用 ``read`` 和 ``write``，而非 ``fread`` 和 ``fwrite``。
+    - 要提高诸如 ``fread`` 和 ``fgets`` 等缓冲读取函数的执行速度，可以增加文件缓冲区的大小。Newlib 的默认值为 128 字节，但可将其增加到 4096、8192 或 16384 字节。为此，可以使用 ``setvbuf`` 函数对特定文件指针进行局部设置，或者通过修改 :ref:`CONFIG_FATFS_VFS_FSTAT_BLKSIZE` 设置来进行全局修改。
 
         .. note::
+
             增加缓冲区的大小会增加堆内存的使用量。

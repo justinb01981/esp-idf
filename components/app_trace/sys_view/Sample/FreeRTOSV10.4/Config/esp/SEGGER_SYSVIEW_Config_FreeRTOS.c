@@ -3,7 +3,7 @@
  *
  * SPDX-License-Identifier: BSD-1-Clause
  *
- * SPDX-FileContributor: 2017-2022 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileContributor: 2017-2025 Espressif Systems (Shanghai) CO LTD
  */
 /*********************************************************************
 *                    SEGGER Microcontroller GmbH                     *
@@ -58,12 +58,14 @@ File    : SEGGER_SYSVIEW_Config_FreeRTOS.c
 Purpose : Sample setup configuration of SystemView with FreeRTOS.
 Revision: $Rev: 7745 $
 */
+#include <string.h>
 #include "sdkconfig.h"
 #include "freertos/FreeRTOS.h"
 #include "SEGGER_SYSVIEW.h"
 #include "esp_app_trace.h"
 #include "esp_app_trace_util.h"
 #include "esp_intr_alloc.h"
+#include "esp_clk_tree.h"
 #include "esp_cpu.h"
 #include "soc/soc.h"
 #include "soc/interrupts.h"
@@ -83,11 +85,7 @@ extern const SEGGER_SYSVIEW_OS_API SYSVIEW_X_OS_TraceAPI;
 // The target device name
 #define SYSVIEW_DEVICE_NAME     CONFIG_IDF_TARGET
 // The target core name
-#if CONFIG_IDF_TARGET_ARCH_XTENSA
-#define SYSVIEW_CORE_NAME       "xtensa"
-#elif CONFIG_IDF_TARGET_ARCH_RISCV
-#define SYSVIEW_CORE_NAME       "riscv"
-#endif
+#define SYSVIEW_CORE_NAME       "core0" // In dual core, this will be renamed by OpenOCD as core1
 
 // Determine which timer to use as timestamp source
 #if CONFIG_APPTRACE_SV_TS_SOURCE_CCOUNT
@@ -103,9 +101,6 @@ extern const SEGGER_SYSVIEW_OS_API SYSVIEW_X_OS_TraceAPI;
 
 // Timer group timer divisor
 #define SYSVIEW_TIMER_DIV       2
-
-// Frequency of the timestamp, using APB as GPTimer source clock
-#define SYSVIEW_TIMESTAMP_FREQ  (esp_clk_apb_freq() / SYSVIEW_TIMER_DIV)
 
 // GPTimer handle
 gptimer_handle_t s_sv_gptimer;
@@ -156,15 +151,16 @@ static esp_apptrace_lock_t s_sys_view_lock = {.mux = portMUX_INITIALIZER_UNLOCKE
 *    Sends SystemView description strings.
 */
 static void _cbSendSystemDesc(void) {
-    char irq_str[32];
+    char irq_str[32] = "I#";
     SEGGER_SYSVIEW_SendSysDesc("N="SYSVIEW_APP_NAME",D="SYSVIEW_DEVICE_NAME",C="SYSVIEW_CORE_NAME",O=FreeRTOS");
-    snprintf(irq_str, sizeof(irq_str), "I#%d=SysTick", SYSTICK_INTR_ID);
+    strcat(itoa(SYSTICK_INTR_ID, irq_str + 2, 10), "=SysTick");
     SEGGER_SYSVIEW_SendSysDesc(irq_str);
     size_t isr_count = sizeof(esp_isr_names)/sizeof(esp_isr_names[0]);
     for (size_t i = 0; i < isr_count; ++i) {
         if (esp_isr_names[i] == NULL || (ETS_INTERNAL_INTR_SOURCE_OFF + i) == SYSTICK_INTR_ID)
             continue;
-        snprintf(irq_str, sizeof(irq_str), "I#%d=%s", ETS_INTERNAL_INTR_SOURCE_OFF + i, esp_isr_names[i]);
+        strcat(itoa(ETS_INTERNAL_INTR_SOURCE_OFF + i, irq_str + 2, 10), "=");
+        strncat(irq_str, esp_isr_names[i], sizeof(irq_str) - strlen(irq_str) - 1);
         SEGGER_SYSVIEW_SendSysDesc(irq_str);
     }
 }
@@ -175,30 +171,38 @@ static void _cbSendSystemDesc(void) {
 *
 **********************************************************************
 */
-static void SEGGER_SYSVIEW_TS_Init(void)
+static int SEGGER_SYSVIEW_TS_Init(void)
 {
     /* We only need to initialize something if we use Timer Group.
      * esp_timer and ccount can be used as is.
      */
 #if TS_USE_TIMERGROUP
+    // get clock source frequency
+    uint32_t counter_src_hz = 0;
+    ESP_ERROR_CHECK(esp_clk_tree_src_get_freq_hz(
+        (soc_module_clk_t)GPTIMER_CLK_SRC_DEFAULT,
+        ESP_CLK_TREE_SRC_FREQ_PRECISION_CACHED, &counter_src_hz));
     gptimer_config_t config = {
         .clk_src = GPTIMER_CLK_SRC_DEFAULT,
         .direction = GPTIMER_COUNT_UP,
-        .resolution_hz = SYSVIEW_TIMESTAMP_FREQ,
+        .resolution_hz = counter_src_hz / SYSVIEW_TIMER_DIV,
     };
     // pick any free GPTimer instance
     ESP_ERROR_CHECK(gptimer_new_timer(&config, &s_sv_gptimer));
     /* Start counting */
     gptimer_enable(s_sv_gptimer);
     gptimer_start(s_sv_gptimer);
+    return config.resolution_hz;
+#else
+    return SYSVIEW_TIMESTAMP_FREQ;
 #endif // TS_USE_TIMERGROUP
 }
 
 void SEGGER_SYSVIEW_Conf(void) {
     U32 disable_evts = 0;
 
-    SEGGER_SYSVIEW_TS_Init();
-    SEGGER_SYSVIEW_Init(SYSVIEW_TIMESTAMP_FREQ, SYSVIEW_CPU_FREQ,
+    int timestamp_freq = SEGGER_SYSVIEW_TS_Init();
+    SEGGER_SYSVIEW_Init(timestamp_freq, SYSVIEW_CPU_FREQ,
                         &SYSVIEW_X_OS_TraceAPI, _cbSendSystemDesc);
     SEGGER_SYSVIEW_SetRAMBase(SYSVIEW_RAM_BASE);
 

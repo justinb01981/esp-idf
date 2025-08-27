@@ -1,10 +1,9 @@
 /*
- * SPDX-FileCopyrightText: 2023-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2023-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
 /**
- * TODO: IDF-8002
  * Simplified memory map for the bootloader.
  *  Make sure the bootloader can load into main memory without overwriting itself.
  *
@@ -26,7 +25,7 @@ bootloader_usable_dram_end = 0x4ff3abd0;
 bootloader_stack_overhead = 0x2000; /* For safety margin between bootloader data section and startup stacks */
 bootloader_dram_seg_len = 0x5000;
 bootloader_iram_loader_seg_len = 0x7000;
-bootloader_iram_seg_len = 0x2000;
+bootloader_iram_seg_len = 0x2D00;
 
 /* Start of the lower region is determined by region size and the end of the higher region */
 bootloader_dram_seg_end = bootloader_usable_dram_end - bootloader_stack_overhead;
@@ -93,6 +92,7 @@ SECTIONS
     *libesp_hw_support.a:rtc_time.*(.literal .text .literal.* .text.*)
     *libesp_hw_support.a:regi2c_ctrl.*(.literal .text .literal.* .text.*)
     *libefuse.a:*.*(.literal .text .literal.* .text.*)
+    *libriscv.a:rv_utils.*(.literal .text .literal.* .text.*)
     *(.fini.literal)
     *(.fini)
     *(.gnu.version)
@@ -271,6 +271,16 @@ SECTIONS
    */
   /DISCARD/ : { *(.rela.*) }
 
+  /**
+   * This section is not included in the binary image; it is only present in the ELF file.
+   * It is used to keep certain symbols in the ELF file.
+   */
+  .noload 0 (INFO) :
+  {
+    _noload_keep_in_elf_start = ABSOLUTE(.);
+    KEEP(*(.noload_keep_in_elf .noload_keep_in_elf.*))
+    _noload_keep_in_elf_end = ABSOLUTE(.);
+  }
 }
 
 

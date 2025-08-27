@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2022-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2022-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -10,10 +10,16 @@
 #include "hal/misc.h"
 #include "hal/assert.h"
 #include "soc/gpio_ext_struct.h"
+#include "soc/gpio_ext_reg.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+// Get SDM register base address with giving group number
+#define SDM_LL_GET_HW(group_id) ((group_id == 0) ? (&SDM) : NULL)
+
+#define SDM_LL_PRESCALE_MAX     (GPIO_EXT_SD0_PRESCALE_V + 1)
 
 /**
  * @brief Set Sigma-delta enable
@@ -49,7 +55,7 @@ static inline void sdm_ll_set_pulse_density(gpio_sd_dev_t *hw, int channel, int8
  */
 static inline void sdm_ll_set_prescale(gpio_sd_dev_t *hw, int channel, uint32_t prescale)
 {
-    HAL_ASSERT(prescale && prescale <= 256);
+    HAL_ASSERT(prescale && prescale <= SDM_LL_PRESCALE_MAX);
     HAL_FORCE_MODIFY_U32_REG_FIELD(hw->channel[channel], prescale, prescale - 1);
 }
 

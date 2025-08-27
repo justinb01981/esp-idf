@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2023-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2023-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -7,11 +7,11 @@
 
 #include <stdbool.h>
 #include <string.h>
-#include "sdkconfig.h"  // TODO: IDF-9197 remove
 #include "hal/assert.h"
 #include "hal/ecc_types.h"
 #include "soc/ecc_mult_reg.h"
 #include "soc/pcr_struct.h"
+#include "soc/pcr_reg.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -45,6 +45,20 @@ static inline void ecc_ll_reset_register(void)
     PCR.ecc_conf.ecc_rst_en = 0;
     // Clear reset on ECDSA, otherwise ECC is held in reset
     PCR.ecdsa_conf.ecdsa_rst_en = 0;
+}
+
+static inline void ecc_ll_power_up(void)
+{
+    /* Power up the ECC peripheral (default state is power-down) */
+    REG_CLR_BIT(PCR_ECC_PD_CTRL_REG, PCR_ECC_MEM_PD);
+    REG_CLR_BIT(PCR_ECC_PD_CTRL_REG, PCR_ECC_MEM_FORCE_PD);
+}
+
+static inline void ecc_ll_power_down(void)
+{
+    /* Power down the ECC peripheral */
+    REG_CLR_BIT(PCR_ECC_PD_CTRL_REG, PCR_ECC_MEM_FORCE_PU);
+    REG_SET_BIT(PCR_ECC_PD_CTRL_REG, PCR_ECC_MEM_PD);
 }
 
 static inline void ecc_ll_enable_interrupt(void)
@@ -107,11 +121,11 @@ static inline void ecc_ll_set_mode(ecc_mode_t mode)
 static inline void ecc_ll_set_curve(ecc_curve_t curve)
 {
     switch(curve) {
-        case ECC_CURVE_SECP256R1:
-            REG_SET_BIT(ECC_MULT_CONF_REG, ECC_MULT_KEY_LENGTH);
-            break;
         case ECC_CURVE_SECP192R1:
-            REG_CLR_BIT(ECC_MULT_CONF_REG, ECC_MULT_KEY_LENGTH);
+        case ECC_CURVE_SECP256R1:
+        case ECC_CURVE_SECP384R1:
+        case ECC_CURVE_SM2:
+            REG_SET_FIELD(ECC_MULT_CONF_REG, ECC_MULT_KEY_LENGTH, curve);
             break;
         default:
             HAL_ASSERT(false && "Unsupported curve");
@@ -131,6 +145,15 @@ static inline void ecc_ll_set_mod_base(ecc_mod_base_t base)
         default:
             HAL_ASSERT(false && "Unsupported curve");
             return;
+    }
+}
+
+static inline void ecc_ll_enable_constant_time_point_mul(bool enable)
+{
+    if (enable) {
+        REG_SET_BIT(ECC_MULT_CONF_REG, ECC_MULT_SECURITY_MODE);
+    } else {
+        REG_CLR_BIT(ECC_MULT_CONF_REG, ECC_MULT_SECURITY_MODE);
     }
 }
 

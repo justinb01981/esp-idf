@@ -4,18 +4,12 @@ if(${target} STREQUAL "linux")
     return() # This component is not supported by the POSIX/Linux simulator
 endif()
 
-if(${target} STREQUAL "esp32c61")
-    return() # TODO: [ESP32C61] IDF-9268
-endif()
-
 set(srcs "src/core_dump_init.c"
          "src/core_dump_common.c"
          "src/core_dump_flash.c"
          "src/core_dump_uart.c"
          "src/core_dump_elf.c"
-         "src/core_dump_binary.c"
-         "src/core_dump_sha.c"
-         "src/core_dump_crc.c")
+         "src/core_dump_sha.c")
 
 set(includes "include")
 set(priv_includes "include_core_dump")
@@ -38,13 +32,8 @@ idf_component_register(SRCS ${srcs}
                        LDFRAGMENTS linker.lf
                        PRIV_REQUIRES esp_partition spi_flash bootloader_support mbedtls esp_rom soc esp_system
                                      esp_driver_gpio
-                                     # [refactor-todo] esp_flash_internal.h -> spi_common_internal.h requires cleanup
-                                     driver
                       )
 
 # make sure 'core_dump_init' object file is considered by the linker
 target_link_libraries(${COMPONENT_LIB} INTERFACE "-u esp_system_include_coredump_init")
-
-if(CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF)
-  target_link_libraries(${COMPONENT_LIB} PRIVATE idf::esp_app_format)
-endif()
+target_link_libraries(${COMPONENT_LIB} PRIVATE idf::esp_app_format)

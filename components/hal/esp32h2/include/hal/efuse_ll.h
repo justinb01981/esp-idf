@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2022-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2022-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -11,6 +11,7 @@
 #include "soc/efuse_periph.h"
 #include "hal/assert.h"
 #include "rom/efuse.h"
+#include "hal/ecdsa_types.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -19,6 +20,11 @@ extern "C" {
 // Always inline these functions even no gcc optimization is applied.
 
 /******************* eFuse fields *************************/
+
+__attribute__((always_inline)) static inline uint32_t efuse_ll_get_ecdsa_curve_mode(void)
+{
+    return EFUSE.rd_repeat_data0.ecdsa_curve_mode;
+}
 
 __attribute__((always_inline)) static inline uint32_t efuse_ll_get_flash_crypt_cnt(void)
 {
@@ -107,8 +113,9 @@ __attribute__((always_inline)) static inline uint32_t efuse_ll_get_ecdsa_key_blk
     return EFUSE.conf.cfg_ecdsa_blk;
 }
 
-__attribute__((always_inline)) static inline void efuse_ll_set_ecdsa_key_blk(int efuse_blk)
+__attribute__((always_inline)) static inline void efuse_ll_set_ecdsa_key_blk(ecdsa_curve_t curve, int efuse_blk)
 {
+    (void) curve;
     EFUSE.conf.cfg_ecdsa_blk = efuse_blk;
 }
 

@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2016-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2016-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -14,6 +14,7 @@ extern "C" {
 #include "esp_heap_caps.h"
 #include "esp_err.h"
 #include "freertos/FreeRTOS.h"
+#include "soc/uart_channel.h"
 
 // Forward declaration. Definition in linenoise/linenoise.h.
 typedef struct linenoiseCompletions linenoiseCompletions;
@@ -88,8 +89,8 @@ typedef struct {
 {                                                   \
     .channel = CONFIG_ESP_CONSOLE_UART_NUM,         \
     .baud_rate = CONFIG_ESP_CONSOLE_UART_BAUDRATE,  \
-    .tx_gpio_num = CONFIG_ESP_CONSOLE_UART_TX_GPIO, \
-    .rx_gpio_num = CONFIG_ESP_CONSOLE_UART_RX_GPIO, \
+    .tx_gpio_num = (CONFIG_ESP_CONSOLE_UART_TX_GPIO >= 0) ? CONFIG_ESP_CONSOLE_UART_TX_GPIO : UART_NUM_0_TXD_DIRECT_GPIO_NUM, \
+    .rx_gpio_num = (CONFIG_ESP_CONSOLE_UART_RX_GPIO >= 0) ? CONFIG_ESP_CONSOLE_UART_RX_GPIO : UART_NUM_0_RXD_DIRECT_GPIO_NUM, \
 }
 #else
 #define ESP_CONSOLE_DEV_UART_CONFIG_DEFAULT()      \
@@ -129,6 +130,12 @@ typedef struct {
 
 #define ESP_CONSOLE_DEV_USB_SERIAL_JTAG_CONFIG_DEFAULT() {}
 #endif // CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG || (defined __DOXYGEN__ && SOC_USB_SERIAL_JTAG_SUPPORTED)
+
+typedef enum {
+    ESP_CONSOLE_HELP_VERBOSE_LEVEL_0       = 0,
+    ESP_CONSOLE_HELP_VERBOSE_LEVEL_1       = 1,
+    ESP_CONSOLE_HELP_VERBOSE_LEVEL_MAX_NUM = 2
+} esp_console_help_verbose_level_e;
 
 /**
  * @brief initialize console module
@@ -230,6 +237,16 @@ typedef struct {
 esp_err_t esp_console_cmd_register(const esp_console_cmd_t *cmd);
 
 /**
+ * @brief Deregister console command
+ * @param cmd_name Name of the command to be deregistered. Must not be NULL, must not contain spaces.
+ *
+ * @return
+ *      - ESP_OK on success
+ *      - ESP_ERR_INVALID_ARG if command is not registered
+ */
+esp_err_t esp_console_cmd_deregister(const char *cmd_name);
+
+/**
  * @brief Run command line
  * @param cmdline command line (command name followed by a number of arguments)
  * @param[out] cmd_ret return code from the command (set if command was run)
@@ -313,6 +330,27 @@ const char *esp_console_get_hint(const char *buf, int *color, int *bold);
  *      - ESP_ERR_INVALID_STATE, if esp_console_init wasn't called
  */
 esp_err_t esp_console_register_help_command(void);
+
+/**
+ * @brief Deregister a 'help' command
+ *
+ * @return esp_err_t
+ *      - ESP_OK on success
+ *      - other on failure
+ */
+esp_err_t esp_console_deregister_help_command(void);
+
+/**
+ * @brief Set the verbose level for 'help' command
+ *
+ * Set the verbose level for 'help' command. Higher verbose level shows more details.
+ * Valid verbose_level values are described in esp_console_help_verbose_level_e and must be lower than `ESP_CONSOLE_HELP_VERBOSE_LEVEL_MAX_NUM`.
+ *
+ * @return
+ *      - ESP_OK on success
+ *      - ESP_ERR_INVALID_ARG, if invalid verbose level is provided
+ */
+esp_err_t esp_console_set_help_verbose_level(esp_console_help_verbose_level_e verbose_level);
 
 /******************************************************************************
  *              Console REPL
@@ -413,12 +451,22 @@ esp_err_t esp_console_new_repl_usb_serial_jtag(const esp_console_dev_usb_serial_
 /**
  * @brief Start REPL environment
  * @param[in] repl REPL handle returned from esp_console_new_repl_xxx
- * @note Once the REPL gets started, it won't be stopped until the user calls repl->del(repl) to destroy the REPL environment.
+ * @note Once the REPL gets started, it won't be stopped until the user calls esp_console_stop_repl to destroy the REPL environment.
  * @return
  *      - ESP_OK on success
  *      - ESP_ERR_INVALID_STATE, if repl has started already
  */
 esp_err_t esp_console_start_repl(esp_console_repl_t *repl);
+
+/**
+ * @brief Stop REPL environment
+ *
+ * @param[in] repl REPL handle returned from esp_console_new_repl_xxx
+ * @return
+ *      - ESP_OK on success
+ *      - others on failure
+ */
+esp_err_t esp_console_stop_repl(esp_console_repl_t *repl);
 
 #ifdef __cplusplus
 }

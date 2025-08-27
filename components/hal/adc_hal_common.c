@@ -1,11 +1,10 @@
 /*
- * SPDX-FileCopyrightText: 2019-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2019-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
 
 #include <sys/param.h>
-#include "sdkconfig.h"
 #include "soc/soc_caps.h"
 #include "hal/adc_hal_common.h"
 #include "hal/adc_ll.h"
@@ -18,8 +17,8 @@ static adc_ll_controller_t get_controller(adc_unit_t unit, adc_hal_work_mode_t w
 {
     if (unit == ADC_UNIT_1) {
         switch (work_mode) {
-#if SOC_ULP_HAS_ADC
-            case ADC_HAL_ULP_FSM_MODE:
+#if SOC_ULP_HAS_ADC || SOC_LP_CORE_SUPPORT_LP_ADC
+            case ADC_HAL_LP_MODE:
                 return ADC_LL_CTRL_ULP;
 #endif
             case ADC_HAL_SINGLE_READ_MODE:
@@ -35,8 +34,8 @@ static adc_ll_controller_t get_controller(adc_unit_t unit, adc_hal_work_mode_t w
         }
     } else {
         switch (work_mode) {
-#if SOC_ULP_HAS_ADC
-            case ADC_HAL_ULP_FSM_MODE:
+#if SOC_ULP_HAS_ADC || SOC_LP_CORE_SUPPORT_LP_ADC
+            case ADC_HAL_LP_MODE:
                 return ADC_LL_CTRL_ULP;
 #endif
 #if !SOC_ADC_ARBITER_SUPPORTED                  //No ADC2 arbiter on ESP32
@@ -92,16 +91,9 @@ void adc_hal_calibration_init(adc_unit_t adc_n)
     adc_ll_calibration_init(adc_n);
 }
 
-static uint32_t s_previous_init_code[SOC_ADC_PERIPH_NUM] = {
-    [0 ... (SOC_ADC_PERIPH_NUM - 1)] = -1,
-};
-
 void adc_hal_set_calibration_param(adc_unit_t adc_n, uint32_t param)
 {
-    if (param != s_previous_init_code[adc_n]) {
-        adc_ll_set_calibration_param(adc_n, param);
-        s_previous_init_code[adc_n] = param;
-    }
+    adc_ll_set_calibration_param(adc_n, param);
 }
 
 #if SOC_ADC_SELF_HW_CALI_SUPPORTED

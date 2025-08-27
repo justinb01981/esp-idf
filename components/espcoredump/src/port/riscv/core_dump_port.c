@@ -9,6 +9,10 @@
  * @brief Core dump port implementation for RISC-V based boards.
  */
 
+#include "sdkconfig.h"
+
+#if CONFIG_ESP_COREDUMP_ENABLE
+
 #include <string.h>
 #include <stdbool.h>
 #include "soc/soc_memory_layout.h"
@@ -29,15 +33,13 @@ const static char TAG[] __attribute__((unused)) = "esp_core_dump_port";
 #define COREDUMP_FAKE_STACK_START           0x20000000U
 #define COREDUMP_FAKE_STACK_LIMIT           0x30000000U
 
-#if CONFIG_ESP_COREDUMP_ENABLE
-
 #define min(a,b) ((a) < (b) ? (a) : (b))
 #define max(a,b) ((a) < (b) ? (b) : (a))
 
 /**
  * Union representing the registers of the CPU as they will be written
  * in the core dump.
- * Registers can be adressed with their names thanks to the structure, or as
+ * Registers can be addressed with their names thanks to the structure, or as
  * an array of 32 words.
  */
 #define RISCV_GP_REGS_COUNT 32
@@ -222,7 +224,7 @@ uint32_t esp_core_dump_get_isr_stack_end(void)
 static inline bool esp_core_dump_task_stack_end_is_sane(uint32_t sp)
 {
     return esp_ptr_in_dram((void *)sp)
-#if CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY
+#if CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM
            || esp_stack_ptr_in_extram(sp)
 #endif
 #if CONFIG_ESP_SYSTEM_ALLOW_RTC_FAST_MEM_AS_HEAP
@@ -315,7 +317,7 @@ bool esp_core_dump_mem_seg_is_sane(uint32_t addr, uint32_t sz)
 }
 
 /**
- * Get the task's registers dump when the panic occured.
+ * Get the task's registers dump when the panic occurred.
  * Returns the size, in bytes, of the data pointed by reg_dumps.
  * The data pointed by reg_dump are allocated statically, thus, they must be
  * used (or copied) before calling this function again.
@@ -377,7 +379,7 @@ uint32_t esp_core_dump_get_extra_info(void **info)
     return size;
 }
 
-#if CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH && CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF
+#if CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH
 
 void esp_core_dump_summary_parse_extra_info(esp_core_dump_summary_t *summary, void *ei_data)
 {
@@ -445,6 +447,6 @@ void esp_core_dump_summary_parse_backtrace_info(esp_core_dump_bt_info_t *bt_info
     bt_info->dump_size = dump_size;
 }
 
-#endif /* #if CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH && CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF */
+#endif /* #if CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH */
 
-#endif
+#endif /* CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH */

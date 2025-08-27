@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2023-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2023-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -16,11 +16,23 @@
 #include <stdint.h>
 #include "hal/ecdsa_types.h"
 #include "soc/soc_caps.h"
+#include "hal/config.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
+#if HAL_CONFIG(ECDSA_GEN_SIG_CM)
+
+#define ECDSA_SIGN_MAX_DUMMY_OP_COUNT 0x7
+
+/* This value defines the maximum dummy operation count for the ECDSA signature countermeasure.
+   Higher the number, better the countermeasure's effectiveness against attacks.
+   At the same time higher number leads to slower performance.
+   After the countermeasure is enabled, hardware ECDSA signature operation
+   shall take time approximately equal to original time multiplied by this number.
+   If you observe that the reduced performance is affecting your use-case then you may try reducing this time to the minimum. */
+#endif /* HAL_CONFIG_ECDSA_GEN_SIG_CM */
 /*
  * ECDSA peripheral config structure
  */
@@ -28,7 +40,7 @@ typedef struct {
     ecdsa_mode_t mode;              /* Mode of operation */
     ecdsa_curve_t curve;            /* Curve to use for operation */
     ecdsa_sha_mode_t sha_mode;      /* Source of SHA that needs to be signed */
-    int efuse_key_blk;              /* Efuse block to use as ECDSA key (The purpose of the efuse block must be ECDSA_KEY) */
+    int efuse_key_blk;              /*!< The efuse block where ECDSA key is stored.  If two blocks are used to store the key, then the macro HAL_ECDSA_COMBINE_KEY_BLOCKS() can be used to combine them. The macro is defined in hal/ecdsa_types.h */
     bool use_km_key;                /* Use an ECDSA key from the Key Manager peripheral */
     ecdsa_sign_type_t sign_type;    /* Type of signature generation */
     uint16_t loop_number;           /* Determines the loop number value in deterministic derivation algorithm to derive K.
@@ -86,7 +98,7 @@ void ecdsa_hal_export_pubkey(ecdsa_hal_config_t *conf, uint8_t *pub_x, uint8_t *
  */
 bool ecdsa_hal_get_operation_result(void);
 
-#ifdef SOC_ECDSA_SUPPORT_DETERMINISTIC_MODE
+#if SOC_ECDSA_SUPPORT_DETERMINISTIC_MODE && !SOC_ECDSA_SUPPORT_HW_DETERMINISTIC_LOOP
 /**
  * @brief Check if the K value derived by the peripheral during deterministic signature generation is valid
  *
@@ -95,7 +107,7 @@ bool ecdsa_hal_get_operation_result(void);
  */
 bool ecdsa_hal_det_signature_k_check(void);
 
-#endif /* SOC_ECDSA_SUPPORT_DETERMINISTIC_MODE */
+#endif /* SOC_ECDSA_SUPPORT_DETERMINISTIC_MODE && !SOC_ECDSA_SUPPORT_HW_DETERMINISTIC_LOOP */
 
 #ifdef __cplusplus
 }

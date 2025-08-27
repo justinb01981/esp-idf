@@ -3,10 +3,11 @@
 # internal use only for CI
 # get latest MR information by source branch
 #
-# SPDX-FileCopyrightText: 2020-2024 Espressif Systems (Shanghai) CO LTD
+# SPDX-FileCopyrightText: 2020-2025 Espressif Systems (Shanghai) CO LTD
 # SPDX-License-Identifier: Apache-2.0
 #
 import argparse
+import logging
 import os
 import subprocess
 import typing as t
@@ -16,7 +17,8 @@ from gitlab_api import Gitlab
 from idf_ci_utils import IDF_PATH
 
 if t.TYPE_CHECKING:
-    from gitlab.v4.objects import ProjectCommit, ProjectMergeRequest
+    from gitlab.v4.objects import ProjectCommit
+    from gitlab.v4.objects import ProjectMergeRequest
 
 
 def _get_mr_obj(source_branch: str) -> t.Optional['ProjectMergeRequest']:
@@ -81,10 +83,10 @@ def get_modified_component(filepath: str) -> t.Optional[str]:
     for part in f_path.parts[1:]:
         if component_parent_dirs[-1] == 'components' or component_parent_dirs[-1].endswith('common_components'):
             if part not in _COMPONENT_NAME_DIR_RECORDS:
-                print('Found component "%s" in path "%s"' % (part, component_parent_dirs))
+                logging.debug('Found component "%s" in path "%s"' % (part, component_parent_dirs))
                 _COMPONENT_NAME_DIR_RECORDS[part] = component_parent_dirs
             elif _COMPONENT_NAME_DIR_RECORDS.get(part) != component_parent_dirs:
-                print(
+                logging.debug(
                     'WARNING!!! Found component "%s" in path "%s" and "%s"'
                     % (part, component_parent_dirs, _COMPONENT_NAME_DIR_RECORDS.get(part))
                 )
@@ -112,16 +114,6 @@ def get_mr_components(
             components.add(modified_component)
 
     return list(components)
-
-
-def get_target_in_tags(tags: str) -> str:
-    from idf_pytest.constants import TARGET_MARKERS
-
-    for x in tags.split(','):
-        if x in TARGET_MARKERS:
-            return x
-
-    raise RuntimeError(f'No target marker found in {tags}')
 
 
 def _print_list(_list: t.List[str], separator: str = '\n') -> None:
@@ -158,7 +150,5 @@ if __name__ == '__main__':
         _print_list([commit.id for commit in get_mr_commits(args.src_branch)])
     elif args.action == 'components':
         _print_list(get_mr_components(args.src_branch, args.modified_files))
-    elif args.action == 'target_in_tags':
-        print(get_target_in_tags(args.tags))
     else:
         raise NotImplementedError('not possible to get here')

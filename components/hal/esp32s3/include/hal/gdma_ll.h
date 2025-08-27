@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2020-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2020-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -62,12 +62,16 @@ extern "C" {
 
 #define GDMA_LL_AHB_DESC_ALIGNMENT    4
 
+#define GDMA_LL_AHB_BURST_SIZE_ADJUSTABLE 1 // AHB GDMA supports adjustable burst size
+#define GDMA_LL_AHB_RX_BURST_NEEDS_ALIGNMENT  1
+#define GDMA_LL_MAX_BURST_SIZE_PSRAM          64 // PSRAM controller doesn't support burst access with size > 64 bytes
+
 ///////////////////////////////////// Common /////////////////////////////////////////
 
 /**
  * @brief Enable the bus clock for the DMA module
  */
-static inline void gdma_ll_enable_bus_clock(int group_id, bool enable)
+static inline void _gdma_ll_enable_bus_clock(int group_id, bool enable)
 {
     (void)group_id;
     SYSTEM.perip_clk_en1.dma_clk_en = enable;
@@ -75,12 +79,15 @@ static inline void gdma_ll_enable_bus_clock(int group_id, bool enable)
 
 /// use a macro to wrap the function, force the caller to use it in a critical section
 /// the critical section needs to declare the __DECLARE_RCC_ATOMIC_ENV variable in advance
-#define gdma_ll_enable_bus_clock(...) (void)__DECLARE_RCC_ATOMIC_ENV; gdma_ll_enable_bus_clock(__VA_ARGS__)
+#define gdma_ll_enable_bus_clock(...) do { \
+        (void)__DECLARE_RCC_ATOMIC_ENV; \
+        _gdma_ll_enable_bus_clock(__VA_ARGS__); \
+    } while(0)
 
 /**
  * @brief Reset the DMA module
  */
-static inline void gdma_ll_reset_register(int group_id)
+static inline void _gdma_ll_reset_register(int group_id)
 {
     (void)group_id;
     SYSTEM.perip_rst_en1.dma_rst = 1;
@@ -89,7 +96,10 @@ static inline void gdma_ll_reset_register(int group_id)
 
 /// use a macro to wrap the function, force the caller to use it in a critical section
 /// the critical section needs to declare the __DECLARE_RCC_ATOMIC_ENV variable in advance
-#define gdma_ll_reset_register(...) (void)__DECLARE_RCC_ATOMIC_ENV; gdma_ll_reset_register(__VA_ARGS__)
+#define gdma_ll_reset_register(...) do { \
+        (void)__DECLARE_RCC_ATOMIC_ENV; \
+        _gdma_ll_reset_register(__VA_ARGS__); \
+    } while(0)
 
 /**
  * @brief Force enable register clock
@@ -177,20 +187,20 @@ static inline void gdma_ll_rx_reset_channel(gdma_dev_t *dev, uint32_t channel)
 }
 
 /**
- * @brief Set DMA RX channel memory block size based on the alignment requirement
- * @param align Supported value: 16/32/64
+ * @brief Set DMA RX channel memory block size based on the burst requirement
+ * @param burst_sz Supported value: 16/32/64
  */
-static inline void gdma_ll_rx_set_ext_mem_block_size(gdma_dev_t *dev, uint32_t channel, uint8_t align)
+static inline void gdma_ll_rx_set_burst_size(gdma_dev_t *dev, uint32_t channel, uint32_t burst_sz)
 {
     uint32_t block_size = 0;
-    switch (align) {
-    case 64: // 64 Bytes alignment
+    switch (burst_sz) {
+    case 64:
         block_size = GDMA_LL_EXT_MEM_BK_SIZE_64B;
         break;
-    case 32: // 32 Bytes alignment
+    case 32:
         block_size = GDMA_LL_EXT_MEM_BK_SIZE_32B;
         break;
-    case 16: // 16 Bytes alignment
+    case 16:
         block_size = GDMA_LL_EXT_MEM_BK_SIZE_16B;
         break;
     default:
@@ -461,20 +471,20 @@ static inline void gdma_ll_tx_reset_channel(gdma_dev_t *dev, uint32_t channel)
 }
 
 /**
- * @brief Set DMA TX channel memory block size based on the alignment requirement
- * @param align Supported value: 16/32/64
+ * @brief Set DMA TX channel memory block size based on the burst requirement
+ * @param burst_sz Supported value: 16/32/64
  */
-static inline void gdma_ll_tx_set_ext_mem_block_size(gdma_dev_t *dev, uint32_t channel, uint8_t align)
+static inline void gdma_ll_tx_set_burst_size(gdma_dev_t *dev, uint32_t channel, uint32_t burst_sz)
 {
     uint32_t block_size = 0;
-    switch (align) {
-    case 64: // 64 Bytes alignment
+    switch (burst_sz) {
+    case 64:
         block_size = GDMA_LL_EXT_MEM_BK_SIZE_64B;
         break;
-    case 32: // 32 Bytes alignment
+    case 32:
         block_size = GDMA_LL_EXT_MEM_BK_SIZE_32B;
         break;
-    case 16: // 16 Bytes alignment
+    case 16:
         block_size = GDMA_LL_EXT_MEM_BK_SIZE_16B;
         break;
     default:

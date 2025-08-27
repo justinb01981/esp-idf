@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2024-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -10,6 +10,7 @@
 #include "bt_common.h"
 #include "osi/mutex.h"
 #include "esp_attr.h"
+#include "esp_timer.h"
 
 #if (BT_HCI_LOG_INCLUDED == TRUE)
 #define BT_HCI_LOG_PRINT_TAG                     (1)
@@ -31,8 +32,8 @@ static const char s_hex_to_char_mapping[16] = {
     '8', '9', 'a', 'b', 'c', 'd', 'e', 'f'
 };
 
-bt_hci_log_t g_bt_hci_log_data_ctl  = {0};
-bt_hci_log_t g_bt_hci_log_adv_ctl  = {0};
+static bt_hci_log_t g_bt_hci_log_data_ctl  = {0};
+static bt_hci_log_t g_bt_hci_log_adv_ctl  = {0};
 
 esp_err_t bt_hci_log_init(void)
 {
@@ -98,35 +99,40 @@ static char IRAM_ATTR *bt_data_type_to_str(uint8_t data_type)
     {
     case HCI_LOG_DATA_TYPE_COMMAND:
         // hci cmd data
-        tag = "CMD";
+        tag = "C";
         break;
     case HCI_LOG_DATA_TYPE_H2C_ACL:
         // host to controller hci acl data
-        tag = "HAL";
+        tag = "H";
         break;
     case HCI_LOG_DATA_TYPE_SCO:
         // hci sco data
-        tag = "SCO";
+        tag = "S";
         break;
     case HCI_LOG_DATA_TYPE_EVENT:
         // hci event
-        tag = "EVT";
+        tag = "E";
         break;
     case HCI_LOG_DATA_TYPE_ADV:
         // controller adv report data
-        tag = "ADV";
+        tag = NULL;
         break;
     case HCI_LOG_DATA_TYPE_C2H_ACL:
         // controller to host hci acl data
-        tag = "CAL";
+        tag = "D";
         break;
     case HCI_LOG_DATA_TYPE_SELF_DEFINE:
         // self-defining data
-        tag = "ST";
+        tag = "S";
+        break;
+    case HCI_LOG_DATA_TYPE_ISO_DATA:
+        // 5.2 iso data
+        tag = "I";
+        break;
         break;
     default:
         // unknown data type
-        tag = "UK";
+        tag = "U";
         break;
     }
 
@@ -203,6 +209,8 @@ esp_err_t IRAM_ATTR bt_hci_log_record_data(bt_hci_log_t *p_hci_log_ctl, char *st
 {
     osi_mutex_t mutex_lock;
     uint8_t *g_hci_log_buffer;
+    int64_t ts;
+    uint8_t *temp_buf;
 
     if (!p_hci_log_ctl->p_hci_log_buffer) {
         return ESP_FAIL;
@@ -213,6 +221,16 @@ esp_err_t IRAM_ATTR bt_hci_log_record_data(bt_hci_log_t *p_hci_log_ctl, char *st
     if (!g_hci_log_buffer) {
         return ESP_FAIL;
     }
+
+    ts = esp_timer_get_time();
+
+    temp_buf = (uint8_t *)malloc(data_len + 8);
+    memset(temp_buf, 0x0, data_len + 8);
+
+    memcpy(temp_buf, &ts, 8);
+    memcpy(temp_buf + 8, data, data_len);
+
+    data_len += 8;
 
     mutex_lock = p_hci_log_ctl->mutex_lock;
     osi_mutex_lock(&mutex_lock, OSI_MUTEX_MAX_TIMEOUT);
@@ -245,7 +263,7 @@ esp_err_t IRAM_ATTR bt_hci_log_record_data(bt_hci_log_t *p_hci_log_ctl, char *st
         bt_hci_log_record_string(p_hci_log_ctl, str);
     }
 
-    bt_hci_log_record_hex(p_hci_log_ctl, data, data_len);
+    bt_hci_log_record_hex(p_hci_log_ctl, temp_buf, data_len);
 
     g_hci_log_buffer[p_hci_log_ctl->log_record_in] = '\n';
 
@@ -260,6 +278,8 @@ esp_err_t IRAM_ATTR bt_hci_log_record_data(bt_hci_log_t *p_hci_log_ctl, char *st
     p_hci_log_ctl->index ++;
 
     osi_mutex_unlock(&mutex_lock);
+
+    free(temp_buf);
 
     return ESP_OK;
 }
@@ -305,19 +325,27 @@ void bt_hci_log_data_show(bt_hci_log_t *p_hci_log_ctl)
 
     osi_mutex_unlock(&mutex_lock);
 }
+static bool enable_hci_log_flag = true;
+void bt_hci_log_record_hci_enable(bool enable)
+{
+    enable_hci_log_flag = enable;
+}
 
 esp_err_t IRAM_ATTR bt_hci_log_record_hci_data(uint8_t data_type, uint8_t *data, uint8_t data_len)
 {
+    if (!enable_hci_log_flag) return ESP_OK;
     return bt_hci_log_record_data(&g_bt_hci_log_data_ctl, NULL, data_type, data, data_len);
 }
 
 esp_err_t IRAM_ATTR bt_hci_log_record_custom_data(char *string, uint8_t *data, uint8_t data_len)
 {
+    if (!enable_hci_log_flag) return ESP_OK;
     return bt_hci_log_record_data(&g_bt_hci_log_data_ctl, string, HCI_LOG_DATA_TYPE_SELF_DEFINE, data, data_len);
 }
 
 esp_err_t IRAM_ATTR bt_hci_log_record_hci_adv(uint8_t data_type, uint8_t *data, uint8_t data_len)
 {
+    if (!enable_hci_log_flag) return ESP_OK;
     return bt_hci_log_record_data(&g_bt_hci_log_adv_ctl, NULL, data_type, data, data_len);
 }
 

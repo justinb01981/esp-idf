@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2018-2022 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2018-2024 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -468,7 +468,15 @@ static const esp_err_msg_t esp_err_msg_table[] = {
     ERR_TBL_IT(ESP_ERR_DPP_INVALID_ATTR),                       /* 12441 0x3099 Encountered invalid DPP Attribute */
 #   endif
 #   ifdef      ESP_ERR_DPP_AUTH_TIMEOUT
-    ERR_TBL_IT(ESP_ERR_DPP_AUTH_TIMEOUT),                       /* 12442 0x309a DPP Auth response was not recieved in time */
+    ERR_TBL_IT(ESP_ERR_DPP_AUTH_TIMEOUT),                       /* 12442 0x309a DPP Auth response was not received in time */
+#   endif
+#   ifdef      ESP_ERR_DPP_INVALID_LIST
+    ERR_TBL_IT(ESP_ERR_DPP_INVALID_LIST),                       /* 12443 0x309b Channel list given in
+                                                                                esp_supp_dpp_bootstrap_gen() is not
+                                                                                valid or too big */
+#   endif
+#   ifdef      ESP_ERR_DPP_CONF_TIMEOUT
+    ERR_TBL_IT(ESP_ERR_DPP_CONF_TIMEOUT),                       /* 12444 0x309c DPP Configuration was not received in time */
 #   endif
     // components/esp_common/include/esp_err.h
 #   ifdef      ESP_ERR_MESH_BASE
@@ -596,6 +604,9 @@ static const esp_err_msg_t esp_err_msg_table[] = {
 #   ifdef      ESP_ERR_ESP_NETIF_DHCPS_START_FAILED
     ERR_TBL_IT(ESP_ERR_ESP_NETIF_DHCPS_START_FAILED),           /* 20493 0x500d */
 #   endif
+#   ifdef      ESP_ERR_ESP_NETIF_TX_FAILED
+    ERR_TBL_IT(ESP_ERR_ESP_NETIF_TX_FAILED),                    /* 20494 0x500e */
+#   endif
     // components/esp_common/include/esp_err.h
 #   ifdef      ESP_ERR_FLASH_BASE
     ERR_TBL_IT(ESP_ERR_FLASH_BASE),                             /* 24576 0x6000 Starting number of flash error codes */
@@ -649,6 +660,20 @@ static const esp_err_msg_t esp_err_msg_table[] = {
 #   ifdef      ESP_ERR_HTTP_CONNECTION_CLOSED
     ERR_TBL_IT(ESP_ERR_HTTP_CONNECTION_CLOSED),                 /* 28680 0x7008 Read FIN from peer and the connection closed */
 #   endif
+#   ifdef      ESP_ERR_HTTP_NOT_MODIFIED
+    ERR_TBL_IT(ESP_ERR_HTTP_NOT_MODIFIED),                      /* 28681 0x7009 HTTP 304 Not Modified, no update available */
+#   endif
+#   ifdef      ESP_ERR_HTTP_RANGE_NOT_SATISFIABLE
+    ERR_TBL_IT(ESP_ERR_HTTP_RANGE_NOT_SATISFIABLE),             /* 28682 0x700a HTTP 416 Range Not Satisfiable,
+                                                                                requested range in header is incorrect */
+#   endif
+#   ifdef      ESP_ERR_HTTP_READ_TIMEOUT
+    ERR_TBL_IT(ESP_ERR_HTTP_READ_TIMEOUT),                      /* 28683 0x700b HTTP data read timeout */
+#   endif
+#   ifdef      ESP_ERR_HTTP_INCOMPLETE_DATA
+    ERR_TBL_IT(ESP_ERR_HTTP_INCOMPLETE_DATA),                   /* 28684 0x700c Incomplete data received, less than
+                                                                                Content-Length or last chunk */
+#   endif
     // components/esp-tls/esp_tls_errors.h
 #   ifdef      ESP_ERR_ESP_TLS_BASE
     ERR_TBL_IT(ESP_ERR_ESP_TLS_BASE),                           /* 32768 0x8000 Starting number of ESP-TLS error codes */
@@ -678,6 +703,9 @@ static const esp_err_msg_t esp_err_msg_table[] = {
 #   endif
 #   ifdef      ESP_ERR_ESP_TLS_TCP_CLOSED_FIN
     ERR_TBL_IT(ESP_ERR_ESP_TLS_TCP_CLOSED_FIN),                 /* 32776 0x8008 */
+#   endif
+#   ifdef      ESP_ERR_ESP_TLS_SERVER_HANDSHAKE_TIMEOUT
+    ERR_TBL_IT(ESP_ERR_ESP_TLS_SERVER_HANDSHAKE_TIMEOUT),       /* 32777 0x8009 TLS handshake timeout */
 #   endif
 #   ifdef      ESP_ERR_MBEDTLS_CERT_PARTLY_OK
     ERR_TBL_IT(ESP_ERR_MBEDTLS_CERT_PARTLY_OK),                 /* 32784 0x8010 mbedtls parse certificates was partly successful */
@@ -781,7 +809,7 @@ static const esp_err_msg_t esp_err_msg_table[] = {
     ERR_TBL_IT(ESP_ERR_HTTPD_RESP_HDR),                         /* 45061 0xb005 Response header field larger than supported */
 #   endif
 #   ifdef      ESP_ERR_HTTPD_RESP_SEND
-    ERR_TBL_IT(ESP_ERR_HTTPD_RESP_SEND),                        /* 45062 0xb006 Error occured while sending response packet */
+    ERR_TBL_IT(ESP_ERR_HTTPD_RESP_SEND),                        /* 45062 0xb006 Error occurred while sending response packet */
 #   endif
 #   ifdef      ESP_ERR_HTTPD_ALLOC_MEM
     ERR_TBL_IT(ESP_ERR_HTTPD_ALLOC_MEM),                        /* 45063 0xb007 Failed to dynamically allocate memory
@@ -795,7 +823,7 @@ static const esp_err_msg_t esp_err_msg_table[] = {
     ERR_TBL_IT(ESP_ERR_HW_CRYPTO_BASE),                         /* 49152 0xc000 Starting number of HW cryptography
                                                                                 module error codes */
 #   endif
-    // components/esp_hw_support/include/esp_ds_err.h
+    // components/esp_security/include/esp_ds_err.h
 #   ifdef      ESP_ERR_HW_CRYPTO_DS_HMAC_FAIL
     ERR_TBL_IT(ESP_ERR_HW_CRYPTO_DS_HMAC_FAIL),                 /* 49153 0xc001 HMAC peripheral problem */
 #   endif

@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2022-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2022-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -18,7 +18,6 @@
 #include <sys/param.h> // For MIN/MAX
 #include <stdbool.h>
 #include <string.h>
-#include "sdkconfig.h"  // TODO: remove
 
 #include "soc/spi_periph.h"
 #include "soc/spi_mem_struct.h"
@@ -29,6 +28,8 @@
 #include "hal/spi_flash_types.h"
 #include "soc/pcr_struct.h"
 #include "esp_rom_sys.h"
+#include "hal/clk_tree_ll.h"
+#include "soc/clk_tree_defs.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -210,12 +211,12 @@ static inline void spimem_flash_ll_res_check_sus_setup(spi_mem_dev_t *dev, bool 
  */
 static inline void spimem_flash_ll_set_read_sus_status(spi_mem_dev_t *dev, uint32_t sus_conf)
 {
-    dev->flash_sus_ctrl.frd_sus_2b = 0;
+    dev->flash_sus_ctrl.fmem_rd_sus_2b = 0;
     HAL_FORCE_MODIFY_U32_REG_FIELD(dev->flash_sus_ctrl, pesr_end_msk, sus_conf);
 }
 
 /**
- * Configure the delay after Suspend/Resume
+ * Configure the delay after Suspend
  *
  * @param dev Beginning address of the peripheral registers.
  * @param dly_val delay time
@@ -223,8 +224,19 @@ static inline void spimem_flash_ll_set_read_sus_status(spi_mem_dev_t *dev, uint3
 static inline void spimem_flash_ll_set_sus_delay(spi_mem_dev_t *dev, uint32_t dly_val)
 {
     dev->ctrl1.cs_hold_dly_res = dly_val;
-    dev->sus_status.flash_per_dly_128 = 1;
     dev->sus_status.flash_pes_dly_128 = 1;
+}
+
+/**
+ * Configure the delay after Resume
+ *
+ * @param dev Beginning address of the peripheral registers.
+ * @param dly_val delay time
+ */
+static inline void spimem_flash_ll_set_rs_delay(spi_mem_dev_t *dev, uint32_t dly_val)
+{
+    dev->ctrl1.cs_hold_dly_per = dly_val;
+    dev->sus_status.flash_per_dly_128 = 1;
 }
 
 /**
@@ -235,33 +247,39 @@ static inline void spimem_flash_ll_set_sus_delay(spi_mem_dev_t *dev, uint32_t dl
  */
 static inline void spimem_flash_set_cs_hold_delay(spi_mem_dev_t *dev, uint32_t cs_hold_delay)
 {
-    SPIMEM0.ctrl2.cs_hold_delay = cs_hold_delay;
+    SPIMEM0.ctrl2.mem_cs_hold_delay = cs_hold_delay;
 }
 
 /**
  * Initialize auto wait idle mode
  *
  * @param dev Beginning address of the peripheral registers.
- * @param auto_waiti Enable/disable auto wait-idle function
+ * @param per_waiti Enable wait-idle with time delay function after resume.
+ * @param pes_waiti Enable wait-idle with time delay function after suspend.
  */
-static inline void spimem_flash_ll_auto_wait_idle_init(spi_mem_dev_t *dev, bool auto_waiti)
+static inline void spimem_flash_ll_auto_wait_idle_init(spi_mem_dev_t *dev, bool per_waiti, bool pes_waiti)
 {
     HAL_FORCE_MODIFY_U32_REG_FIELD(dev->flash_waiti_ctrl, waiti_cmd, 0x05);
-    dev->flash_sus_ctrl.flash_per_wait_en = auto_waiti;
-    dev->flash_sus_ctrl.flash_pes_wait_en = auto_waiti;
+    dev->flash_sus_ctrl.flash_per_wait_en = per_waiti;
+    dev->flash_sus_ctrl.flash_pes_wait_en = pes_waiti;
 }
 
 /**
  * This function is used to set dummy phase when auto suspend is enabled.
  *
- * @note This function is only used when timing tuning is enabled.
+ * @note This function is only used when timing tuning is enabled. This function is only used in quad flash
  *
  * @param dev Beginning address of the peripheral registers.
  * @param extra_dummy extra dummy length. Get from timing tuning.
  */
 static inline void spimem_flash_ll_set_wait_idle_dummy_phase(spi_mem_dev_t *dev, uint32_t extra_dummy)
 {
-    // Not supported on this chip.
+    if (extra_dummy > 0) {
+        dev->flash_waiti_ctrl.waiti_dummy_cyclelen = extra_dummy - 1;
+        dev->flash_waiti_ctrl.waiti_dummy = 1;
+    } else {
+        dev->flash_waiti_ctrl.waiti_dummy = 0;
+    }
 }
 
 /**
@@ -285,7 +303,7 @@ static inline bool spimem_flash_ll_sus_status(spi_mem_dev_t *dev)
 static inline void spimem_flash_ll_sus_set_spi0_lock_trans(spi_mem_dev_t *dev, uint32_t lock_time)
 {
     dev->sus_status.spi0_lock_en = 1;
-    SPIMEM0.fsm.lock_delay_time = lock_time;
+    SPIMEM0.mem_fsm.mem_lock_delay_time = lock_time;
 }
 
 /**
@@ -327,6 +345,7 @@ static inline void spimem_flash_ll_set_write_protect(spi_mem_dev_t *dev, bool wp
  * @param buffer Buffer to hold the output data
  * @param read_len Length to get out of the buffer
  */
+__attribute__((always_inline))
 static inline void spimem_flash_ll_get_buffer_data(spi_mem_dev_t *dev, void *buffer, uint32_t read_len)
 {
     if (((intptr_t)buffer % 4 == 0) && (read_len % 4 == 0)) {
@@ -352,6 +371,7 @@ static inline void spimem_flash_ll_get_buffer_data(spi_mem_dev_t *dev, void *buf
  * @param buffer Buffer holding the data
  * @param length Length of data in bytes.
  */
+__attribute__((always_inline))
 static inline void spimem_flash_ll_set_buffer_data(spi_mem_dev_t *dev, const void *buffer, uint32_t length)
 {
     // Load data registers, word at a time
@@ -414,7 +434,7 @@ static inline bool spimem_flash_ll_host_idle(const spi_mem_dev_t *dev)
  */
 static inline void spimem_flash_ll_read_phase(spi_mem_dev_t *dev)
 {
-    typeof (dev->user) user = {
+    typeof(dev->user) user = {
         .usr_mosi = 0,
         .usr_miso = 1,
         .usr_addr = 1,
@@ -445,7 +465,7 @@ static inline void spimem_flash_ll_set_cs_pin(spi_mem_dev_t *dev, int pin)
  */
 static inline void spimem_flash_ll_set_read_mode(spi_mem_dev_t *dev, esp_flash_io_mode_t read_mode)
 {
-    typeof (dev->ctrl) ctrl;
+    typeof(dev->ctrl) ctrl;
     ctrl.val = dev->ctrl.val;
 
     ctrl.val &= ~(SPI_MEM_FREAD_QIO_M | SPI_MEM_FREAD_QUAD_M | SPI_MEM_FREAD_DIO_M | SPI_MEM_FREAD_DUAL_M);
@@ -505,6 +525,7 @@ static inline void spimem_flash_ll_set_miso_bitlen(spi_mem_dev_t *dev, uint32_t 
  * @param dev Beginning address of the peripheral registers.
  * @param bitlen Length of output, in bits.
  */
+__attribute__((always_inline))
 static inline void spimem_flash_ll_set_mosi_bitlen(spi_mem_dev_t *dev, uint32_t bitlen)
 {
     dev->user.usr_mosi = bitlen > 0;
@@ -521,11 +542,8 @@ static inline void spimem_flash_ll_set_mosi_bitlen(spi_mem_dev_t *dev, uint32_t 
 static inline void spimem_flash_ll_set_command(spi_mem_dev_t *dev, uint32_t command, uint32_t bitlen)
 {
     dev->user.usr_command = 1;
-    typeof(dev->user2) user2 = {
-        .usr_command_value = command,
-        .usr_command_bitlen = (bitlen - 1),
-    };
-    dev->user2.val = user2.val;
+    HAL_FORCE_MODIFY_U32_REG_FIELD(dev->user2, usr_command_value, command);
+    HAL_FORCE_MODIFY_U32_REG_FIELD(dev->user2, usr_command_bitlen, (bitlen - 1));
 }
 
 /**
@@ -545,8 +563,10 @@ static inline int spimem_flash_ll_get_addr_bitlen(spi_mem_dev_t *dev)
  * @param dev Beginning address of the peripheral registers.
  * @param bitlen Length of the address, in bits
  */
+__attribute__((always_inline))
 static inline void spimem_flash_ll_set_addr_bitlen(spi_mem_dev_t *dev, uint32_t bitlen)
 {
+    dev->cache_fctrl.cache_usr_addr_4byte = (bitlen == 32) ? 1 : 0;
     dev->user1.usr_addr_bitlen = (bitlen - 1);
     dev->user.usr_addr = bitlen ? 1 : 0;
 }
@@ -559,8 +579,20 @@ static inline void spimem_flash_ll_set_addr_bitlen(spi_mem_dev_t *dev, uint32_t 
  */
 static inline void spimem_flash_ll_set_extra_address(spi_mem_dev_t *dev, uint32_t extra_addr)
 {
-    dev->cache_fctrl.usr_addr_4byte = 0;
-    dev->rd_status.wb_mode = extra_addr;
+    // Fixed wb mode to 0x00, the bit length fixed to 8
+    HAL_FORCE_MODIFY_U32_REG_FIELD(dev->rd_status, wb_mode, extra_addr);
+    dev->rd_status.wb_mode_bitlen = 7;  // 8 - 1
+}
+
+/**
+ * Enable extra address for bits M0-M7 in DIO/QIO mode.
+ *
+ * @param dev Beginning address of the peripheral registers.
+ * @param wb_mode_enable true for enabling wb_mode
+ */
+static inline void spimem_flash_ll_wb_mode_enable(spi_mem_dev_t *dev, bool wb_mode_enable)
+{
+    dev->rd_status.wb_mode_en = wb_mode_enable;
 }
 
 /**
@@ -580,6 +612,7 @@ static inline void spimem_flash_ll_set_address(spi_mem_dev_t *dev, uint32_t addr
  * @param dev Beginning address of the peripheral registers.
  * @param addr Address to send
  */
+__attribute__((always_inline))
 static inline void spimem_flash_ll_set_usr_address(spi_mem_dev_t *dev, uint32_t addr, uint32_t bitlen)
 {
     (void)bitlen;
@@ -595,7 +628,9 @@ static inline void spimem_flash_ll_set_usr_address(spi_mem_dev_t *dev, uint32_t 
 static inline void spimem_flash_ll_set_dummy(spi_mem_dev_t *dev, uint32_t dummy_n)
 {
     dev->user.usr_dummy = dummy_n ? 1 : 0;
-    dev->user1.usr_dummy_cyclelen = dummy_n - 1;
+    if (dummy_n > 0) {
+        dev->user1.usr_dummy_cyclelen = dummy_n - 1;
+    }
 }
 
 /**
@@ -606,14 +641,28 @@ static inline void spimem_flash_ll_set_dummy(spi_mem_dev_t *dev, uint32_t dummy_
  */
 static inline void spimem_flash_ll_set_hold(spi_mem_dev_t *dev, uint32_t hold_n)
 {
-    dev->ctrl2.cs_hold_time = hold_n - 1;
-    dev->user.cs_hold = (hold_n > 0? 1: 0);
+    // Not supported on esp32c5
 }
 
+/**
+ * Set CS setup time
+ *
+ * @param dev Beginning address of the peripheral registers.
+ * @param cs_setup_time CS setup time
+ */
 static inline void spimem_flash_ll_set_cs_setup(spi_mem_dev_t *dev, uint32_t cs_setup_time)
 {
-    dev->user.cs_setup = (cs_setup_time > 0 ? 1 : 0);
-    dev->ctrl2.cs_setup_time = cs_setup_time - 1;
+    // Not supported on esp32c5
+}
+
+static inline void spimem_flash_ll_set_extra_dummy(spi_mem_dev_t *dev, uint32_t extra_dummy)
+{
+    //for compatibility
+}
+
+static inline void spimem_flash_ll_set_fdummy_rin(spi_mem_dev_t *dev, uint32_t fdummy_rin)
+{
+    dev->ctrl.fdummy_rin = fdummy_rin;
 }
 
 /**
@@ -626,17 +675,24 @@ static inline void spimem_flash_ll_set_cs_setup(spi_mem_dev_t *dev, uint32_t cs_
  */
 static inline uint8_t spimem_flash_ll_get_source_freq_mhz(void)
 {
-#if CONFIG_IDF_TARGET_ESP32C5_BETA3_VERSION
-    // TODO: [ESP32C5] IDF-8649
-    // MAY CAN IMPROVE (ONLY rc_fast case is incorrect)!
-    // TODO: Default is PLL480M, this is hard-coded.
-    // In the future, we can get the CPU clock source by calling interface.
-    // HAL_ASSERT(HAL_FORCE_READ_U32_REG_FIELD(PCR.mspi_clk_conf, mspi_func_clk_sel) == 2);
-    return 40; // Use Xtal clock source
-#elif CONFIG_IDF_TARGET_ESP32C5_MP_VERSION
-    // TODO: [ESP32C5] IDF-8649
-    return 80;
-#endif
+    int source_clk_mhz = 0;
+
+    switch (PCR.mspi_clk_conf.mspi_func_clk_sel) {
+    case 0:
+        source_clk_mhz = clk_ll_xtal_get_freq_mhz();
+        break;
+    case 1:
+        source_clk_mhz = (SOC_CLK_RC_FAST_FREQ_APPROX / (1 * 1000 * 1000));
+        break;
+    case 2:
+        source_clk_mhz = clk_ll_bbpll_get_freq_mhz();
+        break;
+    default:
+        break;
+    }
+
+    uint8_t clock_val = source_clk_mhz / (PCR.mspi_clk_conf.mspi_fast_div_num + 1);
+    return clock_val;
 }
 
 /**
@@ -653,7 +709,7 @@ static inline uint32_t spimem_flash_ll_calculate_clock_reg(uint8_t clkdiv)
     if (clkdiv == 1) {
         div_parameter = (1 << 31);
     } else {
-        div_parameter = ((clkdiv - 1) | (((clkdiv - 1) / 2 & 0xff) << 8 ) | (((clkdiv - 1) & 0xff) << 16));
+        div_parameter = ((clkdiv - 1) | (((clkdiv - 1) / 2 & 0xff) << 8) | (((clkdiv - 1) & 0xff) << 16));
     }
     return div_parameter;
 }
@@ -665,7 +721,7 @@ static inline uint32_t spimem_flash_ll_calculate_clock_reg(uint8_t clkdiv)
  */
 static inline void spimem_flash_ll_set_wp_level(spi_mem_dev_t *dev, bool level)
 {
-    dev->ctrl.wp = level;
+    dev->ctrl.wp_reg = level;
 }
 
 /**
@@ -676,6 +732,123 @@ static inline void spimem_flash_ll_set_wp_level(spi_mem_dev_t *dev, bool level)
 static inline uint32_t spimem_flash_ll_get_ctrl_val(spi_mem_dev_t *dev)
 {
     return dev->ctrl.val;
+}
+
+/**
+ * @brief Reset whole memory spi
+ */
+static inline void spimem_flash_ll_sync_reset(void)
+{
+    SPIMEM1.ctrl2.sync_reset = 0;
+    SPIMEM0.ctrl2.sync_reset = 0;
+    SPIMEM1.ctrl2.sync_reset = 1;
+    SPIMEM0.ctrl2.sync_reset = 1;
+    SPIMEM1.ctrl2.sync_reset = 0;
+    SPIMEM0.ctrl2.sync_reset = 0;
+}
+
+/**
+ * @brief Get common command related registers
+ *
+ * @param ctrl_reg ctrl_reg
+ * @param user_reg user_reg
+ * @param user1_reg user1_reg
+ * @param user2_reg user2_reg
+ */
+static inline void spimem_flash_ll_get_common_command_register_info(spi_mem_dev_t *dev, uint32_t *ctrl_reg, uint32_t *user_reg, uint32_t *user1_reg, uint32_t *user2_reg)
+{
+    *ctrl_reg = dev->ctrl.val;
+    *user_reg = dev->user.val;
+    *user1_reg = dev->user1.val;
+    *user2_reg = dev->user2.val;
+}
+
+/**
+ * @brief Set common command related registers
+ *
+ * @param ctrl_reg ctrl_reg
+ * @param user_reg user_reg
+ * @param user1_reg user1_reg
+ * @param user2_reg user2_reg
+ */
+static inline void spimem_flash_ll_set_common_command_register_info(spi_mem_dev_t *dev, uint32_t ctrl_reg, uint32_t user_reg, uint32_t user1_reg, uint32_t user2_reg)
+{
+    dev->ctrl.val = ctrl_reg;
+    dev->user.val = user_reg;
+    dev->user1.val = user1_reg;
+    dev->user2.val = user2_reg;
+}
+
+#define SPIMEM_FLASH_LL_SUSPEND_END_INTR  SPI_MEM_PES_END_INT_ENA_M
+#define SPIMEM_FLASH_LL_INTERRUPT_SOURCE  ETS_MSPI_INTR_SOURCE
+
+/**
+ * @brief Get the address of the interrupt status register.
+ *
+ * This function returns a pointer to the interrupt status register of the SPI memory device.
+ *
+ * @param[in] dev Pointer to the SPI memory device structure.
+ * @return volatile void* Pointer to the interrupt status register.
+ */
+static inline volatile void *spimem_flash_ll_get_interrupt_status_reg(spi_mem_dev_t *dev)
+{
+    return &dev->int_st;
+}
+
+/**
+ * @brief Clear specific interrupt status bits.
+ *
+ * This function clears the specified interrupt bits in the interrupt clear register of the SPI memory device.
+ *
+ * @param[in] dev Pointer to the SPI memory device structure.
+ * @param[in] mask Bitmask specifying which interrupt bits to clear.
+ */
+__attribute__((always_inline))
+static inline void spimem_flash_ll_clear_intr_mask(spi_mem_dev_t *dev, uint32_t mask)
+{
+    dev->int_clr.val = mask;
+}
+
+/**
+ * @brief Enable specific interrupt bits.
+ *
+ * This function enables the specified interrupts in the interrupt enable register of the SPI memory device.
+ *
+ * @param[in] dev Pointer to the SPI memory device structure.
+ * @param[in] mask Bitmask specifying which interrupt bits to enable.
+ */
+__attribute__((always_inline))
+static inline void spimem_flash_ll_enable_intr_mask(spi_mem_dev_t *dev, uint32_t mask)
+{
+    dev->int_ena.val |= mask;
+}
+
+/**
+ * @brief Disable specific interrupt bits.
+ *
+ * This function disables the specified interrupts in the interrupt enable register of the SPI memory device.
+ *
+ * @param[in] dev Pointer to the SPI memory device structure.
+ * @param[in] mask Bitmask specifying which interrupt bits to disable.
+ */
+__attribute__((always_inline))
+static inline void spimem_flash_ll_disable_intr_mask(spi_mem_dev_t *dev, uint32_t mask)
+{
+    dev->int_ena.val &= (~mask);
+}
+
+/**
+ * @brief Get the current interrupt status.
+ *
+ * This function retrieves the current interrupt status from the interrupt status register of the SPI memory device.
+ *
+ * @param[in] dev Pointer to the SPI memory device structure.
+ * @param[out] intr_status Pointer to a variable where the interrupt status will be stored.
+ */
+__attribute__((always_inline))
+static inline void spimem_flash_ll_get_intr_mask(spi_mem_dev_t *dev, uint32_t *intr_status)
+{
+    *intr_status = dev->int_st.val;
 }
 
 #ifdef __cplusplus

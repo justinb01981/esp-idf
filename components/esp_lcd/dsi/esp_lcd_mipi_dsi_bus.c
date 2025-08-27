@@ -9,13 +9,14 @@
 #include "esp_check.h"
 #include "esp_lcd_mipi_dsi.h"
 #include "esp_clk_tree.h"
+#include "esp_private/esp_clk_tree_common.h"
 #include "mipi_dsi_priv.h"
 
 static const char *TAG = "lcd.dsi.bus";
 
 #define MIPI_DSI_DEFAULT_TIMEOUT_CLOCK_FREQ_MHZ 10
 // TxClkEsc frequency must be configured between 2 and 20 MHz
-#define MIPI_DSI_DEFAULT_ESCAPE_CLOCK_FREQ_MHZ  10
+#define MIPI_DSI_DEFAULT_ESCAPE_CLOCK_FREQ_MHZ  18
 
 esp_err_t esp_lcd_new_dsi_bus(const esp_lcd_dsi_bus_config_t *bus_config, esp_lcd_dsi_bus_handle_t *ret_bus)
 {
@@ -47,6 +48,7 @@ esp_err_t esp_lcd_new_dsi_bus(const esp_lcd_dsi_bus_config_t *bus_config, esp_lc
     if (phy_clk_src == 0) {
         phy_clk_src = MIPI_DSI_PHY_CLK_SRC_DEFAULT;
     }
+    ESP_GOTO_ON_ERROR(esp_clk_tree_enable_src((soc_module_clk_t)phy_clk_src, true), err, TAG, "clock source enable failed");
     // enable the clock source for DSI PHY
     DSI_CLOCK_SRC_ATOMIC() {
         // set clock source for DSI PHY
@@ -105,8 +107,8 @@ esp_err_t esp_lcd_new_dsi_bus(const esp_lcd_dsi_bus_config_t *bus_config, esp_lc
     // enable CRC reception and ECC reception, error correction, and reporting
     mipi_dsi_host_ll_enable_rx_crc(hal->host, true);
     mipi_dsi_host_ll_enable_rx_ecc(hal->host, true);
-    // enable sending the EoTp packet at the end of each transmission
-    mipi_dsi_host_ll_enable_tx_eotp(hal->host, true, true);
+    // enable sending the EoTp packet at the end of each transmission for HS mode
+    mipi_dsi_host_ll_enable_tx_eotp(hal->host, true, false);
 
     // Set the divider to get the Time Out clock, clock source is the high-speed byte clock
     mipi_dsi_host_ll_set_timeout_clock_division(hal->host, bus_config->lane_bit_rate_mbps / 8 / MIPI_DSI_DEFAULT_TIMEOUT_CLOCK_FREQ_MHZ);
@@ -141,10 +143,12 @@ esp_err_t esp_lcd_del_dsi_bus(esp_lcd_dsi_bus_handle_t bus)
     DSI_RCC_ATOMIC() {
         mipi_dsi_ll_enable_bus_clock(bus_id, false);
     }
+#if CONFIG_PM_ENABLE
     if (bus->pm_lock) {
         esp_pm_lock_release(bus->pm_lock);
         esp_pm_lock_delete(bus->pm_lock);
     }
+#endif
     free(bus);
     return ESP_OK;
 }

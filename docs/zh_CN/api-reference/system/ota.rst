@@ -8,9 +8,17 @@ OTA 流程概览
 
 OTA 升级机制可以让设备在固件正常运行时根据接收数据（如通过 Wi-Fi、蓝牙或以太网）进行自我更新。
 
-要运行 OTA 机制，需配置设备的 :doc:`../../api-guides/partition-tables`，该分区表至少包括两个 OTA 应用程序分区（即 ``ota_0`` 和 ``ota_1``）和一个 OTA 数据分区。
+以下模式支持对特定分区进行 OTA 更新：
 
-OTA 功能启动后，向当前未用于启动的 OTA 应用分区写入新的应用固件镜像。镜像验证后，OTA 数据分区更新，指定在下一次启动时使用该镜像。
+- **安全更新模式**：可靠、稳定的分区更新，即使在更新期间断电，芯片仍能正常运行，并能够启动当前的应用程序。以下分区支持此模式：
+
+  - 应用程序分区。要进行 OTA 更新，需在设备的 :doc:`../../api-guides/partition-tables` 中配置至少两个 OTA 应用程序分区槽（例如 ``ota_0`` 和 ``ota_1``）以及一个 OTA 数据分区。OTA 操作函数会将新的应用程序固件镜像写入当前未被选为启动分区的 OTA 应用程序分区槽。镜像验证通过后，OTA 数据分区将被更新，以指定在下次启动时使用该镜像。
+
+- **非安全更新模式**：此更新过程容易受到干扰，如果在更新过程中断电，可能会导致当前应用程序无法加载，甚至进入无法恢复的状态。在此模式下，新的镜像会先下载到临时分区，下载完成后复制到最终的目标分区。如果在最终复制过程中发生中断，可能会导致问题。以下分区支持此模式：
+
+  - 引导加载程序
+  - 分区表
+  - 其他数据分区，如 NVS、FAT 等
 
 .. _ota_data_partition:
 
@@ -19,7 +27,7 @@ OTA 数据分区
 
 所有使用 OTA 功能项目，其 :doc:`../../api-guides/partition-tables` 必须包含一个 OTA 数据分区（类型为 ``data``，子类型为 ``ota``）。
 
-工厂启动设置下，OTA 数据分区中应没有数据（所有字节擦写成 0xFF）。如果分区表中有工厂应用程序，ESP-IDF 软件引导加载程序会启动工厂应用程序。如果分区表中没有工厂应用程序，则启动第一个可用的 OTA 分区（通常是 ``ota_0``）。
+工厂启动设置下，OTA 数据分区中应没有数据（所有字节擦写成 0xFF）。如果分区表中有工厂应用程序，ESP-IDF 二级引导加载程序会启动工厂应用程序。如果分区表中没有工厂应用程序，则启动第一个可用的 OTA 分区（通常是 ``ota_0``）。
 
 第一次 OTA 升级后，OTA 数据分区更新，指定下一次启动哪个 OTA 应用程序分区。
 
@@ -62,7 +70,7 @@ OTA 数据分区的容量是 2 个 flash 扇区的大小（0x2000 字节），�
 
 .. note::
 
-  应用程序的状态不是写到程序的二进制镜像，而是写到 ``otadata`` 分区。该分区有一个 ``ota_seq`` 计数器，该计数器是 OTA 应用分区的指针，指向下次启动时选取应用所在的分区 (ota_0, ota_1, ...)。
+  应用程序的状态不是写到程序的二进制镜像，而是写到 ``otadata`` 分区。该分区有一个 ``ota_seq`` 计数器，该计数器是 OTA 应用分区的指针，指向下次启动时选取应用所在的分区 (``ota_0``, ``ota_1``, ...)。
 
 应用程序 OTA 状态
 ^^^^^^^^^^^^^^^^^
@@ -100,7 +108,7 @@ Kconfig 中的 :ref:`CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE` 可以帮助用户�
 * 引导加载程序选取一个新版应用程序来引导，这样应用程序状态就不会设置为 ``ESP_OTA_IMG_INVALID`` 或 ``ESP_OTA_IMG_ABORTED``。
 * 引导加载程序检查所选取的新版应用程序，若状态设置为 ``ESP_OTA_IMG_NEW``，则写入 ``ESP_OTA_IMG_PENDING_VERIFY``。该状态表示，需确认应用程序的可操作性，如不确认，发生重启，则状态会重写为 ``ESP_OTA_IMG_ABORTED`` （见上文），该应用程序不可再启动，将回滚至上一版本。
 * 新版应用程序启动，应进行自测。
-* 若通过自测，则必须调用函数 :cpp:func:`esp_ota_mark_app_valid_cancel_rollback`，因为新版应用程序在等待确认其可操作性（ ``ESP_OTA_IMG_PENDING_VERIFY`` 状态）。
+* 若通过自测，则必须调用函数 :cpp:func:`esp_ota_mark_app_valid_cancel_rollback`，因为新版应用程序在等待确认其可操作性（``ESP_OTA_IMG_PENDING_VERIFY`` 状态）。
 * 若未通过自测，则调用函数 :cpp:func:`esp_ota_mark_app_invalid_rollback_and_reboot`，回滚至之前能正常工作的应用程序版本，同时将无效的新版本应用程序设置为 ``ESP_OTA_IMG_INVALID``。
 * 如果新版应用程序可操作性没有确认，则状态一直为 ``ESP_OTA_IMG_PENDING_VERIFY``。下一次启动时，状态变更为 ``ESP_OTA_IMG_ABORTED``，阻止其再次启动，之后回滚到之前的版本。
 
@@ -132,7 +140,7 @@ Kconfig 中的 :ref:`CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE` 可以帮助用户�
 * ``ESP_OTA_IMG_VALID`` 由函数 :cpp:func:`esp_ota_mark_app_valid_cancel_rollback` 设置。
 * 如果 :ref:`CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE` 没有使能，``ESP_OTA_IMG_UNDEFINED`` 由函数 :cpp:func:`esp_ota_set_boot_partition` 设置。
 * 如果 :ref:`CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE` 使能，``ESP_OTA_IMG_NEW`` 由函数 :cpp:func:`esp_ota_set_boot_partition` 设置。
-* ``ESP_OTA_IMG_INVALID`` 由函数 :cpp:func:`esp_ota_mark_app_invalid_rollback_and_reboot` 设置。
+* ``ESP_OTA_IMG_INVALID`` 由函数 :cpp:func:`esp_ota_mark_app_invalid_rollback` 或 :cpp:func:`esp_ota_mark_app_invalid_rollback_and_reboot` 设置。
 * 如果应用程序的可操作性无法确认，发生重启（:ref:`CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE` 使能），则设置 ``ESP_OTA_IMG_ABORTED``。
 * 如果 :ref:`CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE` 使能，选取的应用程序状态为 ``ESP_OTA_IMG_NEW``，则在引导加载程序中设置 ``ESP_OTA_IMG_PENDING_VERIFY``。
 
@@ -157,7 +165,7 @@ Kconfig 中的 :ref:`CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE` 可以帮助用户�
 - 运行函数 :cpp:func:`esp_ota_set_boot_partition`，将新版应用程序设为可启动。如果新版应用程序的安全版本号低于芯片中的应用安全版本号，新版应用程序会被擦除，无法更新到新固件。
 - 重新启动。
 - 在引导加载程序中选取安全版本号等于或高于芯片中应用安全版本号的应用程序。如果 otadata 处于初始阶段，通过串行通道加载了安全版本号高于芯片中应用安全版本号的固件，则引导加载程序中 eFuse 的安全版本号会立即更新。
-- 新版应用程序启动，之后进行可操作性检测，如果通过检测，则调用函数 :cpp:func:`esp_ota_mark_app_valid_cancel_rollback`，将应用程序标记为 ``ESP_OTA_IMG_VALID``，更新芯片中应用程序的安全版本号。注意，如果调用函数 :cpp:func:`esp_ota_mark_app_invalid_rollback_and_reboot`，可能会因为设备中没有可启动的应用程序而回滚失败，返回 ``ESP_ERR_OTA_ROLLBACK_FAILED`` 错误，应用程序状态一直为 ``ESP_OTA_IMG_PENDING_VERIFY``。
+- 新版应用程序启动，之后进行可操作性检测，如果通过检测，则调用函数 :cpp:func:`esp_ota_mark_app_valid_cancel_rollback`，将应用程序标记为 ``ESP_OTA_IMG_VALID``，更新芯片中应用程序的安全版本号。注意，如果调用了函数 :cpp:func:`esp_ota_mark_app_invalid_rollback` 或 :cpp:func:`esp_ota_mark_app_invalid_rollback_with_reboot`，也可能会因为设备中没有可启动的应用程序而回滚失败，返回 ``ESP_ERR_OTA_ROLLBACK_FAILED`` 错误，应用程序状态一直处于 ``ESP_OTA_IMG_PENDING_VERIFY`` 状态。
 - 如果运行的应用程序处于 ``ESP_OTA_IMG_VALID`` 状态，则可再次更新。
 
 建议：
@@ -221,6 +229,21 @@ Kconfig 中的 :ref:`CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE` 可以帮助用户�
 
   具体可参考 :ref:`signed-app-verify`。
 
+OTA 性能调优
+------------
+
+- 在写操作时，与按默认机制逐块顺序擦除相比，一次性擦除更新分区可能有助于减少固件升级所需的时间。要启用此功能，请在 :cpp:type:`esp_https_ota_config_t` 结构体中将 :cpp:member:`esp_https_ota_config_t::bulk_flash_erase` 设置为 true。如果要擦除的分区过大，可能会触发任务看门狗。建议在这种情况下增加看门狗超时时间。
+
+  .. code-block:: c
+
+      esp_https_ota_config_t ota_config = {
+          .bulk_flash_erase = true,
+      }
+
+- 调整 :cpp:member:`esp_https_ota_config_t::http_config::buffer_size` 也有助于 OTA 性能调优。
+- :cpp:type:`esp_https_ota_config_t` 结构体中有一个成员 :cpp:member:`esp_https_ota_config_t::buffer_caps`，可以用来指定在为 OTA 缓冲区分配内存时使用的内存类型。当启用 SPIRAM 时，将该值配置为 MALLOC_CAP_INTERNAL 可能有助于 OTA 性能调优。
+- 请参阅 :doc:`/api-guides/performance/speed` 中的 **提高网络速度** 小节获取详细信息。
+
 
 OTA 工具 ``otatool.py``
 ----------------------------
@@ -282,7 +305,7 @@ Python API
 命令行界面
 ^^^^^^^^^^
 
-``otatool.py`` 的命令行界面具有如下结构：
+``otatool.py`` 的命令行界面具有如下结构体：
 
 .. code-block:: bash
 
@@ -326,10 +349,12 @@ Python API
 * :doc:`../peripherals/spi_flash/index`
 * :doc:`esp_https_ota`
 
-应用程序示例
+应用示例
 ------------
 
-端对端的 OTA 固件升级示例请参考 :example:`system/ota`。
+- :example:`system/ota/native_ota_example` 演示了如何在 {IDF_TARGET_NAME} 上使用 `app_update` 组件的 API 进行原生空中升级 (OTA)。适用的 SoC 请参阅 :example_file:`system/ota/native_ota_example/README.md`。
+
+- :example:`system/ota/otatool` 演示了如何使用 OTA 工具执行读取、写入和擦除 OTA 分区、切换启动分区以及切换到工厂分区等操作。详情请参阅 :example_file:`system/ota/otatool/README.md`。
 
 API 参考
 --------

@@ -3,16 +3,23 @@ I2S
 
 :link_to_translation:`en:[English]`
 
-{IDF_TARGET_I2S_NUM:default="1", esp32="2", esp32s3="2"}
+{IDF_TARGET_I2S_NUM:default="1", esp32="2", esp32s3="2", esp32p4="3"}
+{IDF_TARGET_I2S_STD_TDM:default="标准和 TDM", esp32="标准", esp32s2="标准"}
 
 简介
 ----
 
 I2S（Inter-IC Sound，集成电路内置音频总线）是一种同步串行通信协议，通常用于在两个数字音频设备之间传输音频数据。
 
+.. only:: SOC_LP_I2S_SUPPORTED
+
+    .. note::
+
+        LP I2S 文档请参阅 :doc:`Low Power Inter-IC Sound <./lp_i2s>`.
+
 {IDF_TARGET_NAME} 包含 {IDF_TARGET_I2S_NUM} 个 I2S 外设。通过配置这些外设，可以借助 I2S 驱动来输入和输出采样数据。
 
-标准或 TDM 通信模式下的 I2S 总线包含以下几条线路：
+{IDF_TARGET_I2S_STD_TDM} 模式下的 I2S 总线包含以下几条线路：
 
 - **MCLK**：主时钟线。该信号线可选，具体取决于从机，主要用于向 I2S 从机提供参考时钟。
 - **BCLK**：位时钟线。用于数据线的位时钟。
@@ -51,10 +58,12 @@ I2S 文件结构
 
 **需要包含在 I2S 应用中的公共头文件如下所示：**
 
-- ``i2s.h``：提供原有 I2S API（用于使用原有驱动的应用）。
-- ``i2s_std.h``：提供标准通信模式的 API（用于使用标准模式的新驱动程序的应用）。
-- ``i2s_pdm.h``：提供 PDM 通信模式的 API（用于使用 PDM 模式的新驱动程序的应用）。
-- ``i2s_tdm.h``：提供 TDM 通信模式的 API（用于使用 TDM 模式的新驱动的应用）。
+.. list::
+
+    - ``i2s.h``：提供原有 I2S API（用于使用原有驱动的应用）。
+    - ``i2s_std.h``：提供标准通信模式的 API（用于使用标准模式的新驱动程序的应用）。
+    :SOC_I2S_SUPPORTS_PDM: - ``i2s_pdm.h``：提供 PDM 通信模式的 API（用于使用 PDM 模式的新驱动程序的应用）。
+    :SOC_I2S_SUPPORTS_TDM: - ``i2s_tdm.h``：提供 TDM 通信模式的 API（用于使用 TDM 模式的新驱动的应用）。
 
 .. note::
 
@@ -72,23 +81,14 @@ I2S 时钟
 时钟源
 ^^^^^^
 
-- :cpp:enumerator:`i2s_clock_src_t::I2S_CLK_SRC_DEFAULT`：默认 PLL 时钟。
+.. list::
 
-.. only:: SOC_I2S_SUPPORTS_PLL_F160M
-
-    - :cpp:enumerator:`i2s_clock_src_t::I2S_CLK_SRC_PLL_160M`：160 MHz PLL 时钟。
-
-.. only:: SOC_I2S_SUPPORTS_PLL_F96M
-
-    - :cpp:enumerator:`i2s_clock_src_t::I2S_CLK_SRC_PLL_96M`：96 MHz PLL 时钟。
-
-.. only:: SOC_I2S_SUPPORTS_PLL_F240M
-
-    - :cpp:enumerator:`i2s_clock_src_t::I2S_CLK_SRC_PLL_240M`：240 MHz PLL 时钟。
-
-.. only:: SOC_I2S_SUPPORTS_APLL
-
-    - :cpp:enumerator:`i2s_clock_src_t::I2S_CLK_SRC_APLL`：音频 PLL 时钟，在高采样率应用中比 ``I2S_CLK_SRC_PLL_160M`` 更精确。其频率可根据采样率进行配置，但如果 APLL 已经被 EMAC 或其他通道占用，则无法更改 APLL 频率，驱动程序将尝试在原有 APLL 频率下工作。如果原有 APLL 频率无法满足 I2S 的需求，时钟配置将失败。
+    - :cpp:enumerator:`i2s_clock_src_t::I2S_CLK_SRC_DEFAULT`：默认 PLL 时钟。
+    :SOC_I2S_SUPPORTS_PLL_F160M: - :cpp:enumerator:`i2s_clock_src_t::I2S_CLK_SRC_PLL_160M`：160 MHz PLL 时钟。
+    :SOC_I2S_SUPPORTS_PLL_F120M: - :cpp:enumerator:`i2s_clock_src_t::I2S_CLK_SRC_PLL_120M`：120 MHz PLL 时钟。
+    :SOC_I2S_SUPPORTS_PLL_F96M: - :cpp:enumerator:`i2s_clock_src_t::I2S_CLK_SRC_PLL_96M`：96 MHz PLL 时钟。
+    :SOC_I2S_SUPPORTS_PLL_F240M: - :cpp:enumerator:`i2s_clock_src_t::I2S_CLK_SRC_PLL_240M`：240 MHz PLL 时钟。
+    :SOC_I2S_SUPPORTS_APLL: - :cpp:enumerator:`i2s_clock_src_t::I2S_CLK_SRC_APLL`：音频 PLL 时钟，在高采样率应用中比 ``I2S_CLK_SRC_PLL_160M`` 更精确。其频率可根据采样率进行配置，但如果 APLL 已经被 EMAC 或其他通道占用，则无法更改 APLL 频率，驱动程序将尝试在原有 APLL 频率下工作。如果原有 APLL 频率无法满足 I2S 的需求，时钟配置将失败。
 
 时钟术语
 ^^^^^^^^
@@ -111,18 +111,23 @@ I2S 通信模式
 模式概览
 ^^^^^^^^
 
-=========  ========  ========  ========  ========  ========  ==========
-芯片       I2S 标准   PDM TX    PDM RX     TDM      ADC/DAC   LCD/摄像头
-=========  ========  ========  ========  ========  ========  ==========
-ESP32      I2S 0/1    I2S 0     I2S 0      无       I2S 0      I2S 0
-ESP32-S2    I2S 0     无        无         无       无         I2S 0
-ESP32-C3    I2S 0     I2S 0     无        I2S 0     无         无
-ESP32-C6    I2S 0     I2S 0     无        I2S 0     无         无
-ESP32-S3   I2S 0/1    I2S 0     I2S 0    I2S 0/1    无         无
-ESP32-H2    I2S 0     I2S 0     无        I2S 0     无         无
-ESP32-P4   I2S 0~2    I2S 0     I2S 0    I2S 0~2    无         无
-ESP32-C5    I2S 0     I2S 0     无        I2S 0     无         无
-=========  ========  ========  ========  ========  ========  ==========
+=========  ========  ==========  ==========  ===========  ==========  ========  ===========
+芯片       I2S 标准  PCM-to-PDM  PDM-to-PCM      PDM         TDM      ADC/DAC   LCD/摄像头
+=========  ========  ==========  ==========  ===========  ==========  ========  ===========
+ESP32      I2S 0/1     I2S 0       I2S 0       I2S 0/1        无        I2S 0      I2S 0
+ESP32-S2    I2S 0        无         无           无           无         无        I2S 0
+ESP32-C3    I2S 0      I2S 0        无          I2S 0        I2S 0       无         无
+ESP32-C6    I2S 0      I2S 0        无          I2S 0        I2S 0       无         无
+ESP32-S3   I2S 0/1     I2S 0       I2S 0       I2S 0/1      I2S 0/1      无         无
+ESP32-H2    I2S 0      I2S 0        无          I2S 0        I2S 0       无         无
+ESP32-P4   I2S 0~2     I2S 0       I2S 0       I2S 0~2      I2S 0~2      无         无
+ESP32-C5    I2S 0      I2S 0        无          I2S 0        I2S 0       无         无
+ESP32-C61   I2S 0      I2S 0        无          I2S 0        I2S 0       无         无
+=========  ========  ==========  ==========  ===========  ==========  ========  ===========
+
+.. note::
+
+    如需使用 PDM 模式，请注意不是所有 I2S 端口都支持原始 PDM 格式与 PCM 格式之间的转换，因为有些端口在 TX 方向上没有 PCM-to-PDM 数据格式转换器，或在 RX 方向上没有 PDM-to-PCM 数据格式转换器。因此，这些没有硬件格式转换器的端口只能读写原始 PDM 格式的数据。如果需要在这些端口上处理 PCM 格式的数据，则需额外采用一个软件滤波器来实现 PDM 格式和 PCM 格式之间的转换。
 
 标准模式
 ^^^^^^^^
@@ -142,28 +147,75 @@ ESP32-C5    I2S 0     I2S 0     无        I2S 0     无         无
 .. wavedrom:: /../_static/diagrams/i2s/std_pcm.json
 
 
-.. only:: SOC_I2S_SUPPORTS_PDM_TX
+.. only:: SOC_I2S_SUPPORTS_PDM
 
-    PDM 模式 (TX)
-    ^^^^^^^^^^^^^
+    PDM 模式
+    ^^^^^^^^
 
-    在 PDM（Pulse-density Modulation，脉冲密度调制）模式下，TX 通道可以将 PCM 数据转换为 PDM 格式，该格式始终有左右两个声道。PDM TX 只在 I2S0 中受支持，且只支持 16 位宽的采样数据。PDM TX 至少需要一个 CLK 管脚用于时钟信号，一个 DOUT 管脚用于数据信号（即下图中的 WS 和 SD 信号。BCK 信号为内部位采样时钟，在 PDM 设备之间不需要）。PDM 模式允许用户配置上采样参数 :cpp:member:`i2s_pdm_tx_clk_config_t::up_sample_fp` 和 :cpp:member:`i2s_pdm_tx_clk_config_t::up_sample_fs`，上采样率可以通过公式 ``up_sample_rate = i2s_pdm_tx_clk_config_t::up_sample_fp / i2s_pdm_tx_clk_config_t::up_sample_fs`` 来计算。在 PDM TX 中有以下两种上采样模式：
-
-    - **固定时钟频率模式**：在这种模式下，上采样率将根据采样率的变化而变化。设置 ``fp = 960``、 ``fs = sample_rate / 100``，则 CLK 管脚上的时钟频率 (Fpdm) 将固定为 ``128 * 48 KHz = 6.144 MHz``。注意此频率不等于采样率 (Fpcm)。
-    - **固定上采样率模式**：在这种模式下，上采样率固定为 2。设置 ``fp = 960``、 ``fs = 480``，则 CLK 管脚上的时钟频率 (Fpdm) 将为 ``128 * sample_rate``。
+    PDM（Pulse-density Modulation，脉冲密度调制）通过采样的方式将模拟信号数字化为 1 位精度的数字信号。它以脉冲密度的方式呈现模拟信号的大小，即密度越高，对应的模拟信号值越大。PDM 时序图如下所示：
 
     .. wavedrom:: /../_static/diagrams/i2s/pdm.json
 
+    PDM 格式的数据通常可以经过以下几个步骤转换为 PCM 格式：
 
-.. only:: SOC_I2S_SUPPORTS_PDM_RX
+    1. 低通滤波：用于还原模拟信号波形。一般采用 FIR 滤波器；
+    2. 下采样：用于将 PDM 的过采样率降低到期望的 PCM 采样率。下采样可以用简单的抽值法实现；
+    3. 高通滤波：用于去除信号的直流部分；
+    4. 放大：用于调整转换后的 PCM 数据的増益。一般由转换后的 PCM 信号乘以一个系数得到最终 PCM 信号。
 
-    PDM 模式 (RX)
-    ^^^^^^^^^^^^^
+    对于具有 ``PCM-to-PDM`` 格式转换器的 I2S 端口，可以在发送数据的时候，将 PCM 数据转换为 PDM 格式发送。
+    对于具有 ``PDM-to-PCM`` 格式转换器的 I2S 端口，可以再接收数据的时候，将收到的 PDM 格式的数据转换为 PCM 格式。
+    若硬件不具备上述的格式转换器，则 PDM 模式只能收发原始的 PDM 格式数据。需要在软件上实现 PDM-to-PCM 的转换逻辑以此得到常用的 PCM 格式数据。
 
-    在 PDM（Pulse-density Modulation，脉冲密度调制）模式下，RX 通道可以接收 PDM 格式的数据并将数据转换成 PCM 格式。PDM RX 只在 I2S0 中受支持，且只支持 16 位宽的采样数据。PDM RX 至少需要一个 CLK 管脚用于时钟信号，一个 DIN 管脚用于数据信号。此模式允许用户配置下采样参数 :cpp:member:`i2s_pdm_rx_clk_config_t::dn_sample_mode`。在 PDM RX 中有以下两种下采样模式：
+    .. note::
 
-    - :cpp:enumerator:`i2s_pdm_dsr_t::I2S_PDM_DSR_8S`：在这种模式下，WS 管脚的时钟频率 (Fpdm) 将为 ``sample_rate (Fpcm) * 64``。
-    - :cpp:enumerator:`i2s_pdm_dsr_t::I2S_PDM_DSR_16S`： 在这种模式下，WS 管脚的时钟频率 (Fpdm) 将为 ``sample_rate (Fpcm) * 128``。
+        无论原始 PDM 格式还是 PCM 格式，PDM 模式下的一个数据单元总是 16 比特的位宽。例如，用原始 PDM 格式发送数据，那么您数组中的数据应该像这样排列：CH0 0x1234，CH1 0x5678，CH0 0x9abc，CH1 0xdef0。RX 方向同理。
+
+    .. only:: SOC_I2S_SUPPORTS_PDM_TX
+
+        PDM TX 模式原始 PDM 数据格式
+        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+        要发送原始 PDM 格式的数据，您需要将 :cpp:member:`i2s_pdm_tx_slot_config_t::data_fmt` 设为 :cpp:enumerator:`i2s_pdm_data_fmt_t::I2S_PDM_DATA_FMT_RAW`。另外在设置 :cpp:member:`i2s_pdm_tx_clk_config_t::sample_rate_hz` 时请注意，PDM 的采样率通常在若干 MHz，典型值范围一般是 1.024MHz 到 6.144MHz 之间，您可以根据需求来设置。
+
+        而原始 PDM 数据格式下的声道配置，可以通过帮助宏 :c:macro:`I2S_PDM_TX_SLOT_RAW_FMT_DEFAULT_CONFIG` 或 ::c:macro:`I2S_PDM_TX_SLOT_RAW_FMT_DAC_DEFAULT_CONFIG` 来配置。
+
+        .. only:: SOC_I2S_SUPPORTS_PCM2PDM
+
+            PDM TX 模式 PCM 数据格式（采用 PCM-to-PDM 格式转换器）
+            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+            {IDF_TARGET_NAME} 在 ``I2S0`` 上支持 PCM-to-PDM 格式转换器，您可以通过 :cpp:member:`i2s_pdm_tx_slot_config_t::data_fmt` 设为 :cpp:enumerator:`i2s_pdm_data_fmt_t::I2S_PDM_DATA_FMT_PCM` 来启用 PCM-to-PDM 格式转换器。启用后会将发送的 PCM 格式的数据转换为 PDM 格式发送。另外在设置 :cpp:member:`i2s_pdm_tx_clk_config_t::sample_rate_hz` 时请注意，PCM 的采样率通常低于 100 KHz，典型值的范围一般是 16KHz 到 48KHz 之间，您可以根据需求来设置。
+
+            另外 PCM-to-PDM 转换器可配置上采样参数 :cpp:member:`i2s_pdm_tx_clk_config_t::up_sample_fp` 和 :cpp:member:`i2s_pdm_tx_clk_config_t::up_sample_fs`。上采样率可以通过公式 ``up_sample_rate = i2s_pdm_tx_clk_config_t::up_sample_fp / i2s_pdm_tx_clk_config_t::up_sample_fs`` 来计算。在 PDM TX 中有以下两种上采样模式，输出的 PDM 采样频率和配置的 PCM 采样频率关系如下：
+
+            - **固定时钟频率模式**：在这种模式下，上采样率将根据采样率的变化而变化。设置 ``fp = 960``、 ``fs = (PCM)sample_rate / 100``，则 CLK 管脚上的输出的 PDM 时钟频率将固定为 ``128 * 48 KHz = 6.144 MHz``。
+            - **固定上采样率模式**：在这种模式下，上采样率固定为 2。即设置 ``fp = 960``、 ``fs = 480``，则 CLK 管脚上的 PDM 的时钟频率将为 ``128 * sample_rate``。
+
+            而 PCM 数据格式下的声道配置，您可以通过帮助宏 :c:macro:`I2S_PDM_TX_SLOT_PCM_FMT_DEFAULT_CONFIG` 和 :c:macro:`I2S_PDM_TX_SLOT_PCM_FMT_DAC_DEFAULT_CONFIG` 来配置。
+
+    .. only:: SOC_I2S_SUPPORTS_PDM_RX
+
+        PDM RX 模式原始 PDM 数据格式
+        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+        要接收原始 PDM 格式的数据，您需要将 :cpp:member:`i2s_pdm_rx_slot_config_t::data_fmt` 设为 :cpp:enumerator:`i2s_pdm_data_fmt_t::I2S_PDM_DATA_FMT_RAW`。另外在设置 :cpp:member:`i2s_pdm_rx_clk_config_t::sample_rate_hz` 时请注意，PDM 的采样率通常在若干 MHz，典型值范围一般是 1.024MHz 到 6.144MHz 之间，您可以根据需求来设置。
+
+        而原始 PDM 数据格式下的声道配置，可以通过帮助宏 :c:macro:`I2S_PDM_RX_SLOT_RAW_FMT_DEFAULT_CONFIG` 来配置。
+
+        .. only:: SOC_I2S_SUPPORTS_PDM2PCM
+
+            PDM RX 模式 PCM 数据格式（采用 PDM-to-PCM 格式转换器）
+            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+            {IDF_TARGET_NAME} 在 ``I2S0`` 上支持 PDM-to-PCM 格式转换器，您可以通过 :cpp:member:`i2s_pdm_rx_slot_config_t::data_fmt` 设为 :cpp:enumerator:`i2s_pdm_data_fmt_t::I2S_PDM_DATA_FMT_PCM` 来启用 PDM-to-PCM 格式转换器。启用后会将接收到的 PDM 格式的数据转换为 PCM 格式。另外在设置 :cpp:member:`i2s_pdm_rx_clk_config_t::sample_rate_hz` 时请注意，PCM 的采样率通常低于 100 KHz，典型值的范围一般是 16KHz 到 48KHz 之间，您可以根据需求来设置。
+
+            另外 PDM-to-PCM 转换器可配置下采样参数 :cpp:member:`i2s_pdm_rx_clk_config_t::dn_sample_mode`。在 PDM RX 中有以下两种下采样模式，输出的 PDM 采样频率和配置的 PCM 采样频率关系如下：
+
+            - :cpp:enumerator:`i2s_pdm_dsr_t::I2S_PDM_DSR_8S`：在这种模式下，CLK 管脚的 PDM 时钟频率将为 ``(PCM) sample_rate * 64``。
+            - :cpp:enumerator:`i2s_pdm_dsr_t::I2S_PDM_DSR_16S`： 在这种模式下，CLK 管脚的 PDM 时钟频率将为 ``(PCM) sample_rate * 128``。
+
+            而 PCM 数据格式下的声道配置，可以通过帮助宏 :c:macro:`I2S_PDM_RX_SLOT_PCM_FMT_DEFAULT_CONFIG` 来配置。
 
 
 .. only:: SOC_I2S_SUPPORTS_TDM
@@ -234,6 +286,15 @@ I2S 驱动中的资源可分为三个级别：
 
 I2S 驱动可以获取电源管理锁，从而防止系统设置更改或时钟源被禁用。时钟源为 APB 时，锁的类型将被设置为 :cpp:enumerator:`esp_pm_lock_type_t::ESP_PM_APB_FREQ_MAX`。时钟源为 APLL（若支持）时，锁的类型将被设置为 :cpp:enumerator:`esp_pm_lock_type_t::ESP_PM_NO_LIGHT_SLEEP`。用户通过 I2S 读写时（即调用 :cpp:func:`i2s_channel_read` 或 :cpp:func:`i2s_channel_write`），驱动程序将获取电源管理锁，并在读写完成后释放锁。
 
+.. only:: SOC_I2S_SUPPORT_SLEEP_RETENTION
+
+    睡眠保留
+    """"""""
+
+    {IDF_TARGET_NAME} 支持在进入 **轻度睡眠** 之前保留 I2S 寄存器中的内容，并在唤醒后恢复。也就是说外设若因进入 **轻度睡眠** 而掉电，程序不需要在唤醒后重新配置 I2S。
+
+    该特性可以通过置位配置中的 :cpp:member:`i2s_chan_config_t::allow_pd` 标志位启用。启用后驱动允许系统在轻度睡眠时对 I2S 掉电，同时保存 I2S 的寄存器内容。它可以帮助降低轻度睡眠时的功耗，但需要花费一些额外的存储来保存寄存器的配置。
+
 有限状态机
 ^^^^^^^^^^
 
@@ -259,6 +320,14 @@ I2S 的数据传输（包括数据发送和接收）由 DMA 实现。在传输�
 
 用户可以通过调用相应函数（即 :func:`i2s_channel_init_std_mode`、 :func:`i2s_channel_init_pdm_rx_mode`、 :func:`i2s_channel_init_pdm_tx_mode` 或 :func:`i2s_channel_init_tdm_mode`）将通道初始化为特定模式。如果初始化后需要更新配置，必须先调用 :cpp:func:`i2s_channel_disable` 以确保通道已经停止运行，然后再调用相应的 'reconfig' 函数，例如 :cpp:func:`i2s_channel_reconfig_std_slot`、 :cpp:func:`i2s_channel_reconfig_std_clock` 和 :cpp:func:`i2s_channel_reconfig_std_gpio`。
 
+进阶 API
+^^^^^^^^^^^^^^
+
+为满足高质量音频需求，驱动提供了以下进阶 API：
+
+- :cpp:func:`i2s_channel_preload_data`: 用于预加载音频数据到 I2S 内部缓存，使得 TX 通道使能后能够立即发送数据，以此降低音频初始输出延迟。
+- :cpp:func:`i2s_channel_tune_rate`: 用于在运行时动态微调音频速率，以匹配音频数据生产者和消费者的速度，从而防止因速率不匹配导致的中间缓存数据累积或不足。
+
 IRAM 安全
 ^^^^^^^^^
 
@@ -281,7 +350,6 @@ Kconfig 选项
 ^^^^^^^^^^^^
 
 - :ref:`CONFIG_I2S_ISR_IRAM_SAFE` 控制默认 ISR 处理程序能否在禁用 cache 的情况下工作。更多信息可参考 `IRAM 安全 <#iram-safe>`__。
-- :ref:`CONFIG_I2S_SUPPRESS_DEPRECATE_WARN` 控制是否在使用原有 I2S 驱动时关闭警告信息。
 - :ref:`CONFIG_I2S_ENABLE_DEBUG_LOG` 用于启用调试日志输出。启用该选项将增加固件的二进制文件大小。
 
 应用实例
@@ -291,6 +359,9 @@ I2S 驱动例程请参考 :example:`peripherals/i2s` 目录。以下为每种模
 
 标准 TX/RX 模式的应用
 ^^^^^^^^^^^^^^^^^^^^^
+
+- :example:`peripherals/i2s/i2s_codec/i2s_es8311` 演示了如何在 {IDF_TARGET_NAME} 上使用 I2S ES8311 音频编解码器来播放音乐或回声，具有高性能和低功耗的多位 delta-sigma 音频 ADC 和 DAC，提供自定义音乐、调整麦克风增益和音量的选项。
+- :example:`peripherals/i2s/i2s_basic/i2s_std` 演示了如何在 {IDF_TARGET_NAME} 上以单工或全双工模式使用 I2S 标准模式。
 
 不同声道的通信格式可通过以下标准模式的辅助宏来生成。如上所述，在标准模式下有三种格式，辅助宏分别为：
 
@@ -548,6 +619,8 @@ STD RX 模式
     PDM TX 模式的应用
     ^^^^^^^^^^^^^^^^^^^
 
+    - :example:`peripherals/i2s/i2s_basic/i2s_pdm` 演示了如何在 {IDF_TARGET_NAME} 上使用 PDM TX 模式，包括必要的硬件设置和配置。
+
     针对 TX 通道的 PDM 模式，声道配置的辅助宏为：
 
     - :c:macro:`I2S_PDM_TX_SLOT_DEFAULT_CONFIG`
@@ -644,9 +717,16 @@ STD RX 模式
     PDM RX 模式的应用
     ^^^^^^^^^^^^^^^^^^
 
+    - :example:`peripherals/i2s/i2s_recorder` 演示了如何通过 I2S 外设以 PDM 数据格式用数字 MEMS 麦克风录制音频，并将其以 ``.wav`` 文件格式保存到 {IDF_TARGET_NAME} 开发板上的 SD 卡中。
+    - :example:`peripherals/i2s/i2s_basic/i2s_pdm` 演示了如何在 {IDF_TARGET_NAME} 上使用 PDM RX 模式，包括必要的硬件设置和配置。
+
     针对 RX 通道的 PDM 模式，声道配置的辅助宏为：
 
-    - :c:macro:`I2S_PDM_RX_SLOT_DEFAULT_CONFIG`
+    - :c:macro:`I2S_PDM_RX_SLOT_RAW_FMT_DEFAULT_CONFIG` 该辅助宏为接收原始 PDM 数据格式提供了一些默认配置。
+
+    .. only:: SOC_I2S_SUPPORTS_PDM2PCM
+
+        - :c:macro:`I2S_PDM_RX_SLOT_PCM_FMT_DEFAULT_CONFIG` 该辅助宏为接收转换后的 PCM 数据格式提供了一些默认配置。
 
     时钟配置的辅助宏为：
 
@@ -708,7 +788,9 @@ STD RX 模式
         /* 初始化通道为 PDM RX 模式 */
         i2s_pdm_rx_config_t pdm_rx_cfg = {
             .clk_cfg = I2S_PDM_RX_CLK_DEFAULT_CONFIG(36000),
-            .slot_cfg = I2S_PDM_RX_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_MONO),
+            // 若不支持 PDM 转 PCM 格式转换器，请使用原始 PDM 格式
+            // .slot_cfg = I2S_PDM_RX_SLOT_RAW_FMT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_MONO),
+            .slot_cfg = I2S_PDM_RX_SLOT_PCM_FMT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_MONO),
             .gpio_cfg = {
                 .clk = GPIO_NUM_5,
                 .din = GPIO_NUM_19,
@@ -726,6 +808,9 @@ STD RX 模式
 
     TDM TX/RX 模式的应用
     ^^^^^^^^^^^^^^^^^^^^^
+
+    - :example:`peripherals/i2s/i2s_codec/i2s_es7210_tdm` 演示了如何在 {IDF_TARGET_NAME} 上使用 I2S TDM 模式来记录连接到 ES7210 编解码器的四个麦克风，并将录制的声音以 ``.wav`` 格式保存到 SD 卡中。
+    - :example:`peripherals/i2s/i2s_basic/i2s_tdm` 演示了如何在 {IDF_TARGET_NAME} 上以单工或全双工模式使用 TDM 模式。
 
     可以通过以下 TDM 模式的辅助宏生成不同的声道通信格式。如上所述，TDM 模式有四种格式，它们的辅助宏分别为：
 
@@ -816,7 +901,7 @@ STD RX 模式
 全双工
 ^^^^^^
 
-全双工模式可以在 I2S 端口中同时注册 TX 和 RX 通道，同时通道共享 BCLK 和 WS 信号。目前，STD 和 TDM 通信模式支持以下方式的全双工通信，但不支持 PDM 全双工模式，因为 PDM 模式下 TX 和 RX 通道的时钟不同。
+全双工模式可以在 I2S 端口中同时注册 TX 和 RX 通道，同时通道共享 BCLK 和 WS 信号。目前，{IDF_TARGET_I2S_STD_TDM} 通信模式支持以下方式的全双工通信，但不支持 PDM 全双工模式，因为 PDM 模式下 TX 和 RX 通道的时钟不同。
 
 请注意，一个句柄只能代表一个通道，因此仍然需要对 TX 和 RX 通道逐个进行声道和时钟配置。
 
@@ -979,6 +1064,79 @@ STD RX 模式
         i2s_channel_init_std_mode(rx_handle, &std_rx_cfg);
         i2s_channel_enable(rx_handle);
 
+.. only:: SOC_I2S_SUPPORTS_ETM
+
+    I2S ETM 用法
+    ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    {IDF_TARGET_NAME} 支持 I2S ETM （Event Task Matrix，事件任务矩阵）。 它可以通过 I2S 事件触发一个其他的 ETM 任务，或者通过其他的 ETM 事件来控制 I2S 的启停任务。
+
+    头文件 ``driver/i2s_etm.h`` 中可以找到 I2S ETM 所需的接口函数，下面示例代码将展示如何通过 GPIO 的 ETM 事件控制 I2S 的启停。
+
+    .. code-block:: c
+
+        #include "driver/i2s_etm.h"
+        // ...
+        i2s_chan_handle_t tx_handle;
+        // 初始化 I2S 通道
+        // ......
+        int ctrl_gpio = 4;
+        // 初始化 GPIO 用于控制
+        // ......
+        /* 注册 GPIO ETM 事件 */
+        gpio_etm_event_config_t gpio_event_cfg = {
+            .edges = {GPIO_ETM_EVENT_EDGE_POS, GPIO_ETM_EVENT_EDGE_NEG},
+        };
+        esp_etm_event_handle_t gpio_pos_event_handle;
+        esp_etm_event_handle_t gpio_neg_event_handle;
+        gpio_new_etm_event(&gpio_event_cfg, &gpio_pos_event_handle, &gpio_neg_event_handle);
+        gpio_etm_event_bind_gpio(gpio_pos_event_handle, ctrl_gpio);
+        gpio_etm_event_bind_gpio(gpio_neg_event_handle, ctrl_gpio);
+        /* 注册 I2S ETM 任务 */
+        i2s_etm_task_config_t i2s_start_task_cfg = {
+            .task_type = I2S_ETM_TASK_START,
+        };
+        esp_etm_task_handle_t i2s_start_task_handle;
+        i2s_new_etm_task(tx_handle, &i2s_start_task_cfg, &i2s_start_task_handle);
+        i2s_etm_task_config_t i2s_stop_task_cfg = {
+            .task_type = I2S_ETM_TASK_STOP,
+        };
+        esp_etm_task_handle_t i2s_stop_task_handle;
+        i2s_new_etm_task(tx_handle, &i2s_stop_task_cfg, &i2s_stop_task_handle);
+        /* 绑定 GPIO 事件和 I2S ETM 任务 */
+        esp_etm_channel_config_t etm_config = {};
+        esp_etm_channel_handle_t i2s_etm_start_chan = NULL;
+        esp_etm_channel_handle_t i2s_etm_stop_chan = NULL;
+        esp_etm_new_channel(&etm_config, &i2s_etm_start_chan);
+        esp_etm_new_channel(&etm_config, &i2s_etm_stop_chan);
+        esp_etm_channel_connect(i2s_etm_start_chan, gpio_pos_event_handle, i2s_start_task_handle);
+        esp_etm_channel_connect(i2s_etm_stop_chan, gpio_neg_event_handle, i2s_stop_task_handle);
+        esp_etm_channel_enable(i2s_etm_start_chan);
+        esp_etm_channel_enable(i2s_etm_stop_chan);
+        /* 通过 ETM 启动 I2S 前需要先使能这个通道 */
+        i2s_channel_enable(tx_handle);
+        // （可选）这里可以把要发送的数据先加载到内部的发送缓冲区中
+        // 但是由于 tx_channel 还没有启动，所以当内部缓冲区加载满后，再写入会超时
+        // i2s_channel_write(tx_handle, data, data_size, NULL, 0);
+        /* 通过拉高 GPIO 启动 I2S tx 通道 */
+        gpio_set_level(ctrl_gpio, 1);
+        // 写数据 ......
+        // i2s_channel_write(tx_handle, data, data_size, NULL, 1000);
+        /* 通过拉低 GPIO 停止 I2S tx 通道 */
+        gpio_set_level(ctrl_gpio, 0);
+
+        /* 释放 ETM 相关资源 */
+        i2s_channel_disable(tx_handle);
+        esp_etm_channel_disable(i2s_etm_start_chan);
+        esp_etm_channel_disable(i2s_etm_stop_chan);
+        esp_etm_del_event(gpio_pos_event_handle);
+        esp_etm_del_event(gpio_neg_event_handle);
+        esp_etm_del_task(i2s_start_task_handle);
+        esp_etm_del_task(i2s_stop_task_handle);
+        esp_etm_del_channel(i2s_etm_start_chan);
+        esp_etm_del_channel(i2s_etm_stop_chan);
+        // 去初始化 I2S 和 GPIO
+        // ......
 
 应用注意事项
 ------------

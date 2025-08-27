@@ -15,12 +15,7 @@
 #include "esp_efuse_table.h"
 #include "esp_log.h"
 #include "hal/wdt_hal.h"
-
-#if SOC_KEY_MANAGER_SUPPORTED
-#include "hal/key_mgr_hal.h"
-#include "hal/mspi_timing_tuning_ll.h"
-#include "soc/keymng_reg.h"
-#endif
+#include "sdkconfig.h"
 
 #ifdef CONFIG_SOC_EFUSE_CONSISTS_OF_ONE_KEY_BLOCK
 #include "soc/sensitive_reg.h"
@@ -48,7 +43,7 @@ static const char *TAG = "flash_encrypt";
 
 /* Static functions for stages of flash encryption */
 static esp_err_t encrypt_bootloader(void);
-static esp_err_t encrypt_and_load_partition_table(esp_partition_info_t *partition_table, int *num_partitions);
+static esp_err_t encrypt_and_load_partition_table(uint32_t offset, esp_partition_info_t *partition_table, int *num_partitions);
 static esp_err_t encrypt_partition(int index, const esp_partition_info_t *partition);
 static size_t get_flash_encrypt_cnt_value(void);
 
@@ -180,10 +175,12 @@ static esp_err_t check_and_generate_encryption_keys(void)
         if (tmp_has_key) { // For ESP32: esp_efuse_find_purpose() always returns True, need to check whether the key block is used or not.
             tmp_has_key &= !esp_efuse_key_block_unused(blocks[i]);
         }
+#if CONFIG_SECURE_FLASH_ENCRYPTION_AES256
         if (i == 1 && tmp_has_key != has_key) {
             ESP_LOGE(TAG, "Invalid efuse key blocks: Both AES-256 key blocks must be set.");
             return ESP_ERR_INVALID_STATE;
         }
+#endif
         has_key &= tmp_has_key;
     }
 
@@ -216,18 +213,6 @@ static esp_err_t check_and_generate_encryption_keys(void)
         }
         ESP_LOGI(TAG, "Using pre-loaded flash encryption key in efuse");
     }
-
-#if SOC_KEY_MANAGER_SUPPORTED
-#if CONFIG_IDF_TARGET_ESP32C5 && SOC_KEY_MANAGER_SUPPORTED
-    // TODO: [ESP32C5] IDF-8622 find a more proper place for these codes
-    REG_SET_BIT(KEYMNG_STATIC_REG, KEYMNG_USE_EFUSE_KEY_FLASH);
-    REG_SET_BIT(PCR_MSPI_CLK_CONF_REG, PCR_MSPI_AXI_RST_EN);
-    REG_CLR_BIT(PCR_MSPI_CLK_CONF_REG, PCR_MSPI_AXI_RST_EN);
-#endif
-    // Force Key Manager to use eFuse key for XTS-AES operation
-    key_mgr_hal_set_key_usage(ESP_KEY_MGR_XTS_AES_128_KEY, ESP_KEY_MGR_USE_EFUSE_KEY);
-    _mspi_timing_ll_reset_mspi();
-#endif
 
     return ESP_OK;
 }
@@ -275,12 +260,16 @@ esp_err_t esp_flash_encrypt_contents(void)
     REG_WRITE(SENSITIVE_XTS_AES_KEY_UPDATE_REG, 1);
 #endif
 
-    err = encrypt_bootloader();
+#if CONFIG_SOC_KEY_MANAGER_FE_KEY_DEPLOY
+    esp_flash_encryption_enable_key_mgr();
+#endif
+
+    err = encrypt_bootloader(); // PART_SUBTYPE_BOOTLOADER_PRIMARY
     if (err != ESP_OK) {
         return err;
     }
 
-    err = encrypt_and_load_partition_table(partition_table, &num_partitions);
+    err = encrypt_and_load_partition_table(ESP_PRIMARY_PARTITION_TABLE_OFFSET, partition_table, &num_partitions);  // PART_SUBTYPE_PARTITION_TABLE_PRIMARY
     if (err != ESP_OK) {
         return err;
     }
@@ -290,6 +279,14 @@ esp_err_t esp_flash_encrypt_contents(void)
 
     /* Go through each partition and encrypt if necessary */
     for (int i = 0; i < num_partitions; i++) {
+        if ((partition_table[i].type == PART_TYPE_BOOTLOADER && partition_table[i].subtype == PART_SUBTYPE_BOOTLOADER_PRIMARY)
+             || (partition_table[i].type == PART_TYPE_PARTITION_TABLE && partition_table[i].subtype == PART_SUBTYPE_PARTITION_TABLE_PRIMARY)) {
+            /* Skip encryption of PRIMARY partitions for bootloader and partition table.
+             * PRIMARY partitions have already been encrypted above.
+             * We allow to encrypt partitions that are not PRIMARY.
+             */
+            continue;
+        }
         err = encrypt_partition(i, &partition_table[i]);
         if (err != ESP_OK) {
             return err;
@@ -350,13 +347,13 @@ static esp_err_t encrypt_bootloader(void)
 
 #if CONFIG_SECURE_BOOT_V2_ENABLED
         /* The image length obtained from esp_image_verify_bootloader includes the sector boundary padding and the signature block lengths */
-        if (ESP_BOOTLOADER_OFFSET + image_length > ESP_PARTITION_TABLE_OFFSET) {
-            ESP_LOGE(TAG, "Bootloader is too large to fit Secure Boot V2 signature sector and partition table (configured offset 0x%x)", ESP_PARTITION_TABLE_OFFSET);
+        if (image_length > ESP_BOOTLOADER_SIZE) {
+            ESP_LOGE(TAG, "Bootloader is too large to fit Secure Boot V2 signature sector and partition table (configured offset 0x%x)", ESP_PRIMARY_PARTITION_TABLE_OFFSET);
             return ESP_ERR_INVALID_SIZE;
         }
 #endif // CONFIG_SECURE_BOOT_V2_ENABLED
 
-        err = esp_flash_encrypt_region(ESP_BOOTLOADER_OFFSET, image_length);
+        err = esp_flash_encrypt_region(ESP_PRIMARY_BOOTLOADER_OFFSET, image_length);
         if (err != ESP_OK) {
             ESP_LOGE(TAG, "Failed to encrypt bootloader in place: 0x%x", err);
             return err;
@@ -381,33 +378,37 @@ static esp_err_t encrypt_bootloader(void)
     return ESP_OK;
 }
 
-static esp_err_t encrypt_and_load_partition_table(esp_partition_info_t *partition_table, int *num_partitions)
+static esp_err_t read_and_verify_partition_table(uint32_t offset, esp_partition_info_t *partition_table, int *num_partitions)
 {
     esp_err_t err;
     /* Check for plaintext partition table */
-    err = bootloader_flash_read(ESP_PARTITION_TABLE_OFFSET, partition_table, ESP_PARTITION_TABLE_MAX_LEN, false);
+    err = bootloader_flash_read(offset, partition_table, ESP_PARTITION_TABLE_MAX_LEN, false);
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to read partition table data");
+        ESP_LOGE(TAG, "Failed to read partition table data at 0x%" PRIx32, offset);
         return err;
     }
-    if (esp_partition_table_verify(partition_table, false, num_partitions) == ESP_OK) {
-        ESP_LOGD(TAG, "partition table is plaintext. Encrypting...");
-        esp_err_t err = esp_flash_encrypt_region(ESP_PARTITION_TABLE_OFFSET,
-                                                 FLASH_SECTOR_SIZE);
-        if (err != ESP_OK) {
-            ESP_LOGE(TAG, "Failed to encrypt partition table in place. %x", err);
-            return err;
-        }
-    } else {
-        ESP_LOGE(TAG, "Failed to read partition table data - not plaintext?");
-        return ESP_ERR_INVALID_STATE;
+    err = esp_partition_table_verify(partition_table, false, num_partitions);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to read partition table data - not plaintext or empty?");
     }
-
-    /* Valid partition table loaded */
-    ESP_LOGI(TAG, "partition table encrypted and loaded successfully");
-    return ESP_OK;
+    return err;
 }
 
+static esp_err_t encrypt_and_load_partition_table(uint32_t offset, esp_partition_info_t *partition_table, int *num_partitions)
+{
+    esp_err_t err = read_and_verify_partition_table(offset, partition_table, num_partitions);
+    if (err != ESP_OK) {
+        return err;
+    }
+    ESP_LOGD(TAG, "partition table is plaintext. Encrypting...");
+    err = esp_flash_encrypt_region(offset, FLASH_SECTOR_SIZE);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to encrypt partition table in place. %x", err);
+        return err;
+    }
+    ESP_LOGI(TAG, "partition table encrypted and loaded successfully");
+    return err;
+}
 
 static esp_err_t encrypt_partition(int index, const esp_partition_info_t *partition)
 {
@@ -415,20 +416,28 @@ static esp_err_t encrypt_partition(int index, const esp_partition_info_t *partit
     bool should_encrypt = (partition->flags & PART_FLAG_ENCRYPTED);
     uint32_t size = partition->pos.size;
 
-    if (partition->type == PART_TYPE_APP) {
-        /* check if the partition holds a valid unencrypted app */
+    if (partition->type == PART_TYPE_APP || partition->type == PART_TYPE_BOOTLOADER) {
+        /* check if the partition holds a valid unencrypted app/bootloader */
         esp_image_metadata_t image_data = {};
-        err = esp_image_verify(ESP_IMAGE_VERIFY,
-                               &partition->pos,
-                               &image_data);
+        if (partition->type == PART_TYPE_BOOTLOADER) {
+            esp_image_bootloader_offset_set(partition->pos.offset);
+        }
+        err = esp_image_verify(ESP_IMAGE_VERIFY, &partition->pos, &image_data);
         should_encrypt = (err == ESP_OK);
-#ifdef SECURE_FLASH_ENCRYPT_ONLY_IMAGE_LEN_IN_APP_PART
-        if (should_encrypt) {
+#ifdef CONFIG_SECURE_FLASH_ENCRYPT_ONLY_IMAGE_LEN_IN_APP_PART
+        if (partition->type == PART_TYPE_APP && should_encrypt) {
             // Encrypt only the app image instead of encrypting the whole partition
             size = image_data.image_len;
         }
 #endif
+    } else if (partition->type == PART_TYPE_PARTITION_TABLE) {
+        /* check if the partition holds a valid unencrypted partition table */
+        esp_partition_info_t partition_table[ESP_PARTITION_TABLE_MAX_ENTRIES];
+        int num_partitions;
+        err = read_and_verify_partition_table(partition->pos.offset, partition_table, &num_partitions);
+        should_encrypt = (err == ESP_OK && num_partitions != 0);
     } else if ((partition->type == PART_TYPE_DATA && partition->subtype == PART_SUBTYPE_DATA_OTA)
+                || (partition->type == PART_TYPE_DATA && partition->subtype == PART_SUBTYPE_DATA_TEE_OTA)
                 || (partition->type == PART_TYPE_DATA && partition->subtype == PART_SUBTYPE_DATA_NVS_KEYS)) {
         /* check if we have ota data partition and the partition should be encrypted unconditionally */
         should_encrypt = true;

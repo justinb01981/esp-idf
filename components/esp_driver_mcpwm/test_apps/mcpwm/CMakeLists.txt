@@ -7,6 +7,7 @@ set(COMPONENTS main)
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(mcpwm_test)
 
+idf_build_get_property(elf EXECUTABLE)
 if(CONFIG_COMPILER_DUMP_RTL_FILES)
     add_custom_target(check_test_app_sections ALL
                       COMMAND ${PYTHON} $ENV{IDF_PATH}/tools/ci/check_callgraph.py
@@ -19,3 +20,8 @@ if(CONFIG_COMPILER_DUMP_RTL_FILES)
                       DEPENDS ${elf}
                       )
 endif()
+
+message(STATUS "Checking mcpwm registers are not read-write by half-word")
+include($ENV{IDF_PATH}/tools/ci/check_register_rw_half_word.cmake)
+check_register_rw_half_word(SOC_MODULES "mcpwm" "pcr" "hp_sys_clkrst"
+                            HAL_MODULES "mcpwm")

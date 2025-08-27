@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2022-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2022-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -10,6 +10,7 @@
 
 #include <stdbool.h>
 #include "soc/cache_reg.h"
+#include "soc/cache_struct.h"
 #include "soc/ext_mem_defs.h"
 #include "hal/cache_types.h"
 #include "hal/assert.h"
@@ -47,8 +48,10 @@ extern "C" {
 #define CACHE_LL_DEFAULT_IBUS_MASK                  (CACHE_BUS_IBUS0 | CACHE_BUS_IBUS1 | CACHE_BUS_IBUS2)
 #define CACHE_LL_DEFAULT_DBUS_MASK                  (CACHE_BUS_DBUS0 | CACHE_BUS_DBUS1 | CACHE_BUS_DBUS2)
 
-//TODO: IDF-7515
-#define CACHE_LL_L1_ACCESS_EVENT_MASK               (0x3f)
+#define CACHE_LL_L1_ACCESS_EVENT_MASK               (0x1f)
+#define CACHE_LL_L2_ACCESS_EVENT_MASK               (1<<6)
+#define CACHE_LL_L1_CORE0_EVENT_MASK                (1<<0)
+#define CACHE_LL_L1_CORE1_EVENT_MASK                (1<<1)
 
 /*------------------------------------------------------------------------------
  * Autoload
@@ -553,6 +556,80 @@ static inline void cache_ll_invalidate_addr(uint32_t cache_level, cache_type_t t
     }
 }
 
+/**
+ * @brief Invalidate L1 ICache all
+ *
+ * @param cache_id     id of the cache in this type and level
+ */
+__attribute__((always_inline))
+static inline void cache_ll_l1_invalidate_icache_all(uint32_t cache_id)
+{
+    if (cache_id == 0) {
+        Cache_Invalidate_All(CACHE_MAP_L1_ICACHE_0);
+    } else if (cache_id == 1) {
+        Cache_Invalidate_All(CACHE_MAP_L1_ICACHE_1);
+    } else if (cache_id == CACHE_LL_ID_ALL) {
+        Cache_Invalidate_All(CACHE_MAP_L1_ICACHE_MASK);
+    }
+}
+
+/**
+ * @brief Invalidate L1 DCache all
+ *
+ * @param cache_id     id of the cache in this type and level
+ */
+__attribute__((always_inline))
+static inline void cache_ll_l1_invalidate_dcache_all(uint32_t cache_id)
+{
+    if (cache_id == 0 || cache_id == CACHE_LL_ID_ALL) {
+        Cache_Invalidate_All(CACHE_MAP_L1_DCACHE);
+    }
+}
+
+/**
+ * @brief Invalidate L2 Cache all
+ *
+ * @param cache_id     id of the cache in this type and level
+ */
+__attribute__((always_inline))
+static inline void cache_ll_l2_invalidate_cache_all(uint32_t cache_id)
+{
+    if (cache_id == 0 || cache_id == CACHE_LL_ID_ALL) {
+        Cache_Invalidate_All(CACHE_MAP_L2_CACHE);
+    }
+}
+
+/**
+ * @brief Invalidate all
+ *
+ * @param cache_level       level of the cache
+ * @param type              see `cache_type_t`
+ * @param cache_id          id of the cache in this type and level
+ */
+__attribute__((always_inline))
+static inline void cache_ll_invalidate_all(uint32_t cache_level, cache_type_t type, uint32_t cache_id)
+{
+    if (cache_level == 1 || cache_level == 2 || cache_level == CACHE_LL_LEVEL_ALL) {
+        switch (type) {
+        case CACHE_TYPE_INSTRUCTION:
+            cache_ll_l1_invalidate_icache_all(cache_id);
+            break;
+        case CACHE_TYPE_DATA:
+            cache_ll_l1_invalidate_dcache_all(cache_id);
+            break;
+        case CACHE_TYPE_ALL:
+        default:
+            cache_ll_l1_invalidate_icache_all(cache_id);
+            cache_ll_l1_invalidate_dcache_all(cache_id);
+            break;
+        }
+    }
+
+    if (cache_level == 2 || cache_level == CACHE_LL_LEVEL_ALL) {
+        cache_ll_l2_invalidate_cache_all(cache_id);
+    }
+}
+
 /*------------------------------------------------------------------------------
  * Writeback
  *----------------------------------------------------------------------------*/
@@ -929,7 +1006,7 @@ static inline uint32_t cache_ll_get_line_size(uint32_t cache_level, cache_type_t
  * @param len               vaddr length
  */
 __attribute__((always_inline))
-static inline cache_bus_mask_t cache_ll_l1_get_bus(uint32_t cache_id, uint32_t vaddr_start, uint32_t len)
+static inline cache_bus_mask_t cache_ll_l1_get_bus(uint32_t bus_id, uint32_t vaddr_start, uint32_t len)
 {
     return (cache_bus_mask_t)(CACHE_LL_DEFAULT_IBUS_MASK | CACHE_LL_DEFAULT_DBUS_MASK);
 }
@@ -941,7 +1018,7 @@ static inline cache_bus_mask_t cache_ll_l1_get_bus(uint32_t cache_id, uint32_t v
  * @param mask        To know which buses should be enabled
  */
 __attribute__((always_inline))
-static inline void cache_ll_l1_enable_bus(uint32_t cache_id, cache_bus_mask_t mask)
+static inline void cache_ll_l1_enable_bus(uint32_t bus_id, cache_bus_mask_t mask)
 {
     //not used, for compatibility
 }
@@ -953,7 +1030,7 @@ static inline void cache_ll_l1_enable_bus(uint32_t cache_id, cache_bus_mask_t ma
  * @param mask        To know which buses should be disabled
  */
 __attribute__((always_inline))
-static inline void cache_ll_l1_disable_bus(uint32_t cache_id, cache_bus_mask_t mask)
+static inline void cache_ll_l1_disable_bus(uint32_t bus_id, cache_bus_mask_t mask)
 {
     //not used, for compatibility
 }
@@ -961,14 +1038,13 @@ static inline void cache_ll_l1_disable_bus(uint32_t cache_id, cache_bus_mask_t m
 /**
  * @brief Get the buses of a particular cache that are mapped to a virtual address range
  *
- * @param cache_id          cache ID
+ * @param cache_id          cache ID (when l1 cache is per core)
  * @param vaddr_start       virtual address start
  * @param len               vaddr length
  */
 __attribute__((always_inline))
 static inline cache_bus_mask_t cache_ll_l2_get_bus(uint32_t cache_id, uint32_t vaddr_start, uint32_t len)
 {
-    (void)cache_id;
     cache_bus_mask_t mask = (cache_bus_mask_t)0;
 
     uint32_t vaddr_end = vaddr_start + len - 1;
@@ -1019,27 +1095,29 @@ static inline bool cache_ll_vaddr_to_cache_level_id(uint32_t vaddr_start, uint32
  * Interrupt
  *----------------------------------------------------------------------------*/
 /**
- * @brief Enable Cache access error interrupt
+ * @brief Enable L1 Cache access error interrupt
  *
  * @param cache_id    Cache ID
  * @param mask        Interrupt mask
  */
 static inline void cache_ll_l1_enable_access_error_intr(uint32_t cache_id, uint32_t mask)
 {
+    CACHE.l1_cache_acs_fail_int_ena.val |= mask;
 }
 
 /**
- * @brief Clear Cache access error interrupt status
+ * @brief Clear L1 Cache access error interrupt status
  *
  * @param cache_id    Cache ID
  * @param mask        Interrupt mask
  */
 static inline void cache_ll_l1_clear_access_error_intr(uint32_t cache_id, uint32_t mask)
 {
+    CACHE.l1_cache_acs_fail_int_clr.val = mask;
 }
 
 /**
- * @brief Get Cache access error interrupt status
+ * @brief Get L1 Cache access error interrupt status
  *
  * @param cache_id    Cache ID
  * @param mask        Interrupt mask
@@ -1048,7 +1126,42 @@ static inline void cache_ll_l1_clear_access_error_intr(uint32_t cache_id, uint32
  */
 static inline uint32_t cache_ll_l1_get_access_error_intr_status(uint32_t cache_id, uint32_t mask)
 {
-    return 0;
+    return CACHE.l1_cache_acs_fail_int_st.val & mask;
+}
+
+/**
+ * @brief Enable L2 Cache access error interrupt
+ *
+ * @param cache_id    Cache ID
+ * @param mask        Interrupt mask
+ */
+static inline void cache_ll_l2_enable_access_error_intr(uint32_t cache_id, uint32_t mask)
+{
+    CACHE.l2_cache_acs_fail_int_ena.val |= mask;
+}
+
+/**
+ * @brief Clear L2 Cache access error interrupt status
+ *
+ * @param cache_id    Cache ID
+ * @param mask        Interrupt mask
+ */
+static inline void cache_ll_l2_clear_access_error_intr(uint32_t cache_id, uint32_t mask)
+{
+    CACHE.l2_cache_acs_fail_int_clr.val = mask;
+}
+
+/**
+ * @brief Get L2 Cache access error interrupt status
+ *
+ * @param cache_id    Cache ID
+ * @param mask        Interrupt mask
+ *
+ * @return            Status mask
+ */
+static inline uint32_t cache_ll_l2_get_access_error_intr_status(uint32_t cache_id, uint32_t mask)
+{
+    return CACHE.l2_cache_acs_fail_int_st.val & mask;
 }
 
 #ifdef __cplusplus

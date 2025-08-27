@@ -1,14 +1,15 @@
 以太网
 =========
 
-{IDF_TARGET_SOC_REF_CLK_IN_GPIO:default="", esp32="GPIO0", esp32p4="GPIO32, GPIO44 and GPIO50"}
-{IDF_TARGET_SOC_REF_CLK_OUT_GPIO:default="", esp32="GPIO0, GPIO16 and GPIO17", esp32p4="GPIO23 and GPIO39"}
-{IDF_TARGET_SOC_RMII_TX_EN:default="", esp32="GPIO21", esp32p4="GPIO33, GPIO40 and GPIO49"}
-{IDF_TARGET_SOC_RMII_TXD0:default="", esp32="GPIO19", esp32p4="GPIO34 and GPIO41"}
-{IDF_TARGET_SOC_RMII_TXD1:default="", esp32="GPIO22", esp32p4="GPIO35 and GPIO42"}
-{IDF_TARGET_SOC_RMII_CRS_DV:default="", esp32="GPIO27", esp32p4="GPIO28, GPIO45 and GPIO51"}
-{IDF_TARGET_SOC_RMII_RXD0:default="", esp32="GPIO25", esp32p4="GPIO29, GPIO46 and GPIO52"}
-{IDF_TARGET_SOC_RMII_RXD1:default="", esp32="GPIO26", esp32p4="GPIO30, GPIO47 and GPIO53"}
+{IDF_TARGET_SOC_DMA_DESC_SIZE:default="", esp32="32 字节", esp32p4=" 32 字节（由于需要适当的内存对齐，实际占用 64 字节）"}
+{IDF_TARGET_SOC_REF_CLK_IN_GPIO:default="", esp32="GPIO0", esp32p4="GPIO32，GPIO44 和 GPIO50"}
+{IDF_TARGET_SOC_REF_CLK_OUT_GPIO:default="", esp32="GPIO0，GPIO16 和 GPIO17", esp32p4="GPIO23 和 GPIO39"}
+{IDF_TARGET_SOC_RMII_TX_EN:default="", esp32="GPIO21", esp32p4="GPIO33，GPIO40 和 GPIO49"}
+{IDF_TARGET_SOC_RMII_TXD0:default="", esp32="GPIO19", esp32p4="GPIO34 和 GPIO41"}
+{IDF_TARGET_SOC_RMII_TXD1:default="", esp32="GPIO22", esp32p4="GPIO35 和 GPIO42"}
+{IDF_TARGET_SOC_RMII_CRS_DV:default="", esp32="GPIO27", esp32p4="GPIO28，GPIO45 和 GPIO51"}
+{IDF_TARGET_SOC_RMII_RXD0:default="", esp32="GPIO25", esp32p4="GPIO29，GPIO46 和 GPIO52"}
+{IDF_TARGET_SOC_RMII_RXD1:default="", esp32="GPIO26", esp32p4="GPIO30，GPIO47 和 GPIO53"}
 
 
 :link_to_translation:`en:[English]`
@@ -116,9 +117,7 @@
 
 以太网驱动器由两部分组成：MAC 和 PHY。
 
-.. TODO remove esp32p4 (IDF-9057)
-
-.. only:: SOC_EMAC_SUPPORTED and not esp32p4
+.. only:: SOC_EMAC_SUPPORTED
 
     MAC 和 PHY 之间的通信可以通过多种方式进行，如： **MII** （媒体独立接口）、 **RMII** （简化媒体独立接口）等。
 
@@ -167,6 +166,9 @@
 
             * 强制复位 PHY 设备（对应图中的选项 **a**）。**此种方法并不适用于所有 PHY 设备** （即便处于复位状态，某些 PHY 设备仍会向 GPIO0 输出信号）。
 
+        .. warning::
+            如希望 **以太网与 Wi-Fi 一起工作**，不要选择 ESP32 作为 ``REF_CLK`` 的源，因为这会导致 ``REF_CLK`` 不稳定。可以选择禁用 Wi-Fi，或使用 PHY 或外部振荡器作为 ``REF_CLK`` 的源。
+
     .. only:: not esp32
 
         .. note::
@@ -193,7 +195,7 @@
     .. only:: not SOC_EMAC_USE_MULTI_IO_MUX
 
         .. note::
-            数据平面中使用的信号通过 IO_MUX 连接至特定的 GPIO，这些信号无法配置到其他 GPIO 上。控制平面中使用的信号可以通过矩阵路由到任何空闲的 GPIO 上。相关硬件设计示例，请参阅 :doc:`ESP32-Ethernet-Kit <../../hw-reference/esp32/get-started-ethernet-kit>`。
+            数据平面中使用的信号通过 IO_MUX 连接至特定的 GPIO，这些信号无法配置到其他 GPIO 上。控制平面中使用的信号可以通过矩阵路由到任何空闲的 GPIO 上。相关硬件设计示例，请参阅 `ESP32-Ethernet-Kit <https://docs.espressif.com/projects/esp-dev-kits/zh_CN/latest/esp32/esp32-ethernet-kit/index.html>`_。
 
     .. only:: SOC_EMAC_USE_MULTI_IO_MUX
 
@@ -256,6 +258,19 @@ MAC 的相关配置可以在 :cpp:class:`eth_mac_config_t` 中找到，具体包
 
         :not SOC_EMAC_RMII_CLK_OUT_INTERNAL_LOOPBACK: * :cpp:member:`eth_esp32_emac_config_t::clock_config_out_in`：当 ``REF_CLK`` 信号在内部生成并从外部回环到 EMAC 时，配置 EMAC 输入接口时钟。必须始终将 EMAC 的模式配置为 :cpp:enumerator:`emac_rmii_clock_mode_t::EMAC_CLK_EXT_IN`。此选项仅在 :cpp:member:`eth_esp32_emac_config_t::clock_config` 的配置设置为 :cpp:enumerator:`emac_rmii_clock_mode_t::EMAC_CLK_OUT` 时有效。
 
+    使用内部 MAC 时的内存注意事项
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    内部 MAC 子系统通过 DMA 使用描述符链表在 CPU 域之间传输数据。描述符有发送和接收两种类型，分别保存接收或已发送帧的状态信息，或提供传输控制。每个描述符还包含指向当前数据缓冲区和下一个描述符的指针。因此，在支持 DMA 的内存中，单个 EMAC DMA 描述符的大小为 {IDF_TARGET_SOC_DMA_DESC_SIZE}。
+
+    默认配置应涵盖大多数用例。然而，某些情况可能需要对以太网 DMA 内存的使用进行配置，以满足特定需求。典型问题可能发生于下列情形：
+
+    .. list::
+
+        * **网络流量由短且频繁的帧主导时**：如果你的网络流量主要由短且频繁发送（或接收）的帧组成，可能会遇到吞吐量低于预期（尽管额定为 100 Mbps），以及接收过程中丢帧等问题。在发送时，套接字发送 API 可能会返回 ``errno`` 为 ``ENOMEM``，并显示 `TX 缓冲区大小不足`（如果启用了调试日志级别）。这些问题的主要原因是，默认的内存配置针对较大帧进行了优化。默认情况下 :ref:`CONFIG_ETH_DMA_BUFFER_SIZE` 设置为 512 字节，以确保 *数据缓冲区* 与 *描述符* 大小的开销比。要解决此问题，可以增加缓冲区数量， :ref:`CONFIG_ETH_DMA_RX_BUFFER_NUM` 或 :ref:`CONFIG_ETH_DMA_TX_BUFFER_NUM`。此外，还可以减小 :ref:`CONFIG_ETH_DMA_BUFFER_SIZE`，使其与网络中典型帧的大小相匹配，从而合理控制以太网驱动的内存占用。
+
+        * **高吞吐量导致缓冲区耗尽时**：如果套接字发送 API 间歇性返回 ``errno`` 为 ``ENOMEM``，并显示 `TX 缓冲区大小不足`（如果启用了调试日志级别），且吞吐量接近额定的 100 Mbps，这通常表明接近硬件限制。在这种情况下，硬件无法跟上传输请求。解决方案是，增加 :ref:`CONFIG_ETH_DMA_TX_BUFFER_NUM`，以缓存更多的帧，并缓解传输请求的短时峰值。然而，如果请求的流量持续超过额定吞吐量，此方法将失效，需通过应用层通过软件限制带宽。
+
 PHY 的相关配置可以在 :cpp:class:`eth_phy_config_t` 中找到，具体包括：
 
 .. list::
@@ -267,6 +282,10 @@ PHY 的相关配置可以在 :cpp:class:`eth_phy_config_t` 中找到，具体包
     * :cpp:member:`eth_phy_config_t::autonego_timeout_ms`：自动协商超时值，单位为毫秒。以太网驱动程序会与链路另一端的设备进行自协商，以确定连接的最佳双工模式和速率。此值通常取决于电路板上 PHY 设备的性能。
 
     * :cpp:member:`eth_phy_config_t::reset_gpio_num`：如果开发板同时将 PHY 复位管脚连接至了任意 GPIO 管脚，请使用该字段进行配置。否则，配置为 ``-1``。
+
+    * :cpp:member:`eth_phy_config_t::hw_reset_assert_time_us`：PHY 复位引脚被置为有效状态的时间（以微秒为单位）。将该值配置为 ``0``，即可使用芯片默认的复位时长。
+
+    * :cpp:member:`eth_phy_config_t::post_hw_reset_delay_ms`：PHY 硬件复位完成后的等待时间（以毫秒为单位）。将该值配置为 ``0``，即可使用芯片默认的等待时长，配置为 ``-1``，表示执行 PHY 硬件复位后不等待。
 
 ESP-IDF 在宏 :c:macro:`ETH_MAC_DEFAULT_CONFIG` 和 :c:macro:`ETH_PHY_DEFAULT_CONFIG` 中为 MAC 和 PHY 提供了默认配置。
 
@@ -287,18 +306,22 @@ ESP-IDF 在宏 :c:macro:`ETH_MAC_DEFAULT_CONFIG` 和 :c:macro:`ETH_PHY_DEFAULT_C
 
         eth_mac_config_t mac_config = ETH_MAC_DEFAULT_CONFIG();                      // 应用默认的通用 MAC 配置
         eth_esp32_emac_config_t esp32_emac_config = ETH_ESP32_EMAC_DEFAULT_CONFIG(); // 应用默认的供应商特定 MAC 配置
-        esp32_emac_config.smi_mdc_gpio_num = CONFIG_EXAMPLE_ETH_MDC_GPIO;            // 更改用于 MDC 信号的 GPIO
-        esp32_emac_config.smi_mdio_gpio_num = CONFIG_EXAMPLE_ETH_MDIO_GPIO;          // 更改用于 MDIO 信号的 GPIO
+        esp32_emac_config.smi_gpio.mdc_num = CONFIG_EXAMPLE_ETH_MDC_GPIO;            // 更改用于 MDC 信号的 GPIO
+        esp32_emac_config.smi_gpio.mdio_num = CONFIG_EXAMPLE_ETH_MDIO_GPIO;          // 更改用于 MDIO 信号的 GPIO
         esp_eth_mac_t *mac = esp_eth_mac_new_esp32(&esp32_emac_config, &mac_config); // 创建 MAC 实例
 
         eth_phy_config_t phy_config = ETH_PHY_DEFAULT_CONFIG();      // 应用默认的 PHY 配置
         phy_config.phy_addr = CONFIG_EXAMPLE_ETH_PHY_ADDR;           // 根据开发板设计更改 PHY 地址
         phy_config.reset_gpio_num = CONFIG_EXAMPLE_ETH_PHY_RST_GPIO; // 更改用于 PHY 复位的 GPIO
-        esp_eth_phy_t *phy = esp_eth_phy_new_ip101(&phy_config);     // 创建 PHY 实例
-        // ESP-IDF 为数种以太网 PHY 芯片驱动提供官方支持
+        esp_eth_phy_t *phy = esp_eth_phy_new_generic(&phy_config);     // 创建通用 PHY 实例
+        // ESP-IDF 为数种特定以太网 PHY 芯片驱动提供官方支持
+        // esp_eth_phy_t *phy = esp_eth_phy_new_ip101(&phy_config);
         // esp_eth_phy_t *phy = esp_eth_phy_new_rtl8201(&phy_config);
         // esp_eth_phy_t *phy = esp_eth_phy_new_lan8720(&phy_config);
         // esp_eth_phy_t *phy = esp_eth_phy_new_dp83848(&phy_config);
+
+    .. note::
+        使用 :cpp:func:`esp_eth_phy_new_generic` 创建新的 PHY 实例时，可以使用任何符合 IEEE 802.3 标准的以太网 PHY 芯片。然而，尽管 PHY 芯片符合 IEEE 802.3 标准，能提供基本功能，但某些特定的功能可能无法完全实现。例如，某些以太网 PHY 芯片可能需要配置特定的速度模式才能启用环回功能。遇到这种情况，需要配置 PHY 驱动程序以满足特定芯片需求，请使用 ESP-IDF 官方支持的 PHY 芯片驱动程序，或参阅 :ref:`Custom PHY Driver <custom-phy-driver>` 小节以创建新的自定义驱动程序。
 
     可选的运行时 MAC 时钟配置
     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -373,7 +396,7 @@ SPI-Ethernet 模块
 
 * :cpp:member:`esp_eth_config_t::check_link_period_ms`：以太网驱动程序会启用操作系统定时器来定期检查链接状态。该字段用于设置间隔时间，单位为毫秒。
 
-* :cpp:member:`esp_eth_config_t::stack_input`：在大多数的以太网物联网应用中，驱动器接收的以太网帧会被传递到上层（如 TCP/IP 栈）。经配置，该字段为负责处理传入帧的函数。可以在安装驱动程序后，通过函数 :cpp:func:`esp_eth_update_input_path` 更新该字段。该字段支持在运行过程中进行更新。
+* :cpp:member:`esp_eth_config_t::stack_input` 或 :cpp:member:`esp_eth_config_t::stack_input_info`：在大多数的以太网物联网应用中，驱动器接收的以太网帧会被传递到上层（如 TCP/IP 栈）。经配置，该字段为负责处理传入帧的函数。可以在安装驱动程序后，通过函数 :cpp:func:`esp_eth_update_input_path` 更新该字段。该字段支持在运行过程中进行更新。
 
 * :cpp:member:`esp_eth_config_t::on_lowlevel_init_done` 和 :cpp:member:`esp_eth_config_t::on_lowlevel_deinit_done`：这两个字段用于指定钩子函数，当去初始化或初始化低级别硬件时，会调用钩子函数。
 
@@ -508,6 +531,58 @@ ESP-IDF 在宏 :c:macro:`ETH_DEFAULT_CONFIG` 中为安装驱动程序提供了�
     esp_eth_ioctl(eth_handle, ETH_CMD_G_PHY_ADDR, &phy_addr);
     ESP_LOGI(TAG, "Ethernet PHY Address: %d", phy_addr);
 
+.. _time-stamping:
+
+.. only:: SOC_EMAC_IEEE1588V2_SUPPORTED
+
+    EMAC 硬件时间戳
+    -----------------
+
+    EMAC 时间戳功能可以精确记录以太网帧的发送和接收时间。硬件时间戳对于精确时间协议 (PTP) 等应用至关重要，因为它减少了依赖软件时间戳可能出现的抖动和不准确性。将时间戳直接嵌入硬件，避免了由软件层或处理开销引入的延迟，从而实现纳秒级精度。
+
+    .. 警告::
+
+        请注意：时间戳相关的 API 当前属于 **“实验特性”**，未来版本中可能会有所更改。
+
+    以下内容介绍如何在 EMAC 中启用时间戳、获取和设置时间。
+
+    .. highlight:: c
+
+    ::
+
+        // 启用硬件时间戳
+        bool ptp_enable = true;
+        esp_eth_ioctl(eth_hndl, ETH_MAC_ESP_CMD_PTP_ENABLE, &ptp_enable);
+
+        // 获取当前 EMAC 时间
+        eth_mac_time_t ptp_time;
+        esp_eth_ioctl(eth_hndl, ETH_MAC_ESP_CMD_G_PTP_TIME, &ptp_time);
+
+        // 设置 EMAC 时间
+        ptp_time = {
+            .seconds = 42,
+            .nanoseconds = 0
+        };
+        esp_eth_ioctl(eth_hndl, ETH_MAC_ESP_CMD_S_PTP_TIME, &ptp_time);
+
+    您可以通过注册回调函数和设置事件触发的目标时间，在精确的时间点调度事件。请注意，回调函数将在中断服务程序 (ISR) 上下文中调用，因此应尽量简洁。
+
+    .. highlight:: c
+
+    ::
+
+        // 注册回调函数
+        esp_eth_ioctl(eth_hndl, ETH_MAC_ESP_CMD_S_TARGET_CB, ts_callback);
+
+        // 设置事件的触发时间
+        eth_mac_time_t mac_target_time = {
+            .seconds = 42,
+            .nanoseconds = 0
+        };
+        esp_eth_ioctl(s_eth_hndl, ETH_MAC_ESP_CMD_S_TARGET_TIME, &mac_target_time);
+
+    接收帧的时间戳可以通过注册的 :cpp:member:`esp_eth_config_t::stack_input_info` 函数的最后一个参数进行访问，传输帧的时间戳可以通过注册的 :cpp:func:`esp_eth_transmit_ctrl_vargs` 函数的 ``ctrl`` 参数进行访问。然而，对于用户获取时间戳信息，更简便的方式是利用 L2 TAP :ref:`扩展缓冲区 <esp_netif_l2tap_ext_buff>` 机制。
+
 .. _flow-control:
 
 数据流量控制
@@ -533,10 +608,22 @@ ESP-IDF 在宏 :c:macro:`ETH_DEFAULT_CONFIG` 中为安装驱动程序提供了�
 应用示例
 --------------------
 
-  * 以太网基本示例：:example:`ethernet/basic`
-  * 以太网 iperf 示例：:example:`ethernet/iperf`
-  * 以太网到 Wi-Fi AP“路由器”：:example:`network/eth2ap`
-  * Wi-Fi station 到以太网 “网桥”：:example:`network/sta2eth`
+  * :example:`ethernet/basic` 演示了如何使用以太网驱动程序，包括驱动程序的安装、将其连接到 ``esp_netif``、发送 DHCP 请求以及获取可 ping 的 IP 地址。
+
+  * :example:`ethernet/iperf` 演示了如何使用以太网功能，使用 iPerf 测量吞吐量/带宽。
+
+  * :example:`ethernet/ptp` 演示了如何在以太网上使用精确时间协议 (PTP) 同步时间。
+
+  * :example:`network/vlan_support` 演示了如何在以太网上创建虚拟网络接口，包括 VLAN 和非 VLAN 接口。
+
+  * :example:`network/sta2eth` 演示了如何使用 Wi-Fi station 和有线接口（如以太网或 USB）创建 1 对 1 的桥接。
+
+  * :example:`network/simple_sniffer` 演示了如何在嗅探模式下使用 Wi-Fi 和以太网来捕获数据包，并将其保存为 PCAP 格式。
+
+  * :example:`network/eth2ap` 演示了如何实现一个桥接器，在以太网端口和 Wi-Fi AP 接口之间转发数据包。该示例使用 {IDF_TARGET_NAME} 创建以太网和 Wi-Fi 之间的 1 对多连接，而无需初始化 TCP/IP 栈。
+
+  * :example:`network/bridge` 演示了如何使用 LwIP IEEE 802.1D 桥接器根据 MAC 地址在多个网络段之间转发以太网帧。
+
   * 大多数协议示例也适用于以太网：:example:`protocols`
 
 .. ------------------------------ Advanced Topics -------------------------------
@@ -546,10 +633,12 @@ ESP-IDF 在宏 :c:macro:`ETH_DEFAULT_CONFIG` 中为安装驱动程序提供了�
 进阶操作
 ---------------
 
+.. _custom-phy-driver:
+
 自定义 PHY 驱动程序
 ^^^^^^^^^^^^^^^^^^^^^^^^^
 
-市面上有多家 PHY 芯片制造商提供各种类型的芯片。ESP-IDF 现已支持数种 PHY 芯片，但是由于价格、功能、库存等原因，有时用户还是无法找到一款能满足其实际需求的芯片。
+市面上有多家 PHY 芯片制造商提供各种类型的芯片。ESP-IDF 现已支持 ``通用 PHY`` 和数种特定的 PHY 芯片，但是由于价格、功能、库存等原因，有时用户还是无法找到一款能满足其实际需求的芯片。
 
 好在 IEEE 802.3 在其 22.2.4 管理功能部分对 EMAC 和 PHY 之间的管理接口进行了标准化。该部分定义了所谓的 ”MII 管理接口”规范，用于控制 PHY 和收集 PHY 的状态，还定义了一组管理寄存器来控制芯片行为、链接属性、自动协商配置等。在 ESP-IDF 中，这项基本的管理功能是由 :component_file:`esp_eth/src/phy/esp_eth_phy_802_3.c` 实现的，这也大大降低了创建新的自定义 PHY 芯片驱动的难度。
 
@@ -573,7 +662,7 @@ ESP-IDF 以太网驱动程序所需的大部分 PHY 管理功能都已涵盖在 
 3. 定义针对芯片的特定管理回调功能。
 4. 初始化 IEEE 802.3 父对象并重新分配针对芯片的特定管理回调功能。
 
-实现新的自定义 PHY 驱动程序后，你可以通过 `ESP-IDF 组件管理中心 <https://components.espressif.com/>`_ 将驱动分享给其他用户。
+实现新的自定义 PHY 驱动程序后，你可以通过 `乐鑫组件注册表 <https://components.espressif.com/>`_ 将驱动分享给其他用户。
 
 .. ---------------------------- API Reference ----------------------------------
 

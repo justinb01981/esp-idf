@@ -14,31 +14,13 @@ components/esp_hw_support/test_apps/dma2d:
   depends_filepatterns:
     - components/esp_hw_support/dma/**/*
 
-components/esp_hw_support/test_apps/esp_hw_support_unity_tests:
-  disable:
-    - if: SOC_GPSPI_SUPPORTED != 1
-  disable_test:
-    - if: IDF_TARGET == "esp32p4"
-      temporary: true
-      reason: test not pass, should be re-enable # TODO: IDF-8972
-
-components/esp_hw_support/test_apps/etm:
-  disable:
-    - if: SOC_ETM_SUPPORTED != 1
-  depends_components:
-    - esp_driver_gptimer
-    - esp_driver_gpio
-    - esp_driver_mcpwm
-    - esp_timer
-    - esp_driver_ana_cmpr
-
 components/esp_hw_support/test_apps/host_test_linux:
   enable:
     - if: IDF_TARGET == "linux"
 
 components/esp_hw_support/test_apps/mspi:
   disable:
-    - if: IDF_TARGET != "esp32s3"
+    - if: IDF_TARGET not in ["esp32s3", "esp32p4"]
 
 components/esp_hw_support/test_apps/mspi_psram_with_dfs:
   disable:
@@ -50,9 +32,7 @@ components/esp_hw_support/test_apps/rtc_8md256:
 
 components/esp_hw_support/test_apps/rtc_clk:
   disable:
-    - if: IDF_TARGET in ["esp32c6", "esp32h2", "esp32p4", "esp32c5"]
-      temporary: true
-      reason: Unsupported on C6 for now. TODO IDF-5645, TODO IDF-7514, TODO C5 IDF-8667
+    - if: SOC_CLK_TREE_SUPPORTED != 1
 
 components/esp_hw_support/test_apps/rtc_power_modes:
   enable:
@@ -60,6 +40,34 @@ components/esp_hw_support/test_apps/rtc_power_modes:
       temporary: true
       reason: the other targets are not tested yet
 
-components/esp_hw_support/test_apps/wakeup_tests:
+components/esp_hw_support/test_apps/sleep_retention:
+  enable:
+    - if: SOC_PAU_SUPPORTED == 1 and SOC_LIGHT_SLEEP_SUPPORTED == 1 and SOC_PM_CPU_RETENTION_BY_SW == 1 and CONFIG_NAME != "xip_psram"
+    - if: SOC_PAU_SUPPORTED == 1 and SOC_LIGHT_SLEEP_SUPPORTED == 1 and SOC_PM_CPU_RETENTION_BY_SW == 1 and (SOC_SPIRAM_XIP_SUPPORTED == 1 and CONFIG_NAME == "xip_psram")
+
+components/esp_hw_support/test_apps/usb_phy:
+  enable:
+    - if: SOC_USB_OTG_SUPPORTED == 1
+  depends_components:
+    - usb
+  depends_filepatterns:
+    - components/hal/usb*.c
+    - components/hal/include/hal/usb*.h
+    - components/hal/esp32*/include/hal/usb*.h
+    - components/soc/esp32*/usb*.c
+    - components/soc/include/soc/usb*.h
+    - components/soc/esp32*/include/soc/usb_dwc_*.h
+    - components/soc/esp32*/include/soc/usb_wrap_*.h
+    - components/esp_hw_support/**/usb_phy.*
+
+components/esp_hw_support/test_apps/vad_wakeup:
   disable:
-    - if: IDF_TARGET in ["esp32c5", "esp32p4", "linux"]
+    - if: SOC_LP_VAD_SUPPORTED != 1
+
+components/esp_hw_support/test_apps/wakeup_tests:
+  enable:
+    - if: SOC_DEEP_SLEEP_SUPPORTED == 1 and SOC_LIGHT_SLEEP_SUPPORTED == 1
+  disable_test:
+    - if: IDF_TARGET in ["esp32c61", "esp32h21", "esp32h4"]
+      temporary: true
+      reason: lack of runners

@@ -19,6 +19,30 @@ Future versions of this library may have other storage backends to keep data in 
 
 .. note:: NVS works best for storing many small values, rather than a few large values of the type 'string' and 'blob'. If you need to store large blobs or strings, consider using the facilities provided by the FAT filesystem on top of the wear levelling library.
 
+.. note:: NVS component includes flash wear levelling by design. Set operations are appending new data to the free space after existing entries. Invalidation of old values doesn't require immediate flash erase operations. The organization of NVS space to pages and entries effectively reduces the frequency of flash erase to flash write operations by a factor of 126.
+
+Large Amount of Data in NVS
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Although not recommended, NVS can store tens of thousands of keys and NVS partition can reach up to megabytes in size.
+
+.. note:: NVS component leaves RAM footprint on the heap. The footprint depends on the size of the NVS partition on flash and the number of keys in use. For RAM usage estimation, please use the following approximate figures: each 1 MB of NVS flash partition consumes 22 KB of RAM and each 1000 keys consumes 5.5 KB of RAM.
+
+.. note:: Duration of NVS initialization using :cpp:func:`nvs_flash_init` is proportional to the number of existing keys. Initialization of NVS requires approximately 0.5 seconds per 1000 keys.
+
+.. only:: SOC_SPIRAM_SUPPORTED
+
+    By default, internal NVS allocates a heap in internal RAM. With a large NVS partition or big number of keys, the application can exhaust the internal RAM heap just on NVS overhead.
+    Applications using modules with SPI-connected PSRAM can overcome this limitation by enabling the Kconfig option :ref:`CONFIG_NVS_ALLOCATE_CACHE_IN_SPIRAM` which redirects RAM allocation to the SPI-connected PSRAM.
+    This option is available in the nvs_flash component of the menuconfig menu when SPIRAM is enabled and and :ref:`CONFIG_SPIRAM_USE` is set to ``CONFIG_SPIRAM_USE_CAPS_ALLOC``.
+    .. note:: Using SPI-connected PSRAM slows down NVS API for integer operations by an approximate factor of 2.5.
+
+.. _nvs_bootloader:
+
+Use of NVS in Bootloader code
+-----------------------------
+
+The standard NVS API described in this guide is available to the running application. It is also possible to read data from NVS in the custom bootloader code. More information can be found in the :doc:`nvs_bootloader` guide.
 
 Keys and Values
 ^^^^^^^^^^^^^^^
@@ -32,6 +56,10 @@ NVS operates on key-value pairs. Keys are ASCII strings; the maximum key length 
 .. note::
 
     String values are currently limited to 4000 bytes. This includes the null terminator. Blob values are limited to 508,000 bytes or 97.6% of the partition size - 4000 bytes, whichever is lower.
+
+.. note::
+
+    Before setting new or updating existing key-value pair, free entries in nvs pages have to be available. For integer types, at least one free entry has to be available. For the String value, at least one page capable of keeping the whole string in a contiguous row of free entries has to be available. For the Blob value, the size of new data has to be available in free entries.
 
 Additional types, such as ``float`` and ``double`` might be added later.
 
@@ -126,9 +154,9 @@ If ``FLASH_IN_PROJECT`` is not specified, the image will still be generated, but
 Application Example
 -------------------
 
-You can find code examples in the :example:`storage` directory of ESP-IDF examples:
+You can find code examples in the :example:`storage/nvs` directory of ESP-IDF examples:
 
-:example:`storage/nvs_rw_value`
+:example:`storage/nvs/nvs_rw_value`
 
   Demonstrates how to read a single integer value from, and write it to NVS.
 
@@ -136,7 +164,7 @@ You can find code examples in the :example:`storage` directory of ESP-IDF exampl
 
   The example also shows how to check if a read/write operation was successful, or if a certain value has not been initialized in NVS. The diagnostic procedure is provided in plain text to help you track the program flow and capture any issues on the way.
 
-:example:`storage/nvs_rw_blob`
+:example:`storage/nvs/nvs_rw_blob`
 
   Demonstrates how to read a single integer value and a blob (binary large object), and write them to NVS to preserve this value between {IDF_TARGET_NAME} module restarts.
 
@@ -145,9 +173,9 @@ You can find code examples in the :example:`storage` directory of ESP-IDF exampl
 
   The example also shows how to implement the diagnostic procedure to check if the read/write operation was successful.
 
-:example:`storage/nvs_rw_value_cxx`
+:example:`storage/nvs/nvs_rw_value_cxx`
 
-  This example does exactly the same as :example:`storage/nvs_rw_value`, except that it uses the C++ NVS handle class.
+  This example does exactly the same as :example:`storage/nvs/nvs_rw_value`, except that it uses the C++ NVS handle class.
 
 Internals
 ---------
@@ -340,6 +368,14 @@ Item Hash List
 To reduce the number of reads from flash memory, each member of the Page class maintains a list of pairs: item index; item hash. This list makes searches much quicker. Instead of iterating over all entries, reading them from flash one at a time, `Page::findItem` first performs a search for the item hash in the hash list. This gives the item index within the page if such an item exists. Due to a hash collision, it is possible that a different item is found. This is handled by falling back to iteration over items in flash.
 
 Each node in the hash list contains a 24-bit hash and 8-bit item index. Hash is calculated based on item namespace, key name, and ChunkIndex. CRC32 is used for calculation; the result is truncated to 24 bits. To reduce the overhead for storing 32-bit entries in a linked list, the list is implemented as a double-linked list of arrays. Each array holds 29 entries, for the total size of 128 bytes, together with linked list pointers and a 32-bit count field. The minimum amount of extra RAM usage per page is therefore 128 bytes; maximum is 640 bytes.
+
+.. _read-only-nvs:
+
+Read-only NVS
+^^^^^^^^^^^^^^
+
+The default minimal size for NVS to function properly is 12kiB (``0x3000``), meaning there have to be at least 3 pages with one of them being in Empty state. However if the NVS partition is flagged as ``readonly`` in the partition table CSV and is being opened in read-only mode, the partition can be as small as 4kiB (``0x1000``) with only one page in Active state and no Empty page. This is because the library does not need to write any data to the partition in this case. The partition can be used to store data that is not expected to change, such as calibration data or factory settings. Partitions of sizes 0x1000 and 0x2000 are always read-only and partitions of size 0x3000 and above are always read-write capable (still can be opened in read-only mode in the code).
+
 
 API Reference
 -------------

@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 #
-# SPDX-FileCopyrightText: 2021-2024 Espressif Systems (Shanghai) CO LTD
+# SPDX-FileCopyrightText: 2021-2025 Espressif Systems (Shanghai) CO LTD
 # SPDX-License-Identifier: Apache-2.0
 import hashlib
 import http.client
@@ -9,6 +9,7 @@ import os
 import sys
 
 import pytest
+from pytest_embedded_idf.utils import idf_parametrize
 
 try:
     from idf_http_server_test import adder as client
@@ -20,22 +21,26 @@ from common_test_methods import get_env_config_variable
 from pytest_embedded import Dut
 
 
-@pytest.mark.esp32
-@pytest.mark.esp32c3
-@pytest.mark.esp32s3
 @pytest.mark.wifi_router
-@pytest.mark.parametrize('config', ['spiffs',], indirect=True)
+@pytest.mark.parametrize(
+    'config',
+    [
+        'spiffs',
+    ],
+    indirect=True,
+)
+@idf_parametrize('target', ['esp32', 'esp32c3', 'esp32s3'], indirect=['target'])
 def test_examples_protocol_http_server_file_serving(dut: Dut) -> None:
-
     # Get binary file
     binary_file = os.path.join(dut.app.binary_path, 'file_server.bin')
     bin_size = os.path.getsize(binary_file)
     logging.info('file_server_bin_size : {}KB'.format(bin_size // 1024))
-    logging.info('Erasing the flash on the chip')
+    logging.info('Erasing the storage partition on the chip')
+    dut.serial.erase_partition('storage')
     # Upload binary and start testing
     logging.info('Starting http file serving simple test app')
 
-    dut.expect('Initializing SPIFFS', timeout=30)
+    dut.expect('Initializing SPIFFS', timeout=60)
 
     if dut.app.sdkconfig.get('EXAMPLE_WIFI_SSID_PWD_FROM_STDIN') is True:
         dut.expect('Please input ssid password:')
@@ -72,7 +77,7 @@ def test_examples_protocol_http_server_file_serving(dut: Dut) -> None:
     logging.info('Passed the test to uploaded file on the file server')
 
     # Download the uploaded file from the file server
-    logging.info("\nTesting for Download of \"existing\" file from the file server")
+    logging.info('\nTesting for Download of "existing" file from the file server')
 
     download_data = client.getreq(conn, '/' + str(upload_file_name))
 
@@ -90,7 +95,7 @@ def test_examples_protocol_http_server_file_serving(dut: Dut) -> None:
         raise RuntimeError('The md5 hash of the downloaded file does not match with that of the uploaded file')
 
     # Upload existing file on the file server
-    logging.info("\nTesting the upload of \"already existing\" file on the file server")
+    logging.info('\nTesting the upload of "already existing" file on the file server')
     client.postreq(conn, '/upload/' + str(upload_file_name), data=None)
     try:
         dut.expect('File already exists : /data/' + str(upload_file_name), timeout=10)
@@ -111,7 +116,7 @@ def test_examples_protocol_http_server_file_serving(dut: Dut) -> None:
 
     conn = client.start_session(got_ip, got_port)
     # Delete the existing file from the file server
-    logging.info("\nTesting the deletion of \"existing\" file on the file server")
+    logging.info('\nTesting the deletion of "existing" file on the file server')
     client.postreq(conn, '/delete/' + str(upload_file_name), data=None)
     try:
         dut.expect('Deleting file : /' + str(upload_file_name), timeout=10)
@@ -122,7 +127,7 @@ def test_examples_protocol_http_server_file_serving(dut: Dut) -> None:
 
     conn = client.start_session(got_ip, got_port)
     # Try to delete non existing file from the file server
-    logging.info("\nTesting the deletion of \"non existing\" file on the file server")
+    logging.info('\nTesting the deletion of "non existing" file on the file server')
     client.postreq(conn, '/delete/' + str(upload_file_name), data=None)
     try:
         dut.expect('File does not exist : /' + str(upload_file_name), timeout=10)
@@ -133,7 +138,7 @@ def test_examples_protocol_http_server_file_serving(dut: Dut) -> None:
 
     conn = client.start_session(got_ip, got_port)
     # Try to download non existing file from the file server
-    logging.info("\nTesting for Download of \"non existing\" file from the file server")
+    logging.info('\nTesting for Download of "non existing" file from the file server')
 
     download_data = client.getreq(conn, '/' + str(upload_file_name))
 

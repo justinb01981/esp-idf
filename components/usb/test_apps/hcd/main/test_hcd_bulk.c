@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2015-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2015-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -11,7 +11,7 @@
 #include "unity.h"
 #include "mock_msc.h"
 #include "dev_msc.h"
-#include "test_hcd_common.h"
+#include "hcd_common.h"
 
 // --------------------------------------------------- Test Cases ------------------------------------------------------
 
@@ -53,7 +53,7 @@ Procedure:
 #define TEST_NUM_SECTORS_TOTAL          10
 #define TEST_NUM_SECTORS_PER_XFER       2
 
-TEST_CASE("Test HCD bulk pipe URBs", "[bulk][full_speed]")
+TEST_CASE("Test HCD bulk pipe URBs", "[bulk][full_speed][high_speed]")
 {
     usb_speed_t port_speed = test_hcd_wait_for_conn(port_hdl);  // Trigger a connection
     vTaskDelay(pdMS_TO_TICKS(100)); // Short delay send of SOF (for FS) or EOPs (for LS)

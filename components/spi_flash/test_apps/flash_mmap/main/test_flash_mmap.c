@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <inttypes.h>
+#include "esp_log.h"
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <freertos/semphr.h>
@@ -101,6 +102,33 @@ static void setup_mmap_tests(void)
     }
 }
 
+TEST_CASE("Can get correct data in existing mapped region", "[spi_flash][mmap]")
+{
+    setup_mmap_tests();
+
+    printf("Mapping %"PRIx32" (+%"PRIx32")\n", start, end - start);
+    const void *ptr1;
+    TEST_ESP_OK( spi_flash_mmap(start, end - start, SPI_FLASH_MMAP_DATA, &ptr1, &handle1) );
+    printf("mmap_res: handle=%"PRIx32" ptr=%p\n", (uint32_t)handle1, ptr1);
+
+    /* Remap in the previously mapped region itself */
+    uint32_t new_start = start + CONFIG_MMU_PAGE_SIZE;
+    printf("Mapping %"PRIx32" (+%"PRIx32")\n", new_start, end - new_start);
+    const void *ptr2;
+    TEST_ESP_OK( spi_flash_mmap(new_start, end - new_start, SPI_FLASH_MMAP_DATA, &ptr2, &handle2) );
+    printf("mmap_res: handle=%"PRIx32" ptr=%p\n", (uint32_t)handle2, ptr2);
+
+    const void *src1 = (void *) ((uint32_t) ptr1 + CONFIG_MMU_PAGE_SIZE);
+    const void *src2 = ptr2;
+    /* Memory contents should be identical - as the region is same */
+    TEST_ASSERT_EQUAL(0, memcmp(src1, src2, end - new_start));
+
+    spi_flash_munmap(handle1);
+    handle1 = 0;
+    spi_flash_munmap(handle2);
+    handle2 = 0;
+    TEST_ASSERT_EQUAL_PTR(NULL, spi_flash_phys2cache(start, SPI_FLASH_MMAP_DATA));
+}
 
 TEST_CASE("Can mmap into data address space", "[spi_flash][mmap]")
 {
@@ -489,4 +517,15 @@ TEST_CASE("no stale data read post mmap and write partition", "[spi_flash][mmap]
     esp_partition_munmap(handle);
     TEST_ASSERT_EQUAL(0, memcmp(buf, read_data, sizeof(buf)));
 #endif
+}
+
+TEST_CASE("spi_flash_cache2phys points to correct address", "[spi_flash]")
+{
+    //_rodata_start, which begins with appdesc, is always the first segment of the bin.
+    extern int _rodata_start;
+    size_t addr = spi_flash_cache2phys(&_rodata_start);
+
+    const esp_partition_t *factory = esp_partition_find_first(ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_ANY, "factory");
+    ESP_LOGI("running bin", "0x%p", (void*)addr);
+    TEST_ASSERT_HEX32_WITHIN(CONFIG_MMU_PAGE_SIZE/2, factory->address + CONFIG_MMU_PAGE_SIZE/2, addr);
 }

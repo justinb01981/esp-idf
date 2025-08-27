@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2022-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2022-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Unlicense OR CC0-1.0
  */
@@ -24,6 +24,9 @@
 
 #include "hal/mpu_hal.h"
 #include "rom/cache.h"
+
+volatile uint32_t g_panic_handler_stuck = 0;
+volatile uint32_t g_panic_handler_crash = 0;
 
 /* Test utility function */
 
@@ -68,17 +71,16 @@ void test_task_wdt_cpu0(void)
 }
 
 #if CONFIG_ESP_SYSTEM_HW_STACK_GUARD
-
+#define HWSG_TASK_SIZE 1024
 __attribute__((optimize("-O0")))
 static void test_hw_stack_guard_cpu(void* arg)
 {
-    uint32_t buf[256];
-    test_hw_stack_guard_cpu(arg);
+    uint32_t buf[HWSG_TASK_SIZE + 1]; /* go out of the stack to avoid FREERTOS_WATCHPOINT_END_OF_STACK trap */
 }
 
 void test_hw_stack_guard_cpu0(void)
 {
-    xTaskCreatePinnedToCore(test_hw_stack_guard_cpu, "HWSG0", 512, NULL, 1, NULL, 0);
+    xTaskCreatePinnedToCore(test_hw_stack_guard_cpu, "HWSG0", HWSG_TASK_SIZE, NULL, 1, NULL, 0);
     while (true) {
         vTaskDelay(100);
     }
@@ -87,7 +89,7 @@ void test_hw_stack_guard_cpu0(void)
 #if !CONFIG_FREERTOS_UNICORE
 void test_hw_stack_guard_cpu1(void)
 {
-    xTaskCreatePinnedToCore(test_hw_stack_guard_cpu, "HWSG1", 512, NULL, 1, NULL, 1);
+    xTaskCreatePinnedToCore(test_hw_stack_guard_cpu, "HWSG1", HWSG_TASK_SIZE, NULL, 1, NULL, 1);
     while (true) {
         vTaskDelay(100);
     }
@@ -96,7 +98,7 @@ void test_hw_stack_guard_cpu1(void)
 #endif // CONFIG_FREERTOS_UNICORE
 #endif // CONFIG_ESP_SYSTEM_HW_STACK_GUARD
 
-#if CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH && CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY
+#if CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH && CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM
 
 static void stack_in_extram(void* arg) {
     (void) arg;
@@ -104,7 +106,7 @@ static void stack_in_extram(void* arg) {
     abort();
 }
 
-void test_panic_extram_stack(void) {
+void test_panic_extram_stack_heap(void) {
     /* Start by initializing a Task which has a stack in external RAM */
     StaticTask_t handle;
     const uint32_t stack_size = 8192;
@@ -119,10 +121,47 @@ void test_panic_extram_stack(void) {
 
     vTaskDelay(1000);
 }
+#if CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY
+static EXT_RAM_BSS_ATTR StackType_t stack[8192];
+void test_panic_extram_stack_bss(void)
+{
+    StaticTask_t handle;
+
+    xTaskCreateStatic(stack_in_extram, "Task_stack_extram", sizeof(stack), NULL, 4, stack, &handle);
+
+    vTaskDelay(1000);
+}
+#endif
+#endif // ESP_COREDUMP_ENABLE_TO_FLASH && FREERTOS_TASK_CREATE_ALLOW_EXT_MEM
 
 
-#endif // ESP_COREDUMP_ENABLE_TO_FLASH && SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY
+void __attribute__((no_sanitize_undefined)) test_panic_handler_stuck(void *arg)
+{
+    g_panic_handler_stuck = 1;
 
+    /* Cause a panic */
+#ifdef __XTENSA__
+    asm("ill");     // should be an invalid operation on xtensa targets
+#elif __riscv
+    asm("unimp");   // should be an invalid operation on RISC-V targets
+#endif
+
+    vTaskDelete(NULL);
+}
+
+void __attribute__((no_sanitize_undefined)) test_panic_handler_crash(void *arg)
+{
+    g_panic_handler_crash = 1;
+
+    /* Cause a panic */
+#ifdef __XTENSA__
+    asm("ill");
+#elif __riscv
+    asm("unimp");
+#endif
+
+    vTaskDelete(NULL);
+}
 
 #if !CONFIG_FREERTOS_UNICORE
 static void infinite_loop(void* arg) {
@@ -140,7 +179,46 @@ void test_task_wdt_cpu1(void)
     }
 }
 
+void test_panic_handler_stuck1(void)
+{
+    /* Cause the panic on core 1 */
+    xTaskCreatePinnedToCore(test_panic_handler_stuck, "panic_handler_stuck", 2048, NULL, 1, NULL, 1);
+
+    while(1) {
+        vTaskDelay(10);
+    }
+}
+
+void test_panic_handler_crash1(void)
+{
+    /* Cause the panic on core 1 */
+    xTaskCreatePinnedToCore(test_panic_handler_crash, "panic_handler_crash", 2048, NULL, 1, NULL, 1);
+
+    while(1) {
+        vTaskDelay(10);
+    }
+}
 #endif
+
+void test_panic_handler_stuck0(void)
+{
+    /* Cause the panic on core 0 */
+    xTaskCreatePinnedToCore(test_panic_handler_stuck, "panic_handler_stuck", 2048, NULL, 1, NULL, 0);
+
+    while(1) {
+        vTaskDelay(10);
+    }
+}
+
+void test_panic_handler_crash0(void)
+{
+    /* Cause the panic on core 0 */
+    xTaskCreatePinnedToCore(test_panic_handler_crash, "panic_handler_crash", 2048, NULL, 1, NULL, 0);
+
+    while(1) {
+        vTaskDelay(10);
+    }
+}
 
 void __attribute__((no_sanitize_undefined)) test_storeprohibited(void)
 {
@@ -187,39 +265,11 @@ void test_assert_cache_write_back_error_can_print_backtrace(void)
     printf("1) %p\n", TEST_STR);
     *(uint32_t*)TEST_STR = 3; // We changed the rodata string.
     // All chips except ESP32S3 stop execution here and raise a LoadStore error on the line above.
-#if CONFIG_IDF_TARGET_ESP32S3
-    // On the ESP32S3, the error occurs later when the cache writeback is triggered
-    // (in this test, a direct call to Cache_WriteBack_All).
-    Cache_WriteBack_All(); // Cache writeback triggers the invalid cache access interrupt.
-#endif
+
     // We are testing that the backtrace is printed instead of TG1WDT.
     printf("2) %p\n", TEST_STR); // never get to this place.
 }
 
-void test_assert_cache_write_back_error_can_print_backtrace2(void)
-{
-    printf("1) %p\n", TEST_STR);
-    *(uint32_t*)TEST_STR = 3; // We changed the rodata string.
-    // All chips except ESP32S3 stop execution here and raise a LoadStore error on the line above.
-    // On the ESP32S3, the error occurs later when the cache writeback is triggered
-    // (in this test, a large range of DRAM is mapped and read, causing an error).
-    uint8_t temp = 0;
-    size_t map_size = SPI_FLASH_SEC_SIZE * 512;
-    const void *map;
-    spi_flash_mmap_handle_t out_handle;
-    esp_err_t err = spi_flash_mmap(0, map_size, SPI_FLASH_MMAP_DATA, &map, &out_handle);
-    if (err != ESP_OK) {
-        printf("spi_flash_mmap failed %x\n", err);
-        return;
-    }
-    const uint8_t *rodata = map;
-    for (size_t i = 0; i < map_size; i++) {
-        temp = rodata[i];
-    }
-    // Cache writeback triggers the invalid cache access interrupt.
-    // We are testing that the backtrace is printed instead of TG1WDT.
-    printf("2) %p 0x%" PRIx8 " \n", TEST_STR, temp); // never get to this place.
-}
 
 /**
  * This function overwrites the stack beginning from the valid area continuously towards and beyond
@@ -269,7 +319,7 @@ void test_ub(void)
     printf("%d\n", stuff[rand()]);
 }
 
-#if CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH && CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF
+#if CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH
 void test_setup_coredump_summary(void)
 {
     if (esp_core_dump_image_erase() != ESP_OK)
@@ -300,6 +350,15 @@ void test_coredump_summary(void)
     }
 }
 #endif
+
+void test_tcb_corrupted(void)
+{
+    uint32_t volatile *tcb_ptr = (uint32_t *)xTaskGetIdleTaskHandleForCore(0);
+    for (size_t i = 0; i < sizeof(StaticTask_t) / sizeof(uint32_t); i++) {
+        tcb_ptr[i] = 0xDEADBEE0;
+    }
+    vTaskDelay(2);
+}
 
 /* NOTE: The following test verifies the behaviour for the
  * Xtensa-specific MPU instructions (Refer WDTLB, DSYNC, WDTIB, ISYNC)
@@ -355,3 +414,43 @@ void test_capture_dram(void)
     assert(0);
 }
 #endif
+
+
+#if CONFIG_ESP_SYSTEM_USE_FRAME_POINTER
+
+static NOINLINE_ATTR void step3(void) {
+    printf("Step 3\n");
+    /* For some reason, the compiler doesn't generate the proper sequence for `panic_abort` function:
+     * the `ra` register is not saved on the stack upon entry */
+    abort();
+}
+
+static NOINLINE_ATTR void step2(void) {
+    step3();
+    printf("Step 2\n");
+}
+
+static NOINLINE_ATTR void step1(void) {
+    step2();
+    printf("Step 1\n");
+}
+
+/**
+ * @brief Create a stack trace of several functions that will be shown at runtime,
+ * The functions must not be inlined!
+ */
+void test_panic_print_backtrace(void)
+{
+    step1();
+}
+
+#endif
+
+#if CONFIG_ESP_SYSTEM_PANIC_PRINT_HALT
+void test_panic_halt(void)
+{
+    printf("Triggering panic. Device should print 'CPU halted.' and stop.\n");
+    fflush(stdout);
+    assert(0);
+}
+#endif /* CONFIG_ESP_SYSTEM_PANIC_PRINT_HALT */

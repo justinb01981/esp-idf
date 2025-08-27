@@ -8,9 +8,6 @@ ESP HTTPS OTA 升级
 
 ``esp_https_ota`` 是现有 OTA（空中升级）API 的抽象层，其中提供了简化的 API，能够通过 HTTPS 升级固件。
 
-应用示例
--------------------
-
     .. code-block:: c
 
         esp_err_t do_firmware_upgrade()
@@ -46,24 +43,26 @@ ESP HTTPS OTA 升级
 
 要使用部分镜像下载功能，请启用 ``esp_https_ota_config_t`` 中的 ``partial_http_download`` 配置。启用此配置后，固件镜像将通过多个指定大小的 HTTP 请求进行下载。将 ``max_http_request_size`` 设置为所需值，即可指定每个请求的最大内容长度。
 
-在从 AWS S3 等服务获取镜像时，这一选项非常有用。在启用该选项时， 可以将 mbedTLS Rx 的 buffer 大小（即 :ref:`CONFIG_MBEDTLS_SSL_IN_CONTENT_LEN`）设置为较小的值。不启用此配置时，无法将其设置为较小值。
+在从 AWS S3 等服务获取镜像时，这一选项非常有用。在启用该选项时，可以将 mbedTLS Rx 的 buffer 大小（即 :ref:`CONFIG_MBEDTLS_SSL_IN_CONTENT_LEN`）设置为较小的值。不启用此配置时，无法将其设置为较小值。
 
 mbedTLS Rx buffer 的默认大小为 16 KB，但如果将 ``partial_http_download`` 的 ``max_http_request_size`` 设置为 4 KB，便能将 mbedTLS Rx 的 buffer 减小到 4 KB。使用这一配置方式预计可以节省约 12 KB 内存。
 
+.. note::
+    如果服务器使用分块传输编码，则无法进行部分下载，因为无法预先获知总内容长度。
+
+OTA 恢复
+--------
+
+在 :cpp:struct:`esp_https_ota_config_t` 中启用 ``ota_resumption`` 配置，即可使用 OTA 恢复功能。启用此功能后，先前失败的 OTA 镜像下载便可以从中断处继续，无需重新开始整个 OTA 过程。此功能是基于 HTTP 的部分范围请求功能实现的。
+
+要指定镜像下载的续传位置，需要在 :cpp:struct:`esp_https_ota_config_t` 中设置 ``ota_image_bytes_written`` 字段。此字段的值表示在上一次尝试过程中已写入到 OTA 分区的字节数。
+
+如需了解更多，请参阅示例：:example:`system/ota/advanced_https_ota`，该示例演示了 OTA 恢复功能。在此示例中， OTA 的中断状态保存在 NVS 中，从而使 OTA 过程能够从上次保存的状态中无缝恢复，并继续下载。
 
 签名验证
-----------------------
+-----------------
 
 要进一步提升安全性，还可以验证 OTA 固件镜像的签名。更多内容请参考 :ref:`secure-ota-updates`。
-
-
-高级 API
--------------
-
-``esp_https_ota`` 还提供一些高级 API，用于查看 OTA 过程的更多信息并满足其他控制需求。
-
-如需查看使用高级 ESP_HTTPS_OTA API 的示例，请前往 :example:`system/ota/advanced_https_ota`。
-
 
 .. _ota_updates_pre-encrypted-firmware:
 
@@ -78,29 +77,22 @@ mbedTLS Rx buffer 的默认大小为 16 KB，但如果将 ``partial_http_downloa
 
  * 即使设备未启用 flash 加密，仍可能要求进行 OTA 的固件镜像保持加密。
 
-无论底层传输安全性如何，预加密固件的分发都能确保固件镜像在从服务器到设备的**传输过程中**保持加密状态。首先，预加密软件层在设备上通过网络接收并解密固件，然后使用平台 flash 加密（如果已启用）重新加密内容，最后写入 flash。
+无论底层传输安全性如何，预加密固件的分发都能确保固件镜像在从服务器到设备的 **传输过程中** 保持加密状态。首先，预加密软件层在设备上通过网络接收并解密固件，然后使用平台 flash 加密（如果已启用）重新加密内容，最后写入 flash。
 
 设计
 ^^^^
 
-* 该方案需首先生成一个唯一的 RSA-3072 公钥—私钥对。公钥保留在 OTA 更新服务器上，用于加密，而私钥作为设备的一部分，例如内嵌于固件中，用于解密。
-* 预加密固件使用 AES-GCM 密钥进行加密，并将该密钥（及其配置参数）作为标头附加到镜像中。
-* 此外，AES-GCM 密钥使用 RSA 公钥进行加密，生成的镜像会托管到 OTA 更新服务器上。
-* 在设备端，首先使用可用的 RSA 私钥解密镜像标头，从而获取 AES-GCM 密钥。
-* 最后，使用 AES-GCM 密钥（和配置参数）解密镜像内容，并将其写入 flash。
+预加密固件是一种 **传输安全方案**，用于确保固件镜像在从 OTA 服务器传输到设备的过程中始终处于加密状态（与底层传输安全无关）。这种方案与 :doc:`../../security/flash-encryption` 在多个关键方面有所不同：
 
-整个工作流程由外部组件 `esp_encrypted_image <https://github.com/espressif/idf-extra-components/blob/master/esp_encrypted_img>`_ 管理，并通过解密回调 (:cpp:member:`esp_https_ota_config_t::decrypt_cb`) 机制插入到 OTA 更新框架中。
+* **密钥管理**：使用外部管理的加密密钥，而不是每个设备内部生成的唯一密钥
+* **独立于 flash 偏移**：无论固件烧录在哪个 flash 分区（``ota_0``、``ota_1`` 等），生成的密文内容一致
+* **传输保护**：在固件传输过程中提供加密保护，不涉及设备本地存储安全
 
-.. note::
-    该支持方案基于 RSA-3072，必须使用平台安全功能保护设备端的私钥。
+**重要安全提示**：预加密固件本身不提供设备级安全保护。固件被接收后在设备上解密，并按设备的 flash 加密配置存储。如需设备级安全措施，需另外启用 flash 加密功能。
 
-示例
-^^^^
+该功能由 `esp_encrypted_img <https://github.com/espressif/idf-extra-components/tree/master/esp_encrypted_img>`_ 组件实现，该组件通过解密回调 (:cpp:member:`esp_https_ota_config_t::decrypt_cb`) 机制集成在 OTA 更新框架中。
 
-如需使用预加密的固件进行 OTA 升级，请在组件的菜单配置中启用 :ref:`CONFIG_ESP_HTTPS_OTA_DECRYPT_CB` 选项。
-
-如需了解详细的配置流程和说明，请参考示例 :example:`system/ota/pre_encrypted_ota`。
-
+有关镜像格式、密钥生成及实现细节的详细信息，请参阅 `esp_encrypted_img 组件文档 <https://github.com/espressif/idf-extra-components/tree/master/esp_encrypted_img>`_。
 
 OTA 系统事件
 -----------------
@@ -132,6 +124,9 @@ ESP HTTPS OTA 过程中可能发生各种系统事件。当特定事件发生时
                     case ESP_HTTPS_OTA_VERIFY_CHIP_ID:
                         ESP_LOGI(TAG, "Verifying chip id of new image: %d", *(esp_chip_id_t *)event_data);
                         break;
+                    case ESP_HTTPS_OTA_VERIFY_CHIP_REVISION:
+                        ESP_LOGI(TAG, "Verifying chip revision of new image: %d", *(uint16_t *)event_data);
+                        break;
                     case ESP_HTTPS_OTA_DECRYPT_CB:
                         ESP_LOGI(TAG, "Callback to decrypt function");
                         break;
@@ -157,12 +152,21 @@ ESP HTTPS OTA 过程中可能发生各种系统事件。当特定事件发生时
     - ESP_HTTPS_OTA_CONNECTED                 : ``NULL``
     - ESP_HTTPS_OTA_GET_IMG_DESC              : ``NULL``
     - ESP_HTTPS_OTA_VERIFY_CHIP_ID            : ``esp_chip_id_t``
+    - ESP_HTTPS_OTA_VERIFY_CHIP_REVISION      : ``uint16_t``
     - ESP_HTTPS_OTA_DECRYPT_CB                : ``NULL``
     - ESP_HTTPS_OTA_WRITE_FLASH               : ``int``
     - ESP_HTTPS_OTA_UPDATE_BOOT_PARTITION     : ``esp_partition_subtype_t``
     - ESP_HTTPS_OTA_FINISH                    : ``NULL``
     - ESP_HTTPS_OTA_ABORT                     : ``NULL``
 
+应用示例
+----------------
+
+- :example:`system/ota/advanced_https_ota` 演示了如何在 {IDF_TARGET_NAME} 上使用 `esp_https_ota` 组件的 API 来使用 HTTPS OTA 更新功能。关于该示例适用的芯片，请参考 :example_file:`system/ota/advanced_https_ota/README.md`。
+
+- :example:`system/ota/partitions_ota` 演示了如何使用 `esp_https_ota` 组件的 API 对多个分区（应用、引导加载程序、分区表、存储）进行 OTA 更新。
+
+- :example:`system/ota/simple_ota_example` 演示了如何使用 `esp_https_ota` 组件的 API，通过特定的网络接口，如以太网或 Wi-Fi Station，在 {IDF_TARGET_NAME} 上进行固件升级。关于该示例适用的芯片，请参考 :example_file:`system/ota/simple_ota_example/README.md`。
 
 API 参考
 -------------

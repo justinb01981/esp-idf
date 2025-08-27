@@ -141,12 +141,9 @@ typedef uint32_t TickType_t;
 BaseType_t xPortInIsrContext(void);
 
 /**
- * @brief Asserts if in ISR context
+ * @brief Assert if in ISR context
  *
  * - Asserts on xPortInIsrContext() internally
- *
- * @note [refactor-todo] Check if this API is still required
- * @note [refactor-todo] Check if this should be inlined
  */
 void vPortAssertIfInISR(void);
 
@@ -427,6 +424,9 @@ void vPortTCBPreDeleteHook( void *pxTCB );
 #define portSET_INTERRUPT_MASK_FROM_ISR()                   xPortSetInterruptMaskFromISR()
 #define portCLEAR_INTERRUPT_MASK_FROM_ISR(prev_level)       vPortClearInterruptMaskFromISR(prev_level)
 
+/**
+ * @brief Assert if in ISR context
+ */
 #define portASSERT_IF_IN_ISR() vPortAssertIfInISR()
 
 /**
@@ -604,7 +604,7 @@ FORCE_INLINE_ATTR bool xPortCanYield(void)
     uint32_t ps_reg = 0;
 
     //Get the current value of PS (processor status) register
-    RSR(PS, ps_reg);
+    RSR(XT_REG_PS, ps_reg);
 
     /*
      * intlevel = (ps_reg & 0xf);

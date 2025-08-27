@@ -64,6 +64,7 @@ extern "C"
 #define SPICOMMON_BUSFLAG_IO4_IO7       (1<<8)     ///< Check existing of IO4~IO7 pins. Or indicates IO4~IO7 pins initialized.
 #define SPICOMMON_BUSFLAG_OCTAL         (SPICOMMON_BUSFLAG_QUAD|SPICOMMON_BUSFLAG_IO4_IO7)  ///< Check existing of MOSI/MISO/WP/HD/SPIIO4/SPIIO5/SPIIO6/SPIIO7 pins as output. Or indicates bus able to work under octal mode.
 #define SPICOMMON_BUSFLAG_NATIVE_PINS   SPICOMMON_BUSFLAG_IOMUX_PINS
+#define SPICOMMON_BUSFLAG_SLP_ALLOW_PD  (1<<9)     ///< Allow to power down the peripheral during light sleep, and auto recover then.
 
 /**
  * @brief SPI DMA channels
@@ -96,26 +97,32 @@ typedef spi_common_dma_t spi_dma_chan_t;
  */
 typedef struct {
     union {
-        int mosi_io_num;    ///< GPIO pin for Master Out Slave In (=spi_d) signal, or -1 if not used.
-        int data0_io_num;   ///< GPIO pin for spi data0 signal in quad/octal mode, or -1 if not used.
+        struct {
+            union {
+                int mosi_io_num;    ///< [0] GPIO pin for Master Out Slave In (=spi_d) signal, or -1 if not used.
+                int data0_io_num;   ///< [0] GPIO pin for spi data0 signal in dual/quad/octal mode, or -1 if not used.
+            };
+            union {
+                int miso_io_num;    ///< [1] GPIO pin for Master In Slave Out (=spi_q) signal, or -1 if not used.
+                int data1_io_num;   ///< [1] GPIO pin for spi data1 signal in dual/quad/octal mode, or -1 if not used.
+            };
+            int sclk_io_num;        ///< [2] GPIO pin for SPI Clock signal, or -1 if not used.
+            union {
+                int quadwp_io_num;  ///< [3] GPIO pin for WP (Write Protect) signal, or -1 if not used.
+                int data2_io_num;   ///< [3] GPIO pin for spi data2 signal in quad/octal mode, or -1 if not used.
+            };
+            union {
+                int quadhd_io_num;  ///< [4] GPIO pin for HD (Hold) signal, or -1 if not used.
+                int data3_io_num;   ///< [4] GPIO pin for spi data3 signal in quad/octal mode, or -1 if not used.
+            };
+            int data4_io_num;       ///< [5] GPIO pin for spi data4 signal in octal mode, or -1 if not used.
+            int data5_io_num;       ///< [6] GPIO pin for spi data5 signal in octal mode, or -1 if not used.
+            int data6_io_num;       ///< [7] GPIO pin for spi data6 signal in octal mode, or -1 if not used.
+            int data7_io_num;       ///< [8] GPIO pin for spi data7 signal in octal mode, or -1 if not used.
+        };
+        int iocfg[9];               ///< GPIO config in array format follow the above order.
     };
-    union {
-        int miso_io_num;    ///< GPIO pin for Master In Slave Out (=spi_q) signal, or -1 if not used.
-        int data1_io_num;   ///< GPIO pin for spi data1 signal in quad/octal mode, or -1 if not used.
-    };
-    int sclk_io_num;      ///< GPIO pin for SPI Clock signal, or -1 if not used.
-    union {
-        int quadwp_io_num;  ///< GPIO pin for WP (Write Protect) signal, or -1 if not used.
-        int data2_io_num;   ///< GPIO pin for spi data2 signal in quad/octal mode, or -1 if not used.
-    };
-    union {
-        int quadhd_io_num;  ///< GPIO pin for HD (Hold) signal, or -1 if not used.
-        int data3_io_num;   ///< GPIO pin for spi data3 signal in quad/octal mode, or -1 if not used.
-    };
-    int data4_io_num;     ///< GPIO pin for spi data4 signal in octal mode, or -1 if not used.
-    int data5_io_num;     ///< GPIO pin for spi data5 signal in octal mode, or -1 if not used.
-    int data6_io_num;     ///< GPIO pin for spi data6 signal in octal mode, or -1 if not used.
-    int data7_io_num;     ///< GPIO pin for spi data7 signal in octal mode, or -1 if not used.
+    bool data_io_default_level; ///< Output data IO default level when no transaction.
     int max_transfer_sz;  ///< Maximum transfer size, in bytes. Defaults to 4092 if 0 when DMA enabled, or to `SOC_SPI_MAXIMUM_BUFFER_SIZE` if DMA is disabled.
     uint32_t flags;       ///< Abilities of bus to be checked by the driver. Or-ed value of ``SPICOMMON_BUSFLAG_*`` flags.
     esp_intr_cpu_affinity_t  isr_cpu_id;    ///< Select cpu core to register SPI ISR.
@@ -173,18 +180,13 @@ esp_err_t spi_bus_free(spi_host_device_t host_id);
  * @note This API will take care of the cache and hardware alignment internally.
  *       To free/release memory allocated by this helper function, simply calling `free()`
  *
- * @param[in]  size          Size in bytes, the amount of memory to allocate
- * @param[out] out_ptr       Pointer to the memory if allocated successfully
- * @param[in]  extra_heap_caps Extra heap caps based on MALLOC_CAP_DMA
- * @param[out] actual_size   Optional, Actual size for allocation in bytes, when the size you specified doesn't meet the internal alignment requirements,
- *                           This value might be bigger than the size you specified. Set NULL if don't care this value.
+ * @param[in]  host_id          SPI peripheral who will using the memory
+ * @param[in]  size             Size in bytes, the amount of memory to allocate
+ * @param[in]  extra_heap_caps  Extra heap caps based on MALLOC_CAP_DMA
  *
- * @return
- *        - ESP_ERR_INVALID_ARG     Invalid argument
- *        - ESP_ERR_NO_MEM          No enough memory for allocation
- *        - ESP_OK                  on success
+ * @return                      Pointer to the memory if allocated successfully
  */
-esp_err_t spi_bus_dma_memory_malloc(size_t size, void **out_ptr, uint32_t extra_heap_caps, size_t *actual_size);
+void *spi_bus_dma_memory_alloc(spi_host_device_t host_id, size_t size, uint32_t extra_heap_caps);
 
 #ifdef __cplusplus
 }

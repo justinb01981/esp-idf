@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2019-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2019-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -35,6 +35,13 @@ typedef enum {
      * Indicates that provisioning has started
      */
     WIFI_PROV_START,
+
+    /**
+     * Emitted before accepting the wifi credentials to
+     * set the wifi configurations according to requirement.
+     * NOTE - In this case event_data shall be populated with a pointer to `wifi_config_t`.
+    */
+    WIFI_PROV_SET_STA_CONFIG,
 
     /**
      * Emitted when Wi-Fi AP credentials are received via `protocomm`
@@ -93,6 +100,17 @@ typedef struct {
     .event_cb  = NULL,                 \
     .user_data = NULL                  \
 }
+
+/**
+ * @brief   Structure holding the configuration related to Wi-Fi provisioning
+ */
+typedef struct {
+    /**
+     * Maximum number of allowed connection attempts for Wi-Fi. If value 0
+     * same as legacy behavior of infinite connection attempts.
+    */
+    uint32_t wifi_conn_attempts;
+} wifi_prov_conn_cfg_t;
 
 /**
  * @brief   Structure for specifying the provisioning scheme to be
@@ -180,6 +198,11 @@ typedef struct {
      * specific behavior. Use WIFI_PROV_EVENT_HANDLER_NONE when not used.
      */
     wifi_prov_event_handler_t app_event_handler;
+
+    /**
+     * This config holds the Wi-Fi provisioning related configurations.
+     */
+    wifi_prov_conn_cfg_t wifi_prov_conn_cfg;
 } wifi_prov_mgr_config_t;
 
 /**
@@ -210,6 +233,9 @@ typedef enum wifi_prov_security {
      *  + AES-GCM encryption/decryption
      */
     WIFI_PROV_SECURITY_2 = 2
+#endif
+#if !CONFIG_ESP_PROTOCOMM_SUPPORT_SECURITY_VERSION_0 && !CONFIG_ESP_PROTOCOMM_SUPPORT_SECURITY_VERSION_1 && !CONFIG_ESP_PROTOCOMM_SUPPORT_SECURITY_VERSION_2
+#error "All of the protocomm security versions are disabled. Make sure to enable at least one security version."
 #endif
 } wifi_prov_security_t;
 
@@ -254,8 +280,13 @@ esp_err_t wifi_prov_mgr_init(wifi_prov_mgr_config_t config);
  * If provisioning service is  still active when this API is called,
  * it first stops the service, hence emitting WIFI_PROV_END, and
  * then performs the de-initialization
+ *
+ * @return
+ *  - ESP_OK         : Success
+ *  - ESP_FAIL       : Failed to post event WIFI_PROV_DEINIT or WIFI_PROV_END
+ *  - ESP_ERR_NO_MEM : Out of memory (as may be returned by esp_event_post)
  */
-void wifi_prov_mgr_deinit(void);
+esp_err_t wifi_prov_mgr_deinit(void);
 
 /**
  * @brief   Checks if device is provisioned

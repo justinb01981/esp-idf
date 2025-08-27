@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2022-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2022-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -56,14 +56,17 @@ static inline void lcd_ll_enable_bus_clock(int group_id, bool enable)
 
 /// use a macro to wrap the function, force the caller to use it in a critical section
 /// the critical section needs to declare the __DECLARE_RCC_RC_ATOMIC_ENV variable in advance
-#define lcd_ll_enable_bus_clock(...) (void)__DECLARE_RCC_RC_ATOMIC_ENV; lcd_ll_enable_bus_clock(__VA_ARGS__)
+#define lcd_ll_enable_bus_clock(...) do { \
+        (void)__DECLARE_RCC_RC_ATOMIC_ENV; \
+        lcd_ll_enable_bus_clock(__VA_ARGS__); \
+    } while(0)
 
 /**
  * @brief Reset the LCD module
  *
  * @param group_id Group ID
  */
-static inline void lcd_ll_reset_register(int group_id)
+static inline void _lcd_ll_reset_register(int group_id)
 {
     (void)group_id;
     HP_SYS_CLKRST.hp_rst_en2.reg_rst_en_lcdcam = 1;
@@ -72,7 +75,10 @@ static inline void lcd_ll_reset_register(int group_id)
 
 /// use a macro to wrap the function, force the caller to use it in a critical section
 /// the critical section needs to declare the __DECLARE_RCC_RC_ATOMIC_ENV variable in advance
-#define lcd_ll_reset_register(...) (void)__DECLARE_RCC_RC_ATOMIC_ENV; lcd_ll_reset_register(__VA_ARGS__)
+#define lcd_ll_reset_register(...) do { \
+        (void)__DECLARE_RCC_RC_ATOMIC_ENV; \
+        _lcd_ll_reset_register(__VA_ARGS__); \
+    } while(0)
 
 /**
  * @brief Enable clock gating
@@ -87,7 +93,10 @@ static inline void lcd_ll_enable_clock(lcd_cam_dev_t *dev, bool en)
 
 /// use a macro to wrap the function, force the caller to use it in a critical section
 /// the critical section needs to declare the __DECLARE_RCC_ATOMIC_ENV variable in advance
-#define lcd_ll_enable_clock(...) (void)__DECLARE_RCC_ATOMIC_ENV; lcd_ll_enable_clock(__VA_ARGS__)
+#define lcd_ll_enable_clock(...) do { \
+        (void)__DECLARE_RCC_ATOMIC_ENV; \
+        lcd_ll_enable_clock(__VA_ARGS__); \
+    } while(0)
 
 /**
  * @brief Select clock source for LCD peripheral
@@ -116,7 +125,10 @@ static inline void lcd_ll_select_clk_src(lcd_cam_dev_t *dev, lcd_clock_source_t 
 
 /// use a macro to wrap the function, force the caller to use it in a critical section
 /// the critical section needs to declare the __DECLARE_RCC_ATOMIC_ENV variable in advance
-#define lcd_ll_select_clk_src(...) (void)__DECLARE_RCC_ATOMIC_ENV; lcd_ll_select_clk_src(__VA_ARGS__)
+#define lcd_ll_select_clk_src(...) do { \
+        (void)__DECLARE_RCC_ATOMIC_ENV; \
+        lcd_ll_select_clk_src(__VA_ARGS__); \
+    } while(0)
 
 /**
  * @brief Set clock coefficient of LCD peripheral
@@ -130,19 +142,18 @@ __attribute__((always_inline))
 static inline void lcd_ll_set_group_clock_coeff(lcd_cam_dev_t *dev, int div_num, int div_a, int div_b)
 {
     // lcd_clk = module_clock_src / (div_num + div_b / div_a)
-    HAL_ASSERT(div_num >= 2 && div_num <= LCD_LL_CLK_FRAC_DIV_N_MAX);
-    // dic_num == 0 means LCD_LL_CLK_FRAC_DIV_N_MAX divider in hardware
-    if (div_num >= LCD_LL_CLK_FRAC_DIV_N_MAX) {
-        div_num = 0;
-    }
-    HAL_FORCE_MODIFY_U32_REG_FIELD(HP_SYS_CLKRST.peri_clk_ctrl110, reg_lcd_clk_div_num, div_num);
+    HAL_ASSERT(div_num > 0 && div_num <= LCD_LL_CLK_FRAC_DIV_N_MAX);
+    HAL_FORCE_MODIFY_U32_REG_FIELD(HP_SYS_CLKRST.peri_clk_ctrl110, reg_lcd_clk_div_num, div_num - 1);
     HAL_FORCE_MODIFY_U32_REG_FIELD(HP_SYS_CLKRST.peri_clk_ctrl110, reg_lcd_clk_div_denominator, div_a);
     HAL_FORCE_MODIFY_U32_REG_FIELD(HP_SYS_CLKRST.peri_clk_ctrl110, reg_lcd_clk_div_numerator, div_b);
 }
 
 /// use a macro to wrap the function, force the caller to use it in a critical section
 /// the critical section needs to declare the __DECLARE_RCC_ATOMIC_ENV variable in advance
-#define lcd_ll_set_group_clock_coeff(...) (void)__DECLARE_RCC_ATOMIC_ENV; lcd_ll_set_group_clock_coeff(__VA_ARGS__)
+#define lcd_ll_set_group_clock_coeff(...) do { \
+        (void)__DECLARE_RCC_ATOMIC_ENV; \
+        lcd_ll_set_group_clock_coeff(__VA_ARGS__); \
+    } while(0)
 
 /**
  * @brief Set the PCLK clock level state when there's no transaction undergoing
@@ -177,7 +188,7 @@ static inline void lcd_ll_set_pixel_clock_edge(lcd_cam_dev_t *dev, bool active_o
 __attribute__((always_inline))
 static inline void lcd_ll_set_pixel_clock_prescale(lcd_cam_dev_t *dev, uint32_t prescale)
 {
-    HAL_ASSERT(prescale <= LCD_LL_PCLK_DIV_MAX);
+    HAL_ASSERT(prescale > 0 && prescale <= LCD_LL_PCLK_DIV_MAX);
     // Formula: pixel_clk = lcd_clk / (1 + clkcnt_n)
     // clkcnt_n can't be zero
     uint32_t scale = 1;
@@ -363,8 +374,12 @@ static inline void lcd_ll_set_phase_cycles(lcd_cam_dev_t *dev, uint32_t cmd_cycl
     dev->lcd_user.lcd_dummy = (dummy_cycles > 0);
     dev->lcd_user.lcd_dout = (data_cycles > 0);
     dev->lcd_user.lcd_cmd_2_cycle_en = cmd_cycles > 1;
-    dev->lcd_user.lcd_dummy_cyclelen = dummy_cycles - 1;
-    dev->lcd_user.lcd_dout_cyclelen = data_cycles - 1;
+    if (dummy_cycles > 0) {
+        dev->lcd_user.lcd_dummy_cyclelen = dummy_cycles - 1;
+    }
+    if (data_cycles > 0) {
+        dev->lcd_user.lcd_dout_cyclelen = data_cycles - 1;
+    }
 }
 
 /**
@@ -377,8 +392,12 @@ static inline void lcd_ll_set_phase_cycles(lcd_cam_dev_t *dev, uint32_t cmd_cycl
 static inline void lcd_ll_set_blank_cycles(lcd_cam_dev_t *dev, uint32_t fk_cycles, uint32_t bk_cycles)
 {
     dev->lcd_misc.lcd_bk_en = (fk_cycles || bk_cycles);
-    dev->lcd_misc.lcd_vfk_cyclelen = fk_cycles - 1;
-    dev->lcd_misc.lcd_vbk_cyclelen = bk_cycles - 1;
+    if (fk_cycles > 0) {
+        dev->lcd_misc.lcd_vfk_cyclelen = fk_cycles - 1;
+    }
+    if (bk_cycles > 0) {
+        dev->lcd_misc.lcd_vbk_cyclelen = bk_cycles - 1;
+    }
 }
 
 /**
@@ -507,7 +526,8 @@ static inline void lcd_ll_reverse_wire_bit_order(lcd_cam_dev_t *dev, bool en)
  * @brief Whether to swap adjacent two bytes
  *
  * @note This acts before the YUV-RGB converter, mainly to change the data endian.
- *       {B1,B0},{B3,B2} => {B0,B1}{B2,B3}
+ *       e.g. {B1,B0},{B3,B2} => {B0,B1}{B2,B3}.
+ *       Only valid when `lcd_ll_set_dma_read_stride` set the DMA read stride >= 16 bits
  *
  * @param dev LCD register base address
  * @param en True to swap the byte order, False to not swap
@@ -606,7 +626,7 @@ static inline void lcd_ll_set_command(lcd_cam_dev_t *dev, uint32_t data_width, u
 }
 
 /**
- * @brief Wether to enable RGB interface
+ * @brief Whether to enable RGB interface
  *
  * @param dev LCD register base address
  * @param en True to enable RGB interface, False to disable RGB interface
@@ -629,7 +649,7 @@ static inline void lcd_ll_enable_auto_next_frame(lcd_cam_dev_t *dev, bool en)
 }
 
 /**
- * @brief Wether to output HSYNC signal in porch resion
+ * @brief Whether to output HSYNC signal in porch resion
  *
  * @param dev LCD register base address
  * @param en True to enable, False to disable
@@ -729,6 +749,12 @@ static inline void lcd_ll_enable_interrupt(lcd_cam_dev_t *dev, uint32_t mask, bo
         dev->lc_dma_int_ena.val &= ~(mask & 0x03);
     }
 }
+/// use a macro to wrap the function, force the caller to use it in a critical section
+/// the critical section needs to declare the __DECLARE_RCC_ATOMIC_ENV variable in advance
+#define lcd_ll_enable_interrupt(...) do { \
+        (void)__DECLARE_RCC_ATOMIC_ENV; \
+        lcd_ll_enable_interrupt(__VA_ARGS__); \
+    } while(0)
 
 /**
  * @brief Get interrupt status value
@@ -746,7 +772,7 @@ static inline uint32_t lcd_ll_get_interrupt_status(lcd_cam_dev_t *dev)
  * @brief Clear interrupt status by mask
  *
  * @param dev LCD register base address
- * @param mask Interupt status mask
+ * @param mask Interrupt status mask
  */
 __attribute__((always_inline))
 static inline void lcd_ll_clear_interrupt_status(lcd_cam_dev_t *dev, uint32_t mask)

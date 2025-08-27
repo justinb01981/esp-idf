@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2020-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2020-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -10,7 +10,6 @@
 #include <sys/param.h>
 #include "sdkconfig.h"
 #include "freertos/FreeRTOS.h"
-#include "soc/soc_caps.h"
 #include "soc/interrupts.h"
 #include "esp_log.h"
 #include "esp_check.h"
@@ -20,41 +19,38 @@
 #include "esp_memory_utils.h"
 #include "esp_async_memcpy.h"
 #include "esp_async_memcpy_priv.h"
+#include "esp_private/gdma_link.h"
+#include "esp_private/esp_dma_utils.h"
+#include "esp_private/critical_section.h"
 #include "hal/cp_dma_hal.h"
 #include "hal/cp_dma_ll.h"
-#include "hal/dma_types.h"
 
 static const char *TAG = "async_mcp.cpdma";
 
+#define MCP_DMA_DESCRIPTOR_BUFFER_MAX_SIZE 4095
+
 /// @brief Transaction object for async memcpy
-/// @note - the DMA descriptors to be 4-byte aligned
-/// @note - The DMA descriptor link list is allocated dynamically from DMA-able memory
-/// @note - Because of the eof_node, the transaction object should also be allocated from DMA-able memory
 typedef struct async_memcpy_transaction_t {
-    dma_descriptor_align4_t eof_node;      // this is the DMA node which act as the EOF descriptor (RX path only)
-    dma_descriptor_align4_t *tx_desc_link; // descriptor link list, the length of the link is determined by the copy buffer size
-    dma_descriptor_align4_t *rx_desc_link; // descriptor link list, the length of the link is determined by the copy buffer size
-    intptr_t tx_start_desc_addr; // TX start descriptor address
-    intptr_t rx_start_desc_addr; // RX start descriptor address
-    async_memcpy_isr_cb_t cb;    // user callback
-    void *cb_args;               // user callback args
+    gdma_link_list_handle_t tx_link_list; // DMA link list for TX direction
+    gdma_link_list_handle_t rx_link_list; // DMA link list for RX direction
+    async_memcpy_isr_cb_t cb; // user callback
+    void *cb_args;            // user callback args
     STAILQ_ENTRY(async_memcpy_transaction_t) idle_queue_entry;  // Entry for the idle queue
     STAILQ_ENTRY(async_memcpy_transaction_t) ready_queue_entry; // Entry for the ready queue
 } async_memcpy_transaction_t;
 
 /// @brief Context of async memcpy driver
 /// @note - It saves two queues, one for idle transaction objects, one for ready transaction objects
-/// @note - Transaction objects are allocated from DMA-able memory
 /// @note - Number of transaction objects are determined by the backlog parameter
 typedef struct {
     async_memcpy_context_t parent; // Parent IO interface
-    size_t sram_trans_align;       // DMA transfer alignment (both in size and address) for SRAM memory
-    size_t max_single_dma_buffer;  // max DMA buffer size by a single descriptor
     cp_dma_hal_context_t hal;      // CPDMA hal
     intr_handle_t intr;            // CPDMA interrupt handle
-    portMUX_TYPE spin_lock;           // spin lock to avoid threads and isr from accessing the same resource simultaneously
-    _Atomic async_memcpy_fsm_t fsm;   // driver state machine, changing state should be atomic
-    async_memcpy_transaction_t *transaction_pool; // transaction object pool
+    portMUX_TYPE spin_lock;        // spin lock to avoid threads and isr from accessing the same resource simultaneously
+    _Atomic async_memcpy_fsm_t fsm;// driver state machine, changing state should be atomic
+    size_t num_trans_objs;         // number of transaction objects
+    async_memcpy_transaction_t *transaction_pool;    // transaction object pool
+    async_memcpy_transaction_t *current_transaction; // current transaction object
     STAILQ_HEAD(, async_memcpy_transaction_t) idle_queue_head;  // Head of the idle queue
     STAILQ_HEAD(, async_memcpy_transaction_t) ready_queue_head; // Head of the ready queue
 } async_memcpy_cpdma_context_t;
@@ -66,6 +62,15 @@ static esp_err_t mcp_cpdma_memcpy(async_memcpy_context_t *ctx, void *dst, void *
 static esp_err_t mcp_cpdma_destroy(async_memcpy_cpdma_context_t *mcp_dma)
 {
     if (mcp_dma->transaction_pool) {
+        for (size_t i = 0; i < mcp_dma->num_trans_objs; i++) {
+            async_memcpy_transaction_t* trans = &mcp_dma->transaction_pool[i];
+            if (trans->tx_link_list) {
+                gdma_del_link_list(trans->tx_link_list);
+            }
+            if (trans->rx_link_list) {
+                gdma_del_link_list(trans->rx_link_list);
+            }
+        }
         free(mcp_dma->transaction_pool);
     }
     if (mcp_dma->intr) {
@@ -84,13 +89,12 @@ esp_err_t esp_async_memcpy_install_cpdma(const async_memcpy_config_t *config, as
     esp_err_t ret = ESP_OK;
     async_memcpy_cpdma_context_t *mcp_dma = NULL;
     ESP_RETURN_ON_FALSE(config && mcp, ESP_ERR_INVALID_ARG, TAG, "invalid argument");
-    // allocate memory of driver context from internal memory
+    // allocate memory of driver context from internal memory (because it contains atomic variable)
     mcp_dma = heap_caps_calloc(1, sizeof(async_memcpy_cpdma_context_t), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     ESP_GOTO_ON_FALSE(mcp_dma, ESP_ERR_NO_MEM, err, TAG, "no mem for driver context");
     uint32_t trans_queue_len = config->backlog ? config->backlog : DEFAULT_TRANSACTION_QUEUE_LENGTH;
-    // allocate memory for transaction pool, aligned to 4 because the trans->eof_node requires that alignment
-    mcp_dma->transaction_pool = heap_caps_aligned_calloc(4, trans_queue_len, sizeof(async_memcpy_transaction_t),
-                                MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT | MALLOC_CAP_DMA);
+    // allocate memory for transaction pool from internal memory
+    mcp_dma->transaction_pool = heap_caps_calloc(trans_queue_len, sizeof(async_memcpy_transaction_t), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     ESP_GOTO_ON_FALSE(mcp_dma->transaction_pool, ESP_ERR_NO_MEM, err, TAG, "no mem for transaction pool");
 
     // Init hal context
@@ -111,9 +115,8 @@ esp_err_t esp_async_memcpy_install_cpdma(const async_memcpy_config_t *config, as
     // initialize other members
     portMUX_INITIALIZE(&mcp_dma->spin_lock);
     atomic_init(&mcp_dma->fsm, MCP_FSM_IDLE);
-    mcp_dma->sram_trans_align = config->sram_trans_align;
-    size_t trans_align = config->sram_trans_align;
-    mcp_dma->max_single_dma_buffer = trans_align ? ALIGN_DOWN(DMA_DESCRIPTOR_BUFFER_MAX_SIZE, trans_align) : DMA_DESCRIPTOR_BUFFER_MAX_SIZE;
+    mcp_dma->num_trans_objs = trans_queue_len;
+
     mcp_dma->parent.del = mcp_cpdma_del;
     mcp_dma->parent.memcpy = mcp_cpdma_memcpy;
     // return driver object
@@ -140,66 +143,17 @@ static esp_err_t mcp_cpdma_del(async_memcpy_context_t *ctx)
     return mcp_cpdma_destroy(mcp_dma);
 }
 
-static void mount_tx_buffer_to_dma(dma_descriptor_align4_t *desc_array, int num_desc,
-                                   uint8_t *buf, size_t buf_sz, size_t max_single_dma_buffer)
-{
-    uint32_t prepared_length = 0;
-    size_t len = buf_sz;
-    for (int i = 0; i < num_desc - 1; i++) {
-        desc_array[i].buffer = &buf[prepared_length];
-        desc_array[i].dw0.owner = DMA_DESCRIPTOR_BUFFER_OWNER_DMA;
-        desc_array[i].dw0.suc_eof = 0;
-        desc_array[i].dw0.size = max_single_dma_buffer;
-        desc_array[i].dw0.length = max_single_dma_buffer;
-        desc_array[i].next = &desc_array[i + 1];
-        prepared_length += max_single_dma_buffer;
-        len -= max_single_dma_buffer;
-    }
-    // take special care to the EOF descriptor
-    desc_array[num_desc - 1].buffer = &buf[prepared_length];
-    desc_array[num_desc - 1].next = NULL;
-    desc_array[num_desc - 1].dw0.owner = DMA_DESCRIPTOR_BUFFER_OWNER_DMA;
-    desc_array[num_desc - 1].dw0.suc_eof = 1;
-    desc_array[num_desc - 1].dw0.size = len;
-    desc_array[num_desc - 1].dw0.length = len;
-}
-
-static void mount_rx_buffer_to_dma(dma_descriptor_align4_t *desc_array, int num_desc, dma_descriptor_align4_t *eof_desc,
-                                   uint8_t *buf, size_t buf_sz, size_t max_single_dma_buffer)
-{
-    uint32_t prepared_length = 0;
-    size_t len = buf_sz;
-    if (desc_array) {
-        assert(num_desc > 0);
-        for (int i = 0; i < num_desc; i++) {
-            desc_array[i].buffer = &buf[prepared_length];
-            desc_array[i].dw0.owner = DMA_DESCRIPTOR_BUFFER_OWNER_DMA;
-            desc_array[i].dw0.size = max_single_dma_buffer;
-            desc_array[i].dw0.length = max_single_dma_buffer;
-            desc_array[i].next = &desc_array[i + 1];
-            prepared_length += max_single_dma_buffer;
-            len -= max_single_dma_buffer;
-        }
-        desc_array[num_desc - 1].next = eof_desc;
-    }
-    eof_desc->buffer = &buf[prepared_length];
-    eof_desc->next = NULL;
-    eof_desc->dw0.owner = DMA_DESCRIPTOR_BUFFER_OWNER_DMA;
-    eof_desc->dw0.size = len;
-    eof_desc->dw0.length = len;
-}
-
 /// @brief help function to get one transaction from the ready queue
 /// @note this function is allowed to be called in ISR
 static async_memcpy_transaction_t *try_pop_trans_from_ready_queue(async_memcpy_cpdma_context_t *mcp_dma)
 {
     async_memcpy_transaction_t *trans = NULL;
-    portENTER_CRITICAL_SAFE(&mcp_dma->spin_lock);
+    esp_os_enter_critical_safe(&mcp_dma->spin_lock);
     trans = STAILQ_FIRST(&mcp_dma->ready_queue_head);
     if (trans) {
         STAILQ_REMOVE_HEAD(&mcp_dma->ready_queue_head, ready_queue_entry);
     }
-    portEXIT_CRITICAL_SAFE(&mcp_dma->spin_lock);
+    esp_os_exit_critical_safe(&mcp_dma->spin_lock);
     return trans;
 }
 
@@ -213,7 +167,10 @@ static void try_start_pending_transaction(async_memcpy_cpdma_context_t *mcp_dma)
         trans = try_pop_trans_from_ready_queue(mcp_dma);
         if (trans) {
             atomic_store(&mcp_dma->fsm, MCP_FSM_RUN);
-            cp_dma_hal_set_desc_base_addr(&mcp_dma->hal, trans->tx_start_desc_addr, trans->rx_start_desc_addr);
+            mcp_dma->current_transaction = trans;
+            cp_dma_hal_set_desc_base_addr(&mcp_dma->hal,
+                                          gdma_link_get_head_addr(trans->tx_link_list),
+                                          gdma_link_get_head_addr(trans->rx_link_list));
             cp_dma_hal_start(&mcp_dma->hal); // enable DMA and interrupt
         } else {
             atomic_store(&mcp_dma->fsm, MCP_FSM_IDLE);
@@ -226,12 +183,12 @@ static void try_start_pending_transaction(async_memcpy_cpdma_context_t *mcp_dma)
 static async_memcpy_transaction_t *try_pop_trans_from_idle_queue(async_memcpy_cpdma_context_t *mcp_dma)
 {
     async_memcpy_transaction_t *trans = NULL;
-    portENTER_CRITICAL_SAFE(&mcp_dma->spin_lock);
+    esp_os_enter_critical_safe(&mcp_dma->spin_lock);
     trans = STAILQ_FIRST(&mcp_dma->idle_queue_head);
     if (trans) {
         STAILQ_REMOVE_HEAD(&mcp_dma->idle_queue_head, idle_queue_entry);
     }
-    portEXIT_CRITICAL_SAFE(&mcp_dma->spin_lock);
+    esp_os_exit_critical_safe(&mcp_dma->spin_lock);
     return trans;
 }
 
@@ -240,50 +197,80 @@ static esp_err_t mcp_cpdma_memcpy(async_memcpy_context_t *ctx, void *dst, void *
     esp_err_t ret = ESP_OK;
     async_memcpy_cpdma_context_t *mcp_dma = __containerof(ctx, async_memcpy_cpdma_context_t, parent);
     ESP_RETURN_ON_FALSE(esp_ptr_internal(src) && esp_ptr_internal(dst), ESP_ERR_INVALID_ARG, TAG, "CP_DMA can only access SRAM");
-    // alignment check
-    if (mcp_dma->sram_trans_align) {
-        ESP_RETURN_ON_FALSE((((intptr_t)dst & (mcp_dma->sram_trans_align - 1)) == 0), ESP_ERR_INVALID_ARG, TAG, "buffer address not aligned: %p -> %p", src, dst);
-        ESP_RETURN_ON_FALSE(((n & (mcp_dma->sram_trans_align - 1)) == 0), ESP_ERR_INVALID_ARG, TAG,
-                            "copy size should align to %d bytes", mcp_dma->sram_trans_align);
-    }
     async_memcpy_transaction_t *trans = NULL;
     // pick one transaction node from idle queue
     trans = try_pop_trans_from_idle_queue(mcp_dma);
     // check if we get the transaction object successfully
     ESP_RETURN_ON_FALSE(trans, ESP_ERR_INVALID_STATE, TAG, "no free node in the idle queue");
 
-    // calculate how many descriptors we want
-    size_t max_single_dma_buffer = mcp_dma->max_single_dma_buffer;
-    uint32_t num_desc_per_path = (n + max_single_dma_buffer - 1) / max_single_dma_buffer;
-    // allocate DMA descriptors, descriptors need a strict alignment
-    trans->tx_desc_link = heap_caps_aligned_calloc(4, num_desc_per_path, sizeof(dma_descriptor_align4_t),
-                          MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT | MALLOC_CAP_DMA);
-    ESP_GOTO_ON_FALSE(trans->tx_desc_link, ESP_ERR_NO_MEM, err, TAG, "no mem for DMA descriptors");
-    // don't have to allocate the EOF descriptor, we will use trans->eof_node as the RX EOF descriptor
-    if (num_desc_per_path > 1) {
-        trans->rx_desc_link = heap_caps_aligned_calloc(4, num_desc_per_path - 1, sizeof(dma_descriptor_align4_t),
-                              MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT | MALLOC_CAP_DMA);
-        ESP_GOTO_ON_FALSE(trans->rx_desc_link, ESP_ERR_NO_MEM, err, TAG, "no mem for DMA descriptors");
-    } else {
-        // small copy buffer, use the trans->eof_node is sufficient
-        trans->rx_desc_link = NULL;
+    // clean up the transaction configuration comes from the last one
+    if (trans->tx_link_list) {
+        gdma_del_link_list(trans->tx_link_list);
+        trans->tx_link_list = NULL;
+    }
+    if (trans->rx_link_list) {
+        gdma_del_link_list(trans->rx_link_list);
+        trans->rx_link_list = NULL;
     }
 
-    // (preload) mount src data to the TX descriptor
-    mount_tx_buffer_to_dma(trans->tx_desc_link, num_desc_per_path, src, n, max_single_dma_buffer);
-    // (preload) mount dst data to the RX descriptor
-    mount_rx_buffer_to_dma(trans->rx_desc_link, num_desc_per_path - 1, &trans->eof_node, dst, n, max_single_dma_buffer);
+    size_t num_dma_nodes = esp_dma_calculate_node_count(n, 1, MCP_DMA_DESCRIPTOR_BUFFER_MAX_SIZE);
+
+    // allocate gdma TX link
+    gdma_link_list_config_t tx_link_cfg = {
+        .buffer_alignment = 1, // CP_DMA doesn't have alignment requirement for internal memory
+        .item_alignment = 4,   // CP_DMA requires 4 bytes alignment for each descriptor
+        .num_items = num_dma_nodes,
+        .flags = {
+            .check_owner = true,
+            .items_in_ext_mem = false,
+        },
+    };
+    ESP_GOTO_ON_ERROR(gdma_new_link_list(&tx_link_cfg, &trans->tx_link_list), err, TAG, "failed to create TX link list");
+    // mount the source buffer to the TX link list
+    gdma_buffer_mount_config_t tx_buf_mount_config[1] = {
+        [0] = {
+            .buffer = src,
+            .length = n,
+            .flags = {
+                .mark_eof = true,   // mark the last item as EOF, so the RX channel can also received an EOF list item
+                .mark_final = true, // using singly list, so terminate the link here
+            }
+        }
+    };
+    gdma_link_mount_buffers(trans->tx_link_list, 0, tx_buf_mount_config, 1, NULL);
+
+    // allocate gdma RX link
+    gdma_link_list_config_t rx_link_cfg = {
+        .buffer_alignment = 1, // CP_DMA doesn't have alignment requirement for internal memory
+        .item_alignment = 4,   // CP_DMA requires 4 bytes alignment for each descriptor
+        .num_items = num_dma_nodes,
+        .flags = {
+            .check_owner = true,
+            .items_in_ext_mem = false,
+        },
+    };
+    ESP_GOTO_ON_ERROR(gdma_new_link_list(&rx_link_cfg, &trans->rx_link_list), err, TAG, "failed to create RX link list");
+    // mount the destination buffer to the RX link list
+    gdma_buffer_mount_config_t rx_buf_mount_config[1] = {
+        [0] = {
+            .buffer = dst,
+            .length = n,
+            .flags = {
+                .mark_eof = false,  // EOF is set by TX side
+                .mark_final = true, // using singly list, so terminate the link here
+            }
+        }
+    };
+    gdma_link_mount_buffers(trans->rx_link_list, 0, rx_buf_mount_config, 1, NULL);
 
     // save other transaction context
     trans->cb = cb_isr;
     trans->cb_args = cb_args;
-    trans->tx_start_desc_addr = (intptr_t)trans->tx_desc_link;
-    trans->rx_start_desc_addr = trans->rx_desc_link ? (intptr_t)trans->rx_desc_link : (intptr_t)&trans->eof_node;
 
-    portENTER_CRITICAL(&mcp_dma->spin_lock);
+    esp_os_enter_critical(&mcp_dma->spin_lock);
     // insert the trans to ready queue
     STAILQ_INSERT_TAIL(&mcp_dma->ready_queue_head, trans, ready_queue_entry);
-    portEXIT_CRITICAL(&mcp_dma->spin_lock);
+    esp_os_exit_critical(&mcp_dma->spin_lock);
 
     // check driver state, if there's no running transaction, start a new one
     try_start_pending_transaction(mcp_dma);
@@ -292,18 +279,10 @@ static esp_err_t mcp_cpdma_memcpy(async_memcpy_context_t *ctx, void *dst, void *
 
 err:
     if (trans) {
-        if (trans->tx_desc_link) {
-            free(trans->tx_desc_link);
-            trans->tx_desc_link = NULL;
-        }
-        if (trans->rx_desc_link) {
-            free(trans->rx_desc_link);
-            trans->rx_desc_link = NULL;
-        }
         // return back the trans to idle queue
-        portENTER_CRITICAL(&mcp_dma->spin_lock);
+        esp_os_enter_critical(&mcp_dma->spin_lock);
         STAILQ_INSERT_TAIL(&mcp_dma->idle_queue_head, trans, idle_queue_entry);
-        portEXIT_CRITICAL(&mcp_dma->spin_lock);
+        esp_os_exit_critical(&mcp_dma->spin_lock);
     }
     return ret;
 }
@@ -318,9 +297,7 @@ static void mcp_default_isr_handler(void *args)
 
     // End-Of-Frame on RX side
     if (status & CP_DMA_LL_EVENT_RX_EOF) {
-        dma_descriptor_align4_t *eof_desc = (dma_descriptor_align4_t *)cp_dma_ll_get_rx_eof_descriptor_address(mcp_dma->hal.dev);
-        // get the transaction object address by the EOF descriptor address
-        async_memcpy_transaction_t *trans = __containerof(eof_desc, async_memcpy_transaction_t, eof_node);
+        async_memcpy_transaction_t *trans = mcp_dma->current_transaction;
 
         // switch driver state from RUN to IDLE
         async_memcpy_fsm_t expected_fsm = MCP_FSM_RUN;
@@ -333,17 +310,12 @@ static void mcp_default_isr_handler(void *args)
                 };
                 need_yield = cb(&mcp_dma->parent, &e, trans->cb_args);
             }
-            // recycle descriptor memory
-            free(trans->tx_desc_link);
-            free(trans->rx_desc_link);
-            trans->tx_desc_link = NULL;
-            trans->rx_desc_link = NULL;
             trans->cb = NULL;
 
-            portENTER_CRITICAL_ISR(&mcp_dma->spin_lock);
+            esp_os_enter_critical_isr(&mcp_dma->spin_lock);
             // insert the trans object to the idle queue
             STAILQ_INSERT_TAIL(&mcp_dma->idle_queue_head, trans, idle_queue_entry);
-            portEXIT_CRITICAL_ISR(&mcp_dma->spin_lock);
+            esp_os_exit_critical_isr(&mcp_dma->spin_lock);
 
             atomic_store(&mcp_dma->fsm, MCP_FSM_IDLE);
         }

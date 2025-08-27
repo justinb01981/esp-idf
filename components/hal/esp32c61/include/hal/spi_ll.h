@@ -1,16 +1,14 @@
 /*
- * SPDX-FileCopyrightText: 2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2024-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
 
 /*******************************************************************************
  * NOTICE
- * The hal is not public api, don't use in application code.
- * See readme.md in soc/include/hal/readme.md
+ * The LL layer for ESP32C61 SPI register operations
+ * It is NOT public api, don't use in application code.
  ******************************************************************************/
-
-// The LL layer for SPI register operations
 
 #pragma once
 
@@ -20,13 +18,11 @@
 #include "esp_types.h"
 #include "soc/spi_periph.h"
 #include "soc/spi_struct.h"
-#include "soc/lldesc.h"
 #include "hal/assert.h"
 #include "hal/misc.h"
 #include "hal/spi_types.h"
 #include "soc/pcr_struct.h"
-
-// TODO: [ESP32C61] IDF-9299, inherit from c6
+#include "soc/pcr_reg.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -41,9 +37,12 @@ extern "C" {
 #define HAL_SPI_SWAP_DATA_TX(data, len) HAL_SWAP32((uint32_t)(data) << (32 - len))
 #define SPI_LL_GET_HW(ID) (((ID)==1) ? &GPSPI2 : NULL)
 
-#define SPI_LL_DMA_MAX_BIT_LEN    (1 << 18)    //reg len: 18 bits
+#define SPI_LL_DMA_MAX_BIT_LEN    SPI_MS_DATA_BITLEN
 #define SPI_LL_CPU_MAX_BIT_LEN    (16 * 32)    //Fifo len: 16 words
 #define SPI_LL_MOSI_FREE_LEVEL    1            //Default level after bus initialized
+#define SPI_LL_SUPPORT_CLK_SRC_PRE_DIV      1  //clock source have divider before peripheral
+#define SPI_LL_SRC_PRE_DIV_MAX    (PCR_SPI2_CLKM_DIV_NUM + 1)   //source pre divider max
+#define SPI_LL_PERIPH_CLK_DIV_MAX   ((SPI_CLKCNT_N + 1) * (SPI_CLKDIV_PRE + 1)) //peripheral internal maxmum clock divider
 
 /**
  * The data structure holding calculated clock configuration. Since the
@@ -77,7 +76,7 @@ typedef enum {
 
 // SPI base command
 typedef enum {
-     /* Slave HD Only */
+    /* Slave HD Only */
     SPI_LL_BASE_CMD_HD_WRBUF    = 0x01,
     SPI_LL_BASE_CMD_HD_RDBUF    = 0x02,
     SPI_LL_BASE_CMD_HD_WRDMA    = 0x03,
@@ -99,9 +98,9 @@ typedef enum {
  * @param host_id   Peripheral index number, see `spi_host_device_t`
  * @param enable    Enable/Disable
  */
-static inline void spi_ll_enable_bus_clock(spi_host_device_t host_id, bool enable) {
-    switch (host_id)
-    {
+static inline void spi_ll_enable_bus_clock(spi_host_device_t host_id, bool enable)
+{
+    switch (host_id) {
     case SPI1_HOST:
         PCR.mspi_conf.mspi_clk_en = enable;
         break;
@@ -117,9 +116,9 @@ static inline void spi_ll_enable_bus_clock(spi_host_device_t host_id, bool enabl
  *
  * @param host_id   Peripheral index number, see `spi_host_device_t`
  */
-static inline void spi_ll_reset_register(spi_host_device_t host_id) {
-    switch (host_id)
-    {
+static inline void spi_ll_reset_register(spi_host_device_t host_id)
+{
+    switch (host_id) {
     case SPI1_HOST:
         PCR.mspi_conf.mspi_rst_en = 1;
         PCR.mspi_conf.mspi_rst_en = 0;
@@ -153,18 +152,35 @@ static inline void spi_ll_enable_clock(spi_host_device_t host_id, bool enable)
 __attribute__((always_inline))
 static inline void spi_ll_set_clk_source(spi_dev_t *hw, spi_clock_source_t clk_source)
 {
-    switch (clk_source)
-    {
-        case SPI_CLK_SRC_RC_FAST:
-            PCR.spi2_clkm_conf.spi2_clkm_sel = 2;
-            break;
-        case SPI_CLK_SRC_XTAL:
-            PCR.spi2_clkm_conf.spi2_clkm_sel = 0;
-            break;
-        default:
-            PCR.spi2_clkm_conf.spi2_clkm_sel = 1;
-            break;
+    switch (clk_source) {
+    case SPI_CLK_SRC_RC_FAST:
+        PCR.spi2_clkm_conf.spi2_clkm_sel = 2;
+        break;
+    case SPI_CLK_SRC_XTAL:
+        PCR.spi2_clkm_conf.spi2_clkm_sel = 0;
+        break;
+    default:
+        PCR.spi2_clkm_conf.spi2_clkm_sel = 1;
+        break;
     }
+}
+
+/**
+ * Config clock source integrate pre_div before it enter GPSPI peripheral
+ *
+ * @note 1. For timing turning(e.g. input_delay) feature available, should be (mst_div >= 2)
+ *       2. From peripheral limitation: (sour_freq/hs_div <= 160M) and (sour_freq/hs_div/mst_div <= 80M)
+ *
+ * @param hw        Beginning address of the peripheral registers.
+ * @param hs_div    Timing turning clock divider: (hs_clk_o = sour_freq/hs_div)
+ * @param mst_div   Functional output clock divider: (mst_clk_o = sour_freq/hs_div/mst_div)
+ */
+__attribute__((always_inline))
+static inline void spi_ll_clk_source_pre_div(spi_dev_t *hw, uint8_t hs_div, uint8_t mst_div)
+{
+    // In IDF master driver 'mst_div' will be const 2 and 'hs_div' is actually pre_div temporally
+    (void) hs_div;
+    HAL_FORCE_MODIFY_U32_REG_FIELD(PCR.spi2_clkm_conf, spi2_clkm_div_num, mst_div - 1);
 }
 
 /**
@@ -182,11 +198,13 @@ static inline void spi_ll_master_init(spi_dev_t *hw)
     hw->user.usr_miso_highpart = 0;
     hw->user.usr_mosi_highpart = 0;
 
+    //Disable unused error_end condition
+    hw->user1.mst_wfull_err_end_en = 0;
+    hw->user2.mst_rempty_err_end_en = 0;
+
     //Disable unneeded ints
     hw->slave.val = 0;
     hw->user.val = 0;
-
-    PCR.spi2_clkm_conf.spi2_clkm_sel = 1;
 
     hw->dma_conf.val = 0;
     hw->dma_conf.slv_tx_seg_trans_clr_en = 1;
@@ -309,7 +327,7 @@ static inline void spi_ll_slave_reset(spi_dev_t *hw)
 /**
  * Reset SPI CPU TX FIFO
  *
- * On ESP32C3, this function is not seperated
+ * On ESP32C61, this function is not separated
  *
  * @param hw Beginning address of the peripheral registers.
  */
@@ -322,7 +340,7 @@ static inline void spi_ll_cpu_tx_fifo_reset(spi_dev_t *hw)
 /**
  * Reset SPI CPU RX FIFO
  *
- * On ESP32C3, this function is not seperated
+ * On ESP32C61, this function is not separated
  *
  * @param hw Beginning address of the peripheral registers.
  */
@@ -693,6 +711,25 @@ static inline void spi_ll_master_keep_cs(spi_dev_t *hw, int keep_active)
  * Configs: parameters
  *----------------------------------------------------------------------------*/
 /**
+ * Set the standard clock mode for master.
+ *
+ * @param hw  Beginning address of the peripheral registers.
+ * @param enable_std True for std timing, False for half cycle delay sampling.
+ */
+static inline void spi_ll_master_set_rx_timing_mode(spi_dev_t *hw, spi_sampling_point_t sample_point)
+{
+    hw->clock.clk_edge_sel = (sample_point == SPI_SAMPLING_POINT_PHASE_1);
+}
+
+/**
+ * Get if standard clock mode is supported.
+ */
+static inline bool spi_ll_master_is_rx_std_sample_supported(void)
+{
+    return true;
+}
+
+/**
  * Set the clock for master by stored value.
  *
  * @param hw  Beginning address of the peripheral registers.
@@ -707,29 +744,31 @@ static inline void spi_ll_master_set_clock_by_reg(spi_dev_t *hw, const spi_ll_cl
  * Get the frequency of given dividers. Don't use in app.
  *
  * @param fapb APB clock of the system.
- * @param pre  Pre devider.
+ * @param pre  Pre divider.
  * @param n    Main divider.
  *
  * @return     Frequency of given dividers.
  */
+__attribute__((always_inline))
 static inline int spi_ll_freq_for_pre_n(int fapb, int pre, int n)
 {
     return (fapb / (pre * n));
 }
 
 /**
- * Calculate the nearest frequency avaliable for master.
+ * Calculate the nearest frequency available for master.
  *
  * @param fapb       APB clock of the system.
- * @param hz         Frequncy desired.
+ * @param hz         Frequency desired.
  * @param duty_cycle Duty cycle desired.
  * @param out_reg    Output address to store the calculated clock configurations for the return frequency.
  *
  * @return           Actual (nearest) frequency.
  */
+__attribute__((always_inline))
 static inline int spi_ll_master_cal_clock(int fapb, int hz, int duty_cycle, spi_ll_clock_val_t *out_reg)
 {
-    typeof(GPSPI2.clock) reg;
+    typeof(GPSPI2.clock) reg = {.val = 0};
     int eff_clk;
 
     //In hw, n, h and l are 1-64, pre is 1-8K. Value written to register is one lower than used value.
@@ -801,7 +840,7 @@ static inline int spi_ll_master_cal_clock(int fapb, int hz, int duty_cycle, spi_
  *
  * @param hw         Beginning address of the peripheral registers.
  * @param fapb       APB clock of the system.
- * @param hz         Frequncy desired.
+ * @param hz         Frequency desired.
  * @param duty_cycle Duty cycle desired.
  *
  * @return           Actual frequency that is used.
@@ -855,7 +894,7 @@ static inline void spi_ll_master_set_cs_hold(spi_dev_t *hw, int hold)
 /**
  * Set the delay of SPI clocks before the first SPI clock after the CS active edge.
  *
- * Note ESP32 doesn't support to use this feature when command/address phases
+ * Note ESP32C61 doesn't support to use this feature when command/address phases
  * are used in full duplex mode.
  *
  * @param hw    Beginning address of the peripheral registers.
@@ -905,7 +944,7 @@ static inline void spi_ll_set_miso_bitlen(spi_dev_t *hw, size_t bitlen)
  */
 static inline void spi_ll_slave_set_rx_bitlen(spi_dev_t *hw, size_t bitlen)
 {
-    //This is not used in esp32c3
+    //This is not used in esp32c61
 }
 
 /**
@@ -916,7 +955,7 @@ static inline void spi_ll_slave_set_rx_bitlen(spi_dev_t *hw, size_t bitlen)
  */
 static inline void spi_ll_slave_set_tx_bitlen(spi_dev_t *hw, size_t bitlen)
 {
-    //This is not used in esp32c3
+    //This is not used in esp32c61
 }
 
 /**
@@ -1014,7 +1053,9 @@ static inline void spi_ll_set_command(spi_dev_t *hw, uint16_t cmd, int cmdlen, b
 static inline void spi_ll_set_dummy(spi_dev_t *hw, int dummy_n)
 {
     hw->user.usr_dummy = dummy_n ? 1 : 0;
-    HAL_FORCE_MODIFY_U32_REG_FIELD(hw->user1, usr_dummy_cyclelen, dummy_n - 1);
+    if (dummy_n > 0) {
+        HAL_FORCE_MODIFY_U32_REG_FIELD(hw->user1, usr_dummy_cyclelen, dummy_n - 1);
+    }
 }
 
 /**
@@ -1180,8 +1221,7 @@ static inline uint32_t spi_ll_slave_hd_get_last_addr(spi_dev_t *hw)
 static inline uint8_t spi_ll_get_slave_hd_base_command(spi_command_t cmd_t)
 {
     uint8_t cmd_base = 0x00;
-    switch (cmd_t)
-    {
+    switch (cmd_t) {
     case SPI_CMD_HD_WRBUF:
         cmd_base = SPI_LL_BASE_CMD_HD_WRBUF;
         break;

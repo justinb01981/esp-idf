@@ -1,16 +1,18 @@
 /*
- * SPDX-FileCopyrightText: 2020-2022 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2020-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
 
 #include "soc/pcnt_periph.h"
 #include "soc/gpio_sig_map.h"
+#include "soc/pcnt_reg.h"
 
 const pcnt_signal_conn_t pcnt_periph_signals = {
     .groups = {
         [0] = {
             .irq = ETS_PCNT_INTR_SOURCE,
+            .module_name = "pcnt0",
             .units = {
                 [0] = {
                     .channels = {

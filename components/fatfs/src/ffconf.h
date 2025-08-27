@@ -1,3 +1,6 @@
+#ifndef _FFCONF_DEFINED
+#define _FFCONF_DEFINED
+
 #include "sdkconfig.h"
 
 /*---------------------------------------------------------------------------/
@@ -296,7 +299,7 @@
 /  These options have no effect in read-only configuration (FF_FS_READONLY = 1). */
 
 
-#define FF_FS_NOFSINFO	0
+#define FF_FS_NOFSINFO	(CONFIG_FATFS_DONT_TRUST_FREE_CLUSTER_CNT << 0 | CONFIG_FATFS_DONT_TRUST_LAST_ALLOC << 1)
 /* If you need to know correct free space on the FAT32 volume, set bit 0 of this
 /  option, and f_getfree() function at the first time after volume mount will force
 /  a full FAT scan. Bit 1 controls the use of last allocated cluster number.
@@ -362,3 +365,5 @@ void ff_memfree(void*);
 #define disk_read           ff_disk_read
 #define disk_write          ff_disk_write
 #define disk_ioctl          ff_disk_ioctl
+
+#endif /* _FFCONF_DEFINED */

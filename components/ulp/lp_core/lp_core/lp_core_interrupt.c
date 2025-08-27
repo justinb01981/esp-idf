@@ -7,10 +7,13 @@
 #include <stdint.h>
 
 #include "sdkconfig.h"
+#include "soc/soc_caps.h"
 #include "hal/lp_core_ll.h"
 #include "riscv/rv_utils.h"
+#include "riscv/rvruntime-frames.h"
+#include "ulp_lp_core_utils.h"
 
-#if CONFIG_IDF_TARGET_ESP32C6
+#if SOC_LP_CORE_SINGLE_INTERRUPT_VECTOR
 /* Enable interrupt 30, which all external interrupts are routed to*/
 #define MIE_ALL_INTS_MASK (1 << 30)
 #else
@@ -36,9 +39,14 @@ void ulp_lp_core_intr_disable(void)
     RV_CLEAR_CSR(mstatus, MSTATUS_MIE);
 }
 
+void  __attribute__((weak)) ulp_lp_core_panic_handler(RvExcFrame *frame, int exccause)
+{
+    ulp_lp_core_abort();
+}
+
 static void ulp_lp_core_default_intr_handler(void)
 {
-    abort();
+    ulp_lp_core_abort();
 }
 
 /* Default ISR handlers, intended to be overwritten by users */
@@ -60,12 +68,7 @@ void __attribute__((weak, alias("ulp_lp_core_default_intr_handler"))) ulp_lp_cor
 void __attribute__((weak, alias("ulp_lp_core_default_intr_handler"))) ulp_lp_core_lp_rtc_intr_handler(void);
 void __attribute__((weak, alias("ulp_lp_core_default_intr_handler"))) ulp_lp_core_sw_intr_handler(void);
 
-void ulp_lp_core_panic_handler(void)
-{
-    abort();
-}
-
-#if CONFIG_IDF_TARGET_ESP32C6
+#if SOC_LP_CORE_SINGLE_INTERRUPT_VECTOR
 
 static void* s_intr_handlers[] = {
     ulp_lp_core_lp_io_intr_handler,
@@ -89,4 +92,4 @@ void __attribute__((weak)) ulp_lp_core_intr_handler(void)
     }
 }
 
-#endif
+#endif //SOC_LP_CORE_SINGLE_INTERRUPT_VECTOR

@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2018-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2018-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -43,6 +43,8 @@ typedef enum {
     HTTPD_SSL_USER_CB_SESS_CREATE,
     HTTPD_SSL_USER_CB_SESS_CLOSE
 } httpd_ssl_user_cb_state_t;
+
+typedef esp_tls_handshake_callback esp_https_server_cert_select_cb;
 
 /**
  * @brief Callback data struct, contains the ESP-TLS connection handle
@@ -98,8 +100,14 @@ struct httpd_ssl_config {
     /** Use ECDSA peripheral to use private key */
     bool use_ecdsa_peripheral;
 
-    /** The efuse block where ECDSA key is stored */
+    /** The efuse block where ECDSA key is stored. For SECP384R1 curve, if two blocks are used, set this to the low block and use ecdsa_key_efuse_blk_high for the high block. */
     uint8_t ecdsa_key_efuse_blk;
+
+    /** The high efuse block for ECDSA key (used only for SECP384R1 curve). If not set (0), only ecdsa_key_efuse_blk is used. */
+    uint8_t ecdsa_key_efuse_blk_high;
+
+    /** ECDSA curve to use (SECP256R1 or SECP384R1) */
+    esp_tls_ecdsa_curve_t ecdsa_curve;
 
     /** Transport Mode (default secure) */
     httpd_ssl_transport_mode_t transport_mode;
@@ -123,13 +131,16 @@ struct httpd_ssl_config {
     void *ssl_userdata;
 
     /** Certificate selection callback to use.
-     *  The callback is only applicable when CONFIG_ESP_TLS_SERVER_CERT_SELECT_HOOK is enabled in menuconfig */
-    esp_tls_handshake_callback cert_select_cb;
+     *  The callback is only applicable when CONFIG_ESP_HTTPS_SERVER_CERT_SELECT_HOOK is enabled in menuconfig */
+    esp_https_server_cert_select_cb cert_select_cb;
 
-    /** Application protocols the server supports in order of prefernece.
+    /** Application protocols the server supports in order of preference.
      *  Used for negotiating during the TLS handshake, first one the client supports is selected.
      *  The data structure must live as long as the https server itself */
     const char** alpn_protos;
+
+    /** TLS handshake timeout in milliseconds, default timeout is 10 seconds if not set */
+    uint32_t tls_handshake_timeout_ms;
 };
 
 typedef struct httpd_ssl_config httpd_ssl_config_t;
@@ -148,6 +159,8 @@ typedef struct httpd_ssl_config httpd_ssl_config_t;
         .stack_size         = 10240,              \
         .core_id            = tskNO_AFFINITY,     \
         .task_caps          = (MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),       \
+        .max_req_hdr_len    = CONFIG_HTTPD_MAX_REQ_HDR_LEN,    \
+        .max_uri_len        = CONFIG_HTTPD_MAX_URI_LEN,        \
         .server_port        = 0,                  \
         .ctrl_port   = ESP_HTTPD_DEF_CTRL_PORT+1, \
         .max_open_sockets   = 4,                  \
@@ -179,6 +192,8 @@ typedef struct httpd_ssl_config httpd_ssl_config_t;
     .prvtkey_len = 0,                             \
     .use_ecdsa_peripheral = false,                \
     .ecdsa_key_efuse_blk = 0,                     \
+    .ecdsa_key_efuse_blk_high = 0,                \
+    .ecdsa_curve = ESP_TLS_ECDSA_CURVE_SECP256R1, \
     .transport_mode = HTTPD_SSL_TRANSPORT_SECURE, \
     .port_secure = 443,                           \
     .port_insecure = 80,                          \
@@ -188,6 +203,7 @@ typedef struct httpd_ssl_config httpd_ssl_config_t;
     .ssl_userdata = NULL,                         \
     .cert_select_cb = NULL,                       \
     .alpn_protos = NULL,                          \
+    .tls_handshake_timeout_ms = 0                 \
 }
 
 /**

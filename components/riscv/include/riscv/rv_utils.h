@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2020-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2020-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -9,15 +9,32 @@
 #include <stdint.h>
 
 #include "soc/soc_caps.h"
-#include "soc/assist_debug_reg.h"
 #include "soc/interrupt_reg.h"
 #include "esp_attr.h"
 #include "riscv/csr.h"
 #include "riscv/interrupt.h"
 #include "riscv/csr_pie.h"
+#include "riscv/csr_dsp.h"
+#include "sdkconfig.h"
+
+#if CONFIG_SECURE_ENABLE_TEE && !NON_OS_BUILD
+#include "secure_service_num.h"
+#endif
 
 #ifdef __cplusplus
 extern "C" {
+#endif
+
+/* Check whether the current privilege level is Machine (M) mode */
+#if CONFIG_SECURE_ENABLE_TEE
+#define IS_PRV_M_MODE()  (RV_READ_CSR(CSR_PRV_MODE) == PRV_M)
+#else
+#define IS_PRV_M_MODE()  (1UL)
+#endif
+
+#if CONFIG_SECURE_ENABLE_TEE && !NON_OS_BUILD
+/* [ESP-TEE] Callback function for accessing interrupt management services through REE */
+extern esprv_int_mgmt_t esp_tee_intr_sec_srv_cb;
 #endif
 
 #if SOC_CPU_HAS_CSR_PC
@@ -25,7 +42,15 @@ extern "C" {
 #define CSR_PCER_MACHINE    0x7e0
 #define CSR_PCMR_MACHINE    0x7e1
 #define CSR_PCCR_MACHINE    0x7e2
+#define CSR_PCCR_USER       0x802
 #endif /* SOC_CPU_HAS_CSR_PC */
+
+#if SOC_BRANCH_PREDICTOR_SUPPORTED
+#define MHCR 0x7c1
+#define MHCR_RS (1<<4)   /* R/W, address return stack set bit */
+#define MHCR_BFE (1<<5)  /* R/W, allow predictive jump set bit */
+#define MHCR_BTB (1<<12) /* R/W, branch target prediction enable bit */
+#endif  //SOC_BRANCH_PREDICTOR_SUPPORTED
 
 #if SOC_CPU_HAS_FPU
 
@@ -80,18 +105,30 @@ FORCE_INLINE_ATTR void *rv_utils_get_sp(void)
 FORCE_INLINE_ATTR uint32_t __attribute__((always_inline)) rv_utils_get_cycle_count(void)
 {
 #if !SOC_CPU_HAS_CSR_PC
-    return RV_READ_CSR(mcycle);
+    return RV_READ_CSR(cycle);
 #else
-    return RV_READ_CSR(CSR_PCCR_MACHINE);
+    if (IS_PRV_M_MODE()) {
+        return RV_READ_CSR(CSR_PCCR_MACHINE);
+    } else {
+        return RV_READ_CSR(CSR_PCCR_USER);
+    }
 #endif
 }
 
 FORCE_INLINE_ATTR void __attribute__((always_inline)) rv_utils_set_cycle_count(uint32_t ccount)
 {
 #if !SOC_CPU_HAS_CSR_PC
-    RV_WRITE_CSR(mcycle, ccount);
+#if CONFIG_SECURE_ENABLE_TEE && !NON_OS_BUILD
+    esp_tee_intr_sec_srv_cb(2, SS_RV_UTILS_SET_CYCLE_COUNT, ccount);
 #else
-    RV_WRITE_CSR(CSR_PCCR_MACHINE, ccount);
+    RV_WRITE_CSR(mcycle, ccount);
+#endif
+#else
+    if (IS_PRV_M_MODE()) {
+        RV_WRITE_CSR(CSR_PCCR_MACHINE, ccount);
+    } else {
+        RV_WRITE_CSR(CSR_PCCR_USER, ccount);
+    }
 #endif
 }
 
@@ -106,32 +143,89 @@ FORCE_INLINE_ATTR void rv_utils_set_mtvec(uint32_t mtvec_val)
     RV_WRITE_CSR(mtvec, mtvec_val | MTVEC_MODE_CSR);
 }
 
+FORCE_INLINE_ATTR void rv_utils_set_xtvec(uint32_t xtvec_val)
+{
+    xtvec_val |= MTVEC_MODE_CSR; // Set MODE field to treat XTVEC as a vector base address
+    if (IS_PRV_M_MODE()) {
+        RV_WRITE_CSR(mtvec, xtvec_val);
+    } else {
+        RV_WRITE_CSR(utvec, xtvec_val);
+    }
+}
+
 // ------------------ Interrupt Control --------------------
 
 FORCE_INLINE_ATTR void rv_utils_intr_enable(uint32_t intr_mask)
 {
+#if CONFIG_SECURE_ENABLE_TEE && !NON_OS_BUILD
+    esp_tee_intr_sec_srv_cb(2, SS_RV_UTILS_INTR_ENABLE, intr_mask);
+#else
     // Disable all interrupts to make updating of the interrupt mask atomic.
     unsigned old_mstatus = RV_CLEAR_CSR(mstatus, MSTATUS_MIE);
     esprv_int_enable(intr_mask);
     RV_SET_CSR(mstatus, old_mstatus & MSTATUS_MIE);
+#endif
 }
 
 FORCE_INLINE_ATTR void rv_utils_intr_disable(uint32_t intr_mask)
 {
+#if CONFIG_SECURE_ENABLE_TEE && !NON_OS_BUILD
+    esp_tee_intr_sec_srv_cb(2, SS_RV_UTILS_INTR_DISABLE, intr_mask);
+#else
     // Disable all interrupts to make updating of the interrupt mask atomic.
     unsigned old_mstatus = RV_CLEAR_CSR(mstatus, MSTATUS_MIE);
     esprv_int_disable(intr_mask);
     RV_SET_CSR(mstatus, old_mstatus & MSTATUS_MIE);
+#endif
 }
 
 FORCE_INLINE_ATTR void rv_utils_intr_global_enable(void)
 {
+#if CONFIG_SECURE_ENABLE_TEE && !NON_OS_BUILD
+    esp_tee_intr_sec_srv_cb(1, SS_RV_UTILS_INTR_GLOBAL_ENABLE);
+#else
     RV_SET_CSR(mstatus, MSTATUS_MIE);
+#endif
 }
 
 FORCE_INLINE_ATTR void rv_utils_intr_global_disable(void)
 {
+#if CONFIG_SECURE_ENABLE_TEE
+    if (IS_PRV_M_MODE()) {
+        RV_CLEAR_CSR(mstatus, MSTATUS_MIE);
+    } else {
+        RV_CLEAR_CSR(ustatus, USTATUS_UIE);
+    }
+#else
     RV_CLEAR_CSR(mstatus, MSTATUS_MIE);
+#endif
+}
+
+FORCE_INLINE_ATTR void rv_utils_intr_set_type(int intr_num, enum intr_type type)
+{
+#if CONFIG_SECURE_ENABLE_TEE && !NON_OS_BUILD
+    esp_tee_intr_sec_srv_cb(3, SS_RV_UTILS_INTR_SET_TYPE, intr_num, type);
+#else
+    esprv_int_set_type(intr_num, type);
+#endif
+}
+
+FORCE_INLINE_ATTR void rv_utils_intr_set_priority(int rv_int_num, int priority)
+{
+#if CONFIG_SECURE_ENABLE_TEE && !NON_OS_BUILD
+    esp_tee_intr_sec_srv_cb(3, SS_RV_UTILS_INTR_SET_PRIORITY, rv_int_num, priority);
+#else
+    esprv_int_set_priority(rv_int_num, priority);
+#endif
+}
+
+FORCE_INLINE_ATTR void rv_utils_intr_set_threshold(int priority_threshold)
+{
+#if CONFIG_SECURE_ENABLE_TEE && !NON_OS_BUILD
+    esp_tee_intr_sec_srv_cb(2, SS_RV_UTILS_INTR_SET_THRESHOLD, priority_threshold);
+#else
+    esprv_int_set_threshold(priority_threshold);
+#endif
 }
 
 /**
@@ -186,7 +280,27 @@ FORCE_INLINE_ATTR void rv_utils_disable_pie(void)
     RV_WRITE_CSR(CSR_PIE_STATE_REG, 0);
 }
 
-#endif /* SOC_CPU_HAS_FPU */
+#endif /* SOC_CPU_HAS_PIE */
+
+
+/* ------------------------------------------------- DSP Related ----------------------------------------------------
+ *
+ * ------------------------------------------------------------------------------------------------------------------ */
+
+#if SOC_CPU_HAS_DSP
+
+FORCE_INLINE_ATTR void rv_utils_enable_dsp(void)
+{
+    RV_WRITE_CSR(CSR_DSP_STATE_REG, 1);
+}
+
+
+FORCE_INLINE_ATTR void rv_utils_disable_dsp(void)
+{
+    RV_WRITE_CSR(CSR_DSP_STATE_REG, 0);
+}
+
+#endif /* SOC_CPU_HAS_DSP */
 
 
 
@@ -294,8 +408,8 @@ FORCE_INLINE_ATTR void rv_utils_clear_breakpoint(int bp_num)
 {
     RV_WRITE_CSR(tselect, bp_num);
     /* tdata1 is a WARL(write any read legal) register
-     * We can just write 0 to it
-     */
+    * We can just write 0 to it
+    */
     RV_WRITE_CSR(tdata1, 0);
 }
 
@@ -313,10 +427,10 @@ FORCE_INLINE_ATTR bool rv_utils_is_trigger_fired(int id)
 
 // ---------------------- Debugger -------------------------
 
-FORCE_INLINE_ATTR bool rv_utils_dbgr_is_attached(void)
-{
-    return REG_GET_BIT(ASSIST_DEBUG_CORE_0_DEBUG_MODE_REG, ASSIST_DEBUG_CORE_0_DEBUG_MODULE_ACTIVE);
-}
+/** To use hal function for compatibility meanwhile keep hal dependency private,
+ *  this function is implemented in rv_utils.c
+ */
+bool rv_utils_dbgr_is_attached(void);
 
 FORCE_INLINE_ATTR void rv_utils_dbgr_break(void)
 {
@@ -345,8 +459,12 @@ FORCE_INLINE_ATTR bool rv_utils_compare_and_set(volatile uint32_t *addr, uint32_
     );
 #else
     // For a single core RV target has no atomic CAS instruction, we can achieve atomicity by disabling interrupts
-    unsigned old_mstatus;
-    old_mstatus = RV_CLEAR_CSR(mstatus, MSTATUS_MIE);
+    unsigned old_xstatus;
+    if (IS_PRV_M_MODE()) {
+        old_xstatus = RV_CLEAR_CSR(mstatus, MSTATUS_MIE);
+    } else {
+        old_xstatus = RV_CLEAR_CSR(ustatus, USTATUS_UIE);
+    }
     // Compare and set
     uint32_t old_value;
     old_value = *addr;
@@ -354,7 +472,11 @@ FORCE_INLINE_ATTR bool rv_utils_compare_and_set(volatile uint32_t *addr, uint32_
         *addr = new_value;
     }
     // Restore interrupts
-    RV_SET_CSR(mstatus, old_mstatus & MSTATUS_MIE);
+    if (IS_PRV_M_MODE()) {
+        RV_SET_CSR(mstatus, old_xstatus & MSTATUS_MIE);
+    } else {
+        RV_SET_CSR(ustatus, old_xstatus & USTATUS_UIE);
+    }
 
 #endif //__riscv_atomic
     return (old_value == compare_value);
@@ -363,11 +485,20 @@ FORCE_INLINE_ATTR bool rv_utils_compare_and_set(volatile uint32_t *addr, uint32_
 #if SOC_BRANCH_PREDICTOR_SUPPORTED
 FORCE_INLINE_ATTR void rv_utils_en_branch_predictor(void)
 {
-#define MHCR 0x7c1
-#define MHCR_RS (1<<4)   /* R/W, address return stack set bit */
-#define MHCR_BFE (1<<5)  /* R/W, allow predictive jump set bit */
-#define MHCR_BTB (1<<12) /* R/W, branch target prediction enable bit */
+#if CONFIG_SECURE_ENABLE_TEE && !NON_OS_BUILD
+    esp_tee_intr_sec_srv_cb(1, SS_RV_UTILS_EN_BRANCH_PREDICTOR);
+#else
     RV_SET_CSR(MHCR, MHCR_RS|MHCR_BFE|MHCR_BTB);
+#endif
+}
+
+FORCE_INLINE_ATTR void rv_utils_dis_branch_predictor(void)
+{
+#if CONFIG_SECURE_ENABLE_TEE && !NON_OS_BUILD
+    esp_tee_intr_sec_srv_cb(1, SS_RV_UTILS_DIS_BRANCH_PREDICTOR);
+#else
+    RV_CLEAR_CSR(MHCR, MHCR_RS|MHCR_BFE|MHCR_BTB);
+#endif
 }
 #endif
 

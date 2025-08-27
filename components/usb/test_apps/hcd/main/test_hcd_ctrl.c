@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2021-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2021-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -8,7 +8,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "unity.h"
-#include "test_hcd_common.h"
+#include "hcd_common.h"
 
 #define TEST_DEV_ADDR               0
 #define NUM_URBS                    3
@@ -33,7 +33,7 @@ Procedure:
     - Expect URB to be USB_TRANSFER_STATUS_CANCELED or USB_TRANSFER_STATUS_COMPLETED
     - Teardown
 */
-TEST_CASE("Test HCD control pipe URBs", "[ctrl][low_speed][full_speed]")
+TEST_CASE("Test HCD control pipe URBs", "[ctrl][low_speed][full_speed][high_speed]")
 {
     usb_speed_t port_speed = test_hcd_wait_for_conn(port_hdl);  // Trigger a connection
     vTaskDelay(pdMS_TO_TICKS(100)); // Short delay send of SOF (for FS) or EOPs (for LS)
@@ -110,7 +110,7 @@ TEST_CASE("Test HCD control pipe URBs", "[ctrl][low_speed][full_speed]")
 /*
 Test HCD control pipe STALL condition, abort, and clear
 
-@todo this test is not passing with low-speed: test with bus analyzer
+@todo this test is not passing with low-speed: test with bus analyzer IDF-10995
 
 Purpose:
     - Test that a control pipe can react to a STALL (i.e., a HCD_PIPE_EVENT_ERROR_STALL event)
@@ -128,7 +128,7 @@ Procedure:
     - Dequeue URBs
     - Teardown
 */
-TEST_CASE("Test HCD control pipe STALL", "[ctrl][full_speed]")
+TEST_CASE("Test HCD control pipe STALL", "[ctrl][full_speed][high_speed]")
 {
     usb_speed_t port_speed = test_hcd_wait_for_conn(port_hdl);  // Trigger a connection
     vTaskDelay(pdMS_TO_TICKS(100)); // Short delay send of SOF (for FS) or EOPs (for LS)
@@ -162,7 +162,12 @@ TEST_CASE("Test HCD control pipe STALL", "[ctrl][full_speed]")
 
     // Call the pipe abort command to retire all URBs then dequeue them all
     TEST_ASSERT_EQUAL(ESP_OK, hcd_pipe_command(default_pipe, HCD_PIPE_CMD_FLUSH));
-    test_hcd_expect_pipe_event(default_pipe, HCD_PIPE_EVENT_URB_DONE);
+    if (num_enqueued > 1) {
+        // We expect URB Done after pipe flush, only when more than one URB is enqueued,
+        // as the stalled (first) URB has been already dealt with by the HCD driver as done
+        printf("Expecting URB DONE\n");
+        test_hcd_expect_pipe_event(default_pipe, HCD_PIPE_EVENT_URB_DONE);
+    }
     for (int i = 0; i < num_enqueued; i++) {
         urb_t *urb = hcd_urb_dequeue(default_pipe);
         TEST_ASSERT_EQUAL(urb_list[i], urb);
@@ -216,6 +221,8 @@ TEST_CASE("Test HCD control pipe STALL", "[ctrl][full_speed]")
 
 /*
 Test control pipe run-time halt and clear
+
+@todo this test is not passing on P4: test with bus analyzer IDF-10996
 
 Purpose:
     - Test that a control pipe can be halted with HCD_PIPE_CMD_HALT whilst there are ongoing URBs

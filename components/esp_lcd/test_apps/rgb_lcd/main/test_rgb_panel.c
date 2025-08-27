@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2022-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2022-2024 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -31,7 +31,7 @@ static esp_lcd_panel_handle_t test_rgb_panel_initialization(size_t data_width, s
     esp_lcd_panel_handle_t panel_handle = NULL;
     esp_lcd_rgb_panel_config_t panel_config = {
         .data_width = data_width,
-        .psram_trans_align = 64,
+        .dma_burst_size = 64,
         .bounce_buffer_size_px = bb_pixels,
         .bits_per_pixel = bpp,
         .clk_src = LCD_CLK_SRC_DEFAULT,
@@ -62,12 +62,12 @@ static esp_lcd_panel_handle_t test_rgb_panel_initialization(size_t data_width, s
             .pclk_hz = TEST_LCD_PIXEL_CLOCK_HZ,
             .h_res = TEST_LCD_H_RES,
             .v_res = TEST_LCD_V_RES,
-            .hsync_back_porch = 68,
-            .hsync_front_porch = 20,
-            .hsync_pulse_width = 5,
-            .vsync_back_porch = 18,
-            .vsync_front_porch = 4,
-            .vsync_pulse_width = 1,
+            .hsync_back_porch = TEST_LCD_HBP,
+            .hsync_front_porch = TEST_LCD_HFP,
+            .hsync_pulse_width = TEST_LCD_HSYNC,
+            .vsync_back_porch = TEST_LCD_VBP,
+            .vsync_front_porch = TEST_LCD_VFP,
+            .vsync_pulse_width = TEST_LCD_VSYNC,
         },
         .flags.fb_in_psram = 1, // allocate frame buffer in PSRAM
         .flags.refresh_on_demand = refresh_on_demand,
@@ -99,6 +99,7 @@ TEST_CASE("lcd_rgb_panel_stream_mode", "[lcd]")
         int y_start = esp_random() % (TEST_LCD_V_RES - 100);
         memset(img, color_byte, TEST_IMG_SIZE);
         esp_lcd_panel_draw_bitmap(panel_handle, x_start, y_start, x_start + 100, y_start + 100, img);
+        vTaskDelay(pdMS_TO_TICKS(10));
     }
     printf("delete RGB panel\r\n");
     TEST_ESP_OK(esp_lcd_panel_del(panel_handle));
@@ -165,7 +166,7 @@ TEST_CASE("lcd_rgb_panel_bounce_buffer", "[lcd]")
     TaskHandle_t cur_task = xTaskGetCurrentTaskHandle();
 
     printf("initialize RGB panel with non-stream mode\r\n");
-    esp_lcd_panel_handle_t panel_handle = test_rgb_panel_initialization(16, 16, 10 * TEST_LCD_H_RES, false, test_rgb_panel_trans_done, cur_task);
+    esp_lcd_panel_handle_t panel_handle = test_rgb_panel_initialization(16, 16, 20 * TEST_LCD_H_RES, false, test_rgb_panel_trans_done, cur_task);
     printf("flush random color block\r\n");
     for (int i = 0; i < 200; i++) {
         uint8_t color_byte = esp_random() & 0xFF;

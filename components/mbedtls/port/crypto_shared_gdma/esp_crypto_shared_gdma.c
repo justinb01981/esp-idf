@@ -73,12 +73,6 @@ static esp_err_t crypto_shared_gdma_init(void)
         .direction = GDMA_CHANNEL_DIRECTION_RX,
     };
 
-    gdma_transfer_ability_t transfer_ability = {
-        .sram_trans_align = 1,
-        .psram_trans_align = 16,
-    };
-
-
     ret = crypto_shared_gdma_new_channel(&channel_config_tx, &tx_channel);
     if (ret != ESP_OK) {
         goto err;
@@ -90,12 +84,20 @@ static esp_err_t crypto_shared_gdma_init(void)
         goto err;
     }
 
+    gdma_transfer_config_t transfer_cfg = {
+        .max_data_burst_size = 16,
+        .access_ext_mem = true, // crypto peripheral may want to access PSRAM
+    };
+    gdma_config_transfer(tx_channel, &transfer_cfg);
+    transfer_cfg.max_data_burst_size = 0;
+    gdma_config_transfer(rx_channel, &transfer_cfg);
 
-    gdma_set_transfer_ability(tx_channel, &transfer_ability);
-    gdma_set_transfer_ability(rx_channel, &transfer_ability);
-
+#ifdef SOC_AES_SUPPORTED
     gdma_connect(rx_channel, GDMA_MAKE_TRIGGER(GDMA_TRIG_PERIPH_AES, 0));
     gdma_connect(tx_channel, GDMA_MAKE_TRIGGER(GDMA_TRIG_PERIPH_AES, 0));
+#elif SOC_SHA_SUPPORTED
+    gdma_connect(tx_channel, GDMA_MAKE_TRIGGER(GDMA_TRIG_PERIPH_SHA, 0));
+#endif
 
     return ESP_OK;
 
@@ -125,11 +127,17 @@ esp_err_t esp_crypto_shared_gdma_start(const lldesc_t *input, const lldesc_t *ou
     /* Tx channel is shared between AES and SHA, need to connect to peripheral every time */
     gdma_disconnect(tx_channel);
 
+#ifdef SOC_SHA_SUPPORTED
     if (peripheral == GDMA_TRIG_PERIPH_SHA) {
         gdma_connect(tx_channel, GDMA_MAKE_TRIGGER(GDMA_TRIG_PERIPH_SHA, 0));
-    } else if (peripheral == GDMA_TRIG_PERIPH_AES) {
+    } else
+#endif // SOC_SHA_SUPPORTED
+#ifdef SOC_AES_SUPPORTED
+    if (peripheral == GDMA_TRIG_PERIPH_AES) {
         gdma_connect(tx_channel, GDMA_MAKE_TRIGGER(GDMA_TRIG_PERIPH_AES, 0));
-    } else {
+    } else
+#endif // SOC_AES_SUPPORTED
+    {
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -178,11 +186,17 @@ esp_err_t esp_crypto_shared_gdma_start_axi_ahb(const crypto_dma_desc_t *input, c
     /* Tx channel is shared between AES and SHA, need to connect to peripheral every time */
     gdma_disconnect(tx_channel);
 
+#ifdef SOC_SHA_SUPPORTED
     if (peripheral == GDMA_TRIG_PERIPH_SHA) {
         gdma_connect(tx_channel, GDMA_MAKE_TRIGGER(GDMA_TRIG_PERIPH_SHA, 0));
-    } else if (peripheral == GDMA_TRIG_PERIPH_AES) {
+    } else
+#endif // SOC_SHA_SUPPORTED
+#ifdef SOC_AES_SUPPORTED
+    if (peripheral == GDMA_TRIG_PERIPH_AES) {
         gdma_connect(tx_channel, GDMA_MAKE_TRIGGER(GDMA_TRIG_PERIPH_AES, 0));
-    } else {
+    } else
+#endif // SOC_AES_SUPPORTED
+    {
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -223,7 +237,7 @@ bool esp_crypto_shared_gdma_done(void)
 {
     int rx_ch_id = 0;
     gdma_get_channel_id(rx_channel, &rx_ch_id);
-    while(1) {
+    while (1) {
         if ((axi_dma_ll_rx_get_interrupt_status(&AXI_DMA, rx_ch_id, true) & 1)) {
             break;
         }

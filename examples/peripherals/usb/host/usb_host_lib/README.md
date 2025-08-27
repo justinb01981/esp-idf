@@ -32,11 +32,8 @@ The example demonstrates the following aspects of the USB Host Library API:
 
 ### Hardware Required
 
-An ESP board that has a push button and supports USB-OTG. The example uses the ESP's internal USB PHY, however the internal USB PHY's pins will need to be connected to a USB port (i.e., a USB breakout board) as follows:
-
-- GND and 5V signals of the ESP board to the GND and 5V lines of the USB port
-- GPIO 19 to D-
-- GPIO 20 to D+
+* Development board with USB-OTG support.
+* Follow instruction in [examples/usb/README.md](../../README.md) for specific hardware setup.
 
 ### Configure the project
 
@@ -67,7 +64,7 @@ See the Getting Started Guide for full steps to configure and use ESP-IDF to bui
 I (305) main_task: Started on CPU0
 I (315) main_task: Calling app_main()
 I (315) USB host lib: USB host library example
-I (315) gpio: GPIO[0]| InputEn: 1| OutputEn: 0| OpenDrain: 0| Pullup: 1| Pulldown: 0| Intr:2 
+I (315) gpio: GPIO[0]| InputEn: 1| OutputEn: 0| OpenDrain: 0| Pullup: 1| Pulldown: 0| Intr:2
 I (325) USB host lib: Installing USB Host Library
 I (365) CLASS: Registering Client
 I (745) CLASS: Opening device at address 1

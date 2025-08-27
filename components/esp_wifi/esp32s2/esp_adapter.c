@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2015-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2015-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -50,6 +50,9 @@
 #include "esp_rom_sys.h"
 #include "esp32s2/rom/ets_sys.h"
 #include "private/esp_modem_wrapper.h"
+#if __has_include("esp_psram.h")
+#include "esp_psram.h"
+#endif
 
 #define TAG "esp_adapter"
 
@@ -251,36 +254,31 @@ static int32_t IRAM_ATTR mutex_unlock_wrapper(void *mutex)
 
 static void * queue_create_wrapper(uint32_t queue_len, uint32_t item_size)
 {
-#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 1, 0)
-    /*
-     * Since release/v5.1, FreeRTOS has been updated to always use internal memory (i.e., DRAM)
-     * for dynamic memory allocation. Calling FreeRTOS creation functions (e.g., xTaskCreate(), xQueueCreate())
-     * will guarantee that the memory allocated for those tasks/objects is from internal memory.
-     * For more details, please refer to the Migration Guide in release/v5.1.
-     */
-#if CONFIG_SPIRAM_USE_MALLOC
-    /* Use xQueueCreateWithCaps() to allocate from SPIRAM */
-    return (void *)xQueueCreateWithCaps(queue_len, item_size, MALLOC_CAP_SPIRAM);
-#else
-    return (void *)xQueueCreate(queue_len, item_size);
-#endif
-#else
-    return (void *)xQueueCreate(queue_len, item_size);
-#endif
+    StaticQueue_t *queue_buffer = heap_caps_malloc_prefer(sizeof(StaticQueue_t) + (queue_len * item_size), 2,
+                                                          MALLOC_CAP_DEFAULT | MALLOC_CAP_SPIRAM,
+                                                          MALLOC_CAP_DEFAULT | MALLOC_CAP_INTERNAL);
+    if (!queue_buffer) {
+        return NULL;
+    }
+    QueueHandle_t queue_handle = xQueueCreateStatic(queue_len, item_size, (uint8_t *)queue_buffer + sizeof(StaticQueue_t),
+                                                    queue_buffer);
+    if (!queue_handle) {
+        free(queue_buffer);
+        return NULL;
+    }
+
+    return (void *)queue_handle;
 }
 
 static void queue_delete_wrapper(void *queue)
 {
     if (queue) {
-#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 1, 0)
-#if CONFIG_SPIRAM_USE_MALLOC
-        vQueueDeleteWithCaps(queue);
-#else
+        StaticQueue_t *queue_buffer = NULL;
+        xQueueGetStaticBuffers(queue, NULL, &queue_buffer);
         vQueueDelete(queue);
-#endif
-#else
-        vQueueDelete(queue);
-#endif
+        if (queue_buffer) {
+            free(queue_buffer);
+        }
     }
 }
 
@@ -445,7 +443,7 @@ static void coex_disable_wrapper(void)
 static IRAM_ATTR uint32_t coex_status_get_wrapper(void)
 {
 #if CONFIG_EXTERNAL_COEX_ENABLE
-    return coex_status_get();
+    return coex_status_get(COEX_STATUS_GET_WIFI_BITMAP);
 #else
     return 0;
 #endif
@@ -548,7 +546,7 @@ static void * coex_schm_curr_phase_get_wrapper(void)
 
 static int coex_register_start_cb_wrapper(int (* cb)(void))
 {
-#if CONFIG_SW_COEXIST_ENABLE
+#if CONFIG_EXTERNAL_COEX_ENABLE
     return coex_register_start_cb(cb);
 #else
     return 0;
@@ -557,7 +555,7 @@ static int coex_register_start_cb_wrapper(int (* cb)(void))
 
 static int coex_schm_process_restart_wrapper(void)
 {
-#if CONFIG_SW_COEXIST_ENABLE
+#if CONFIG_EXTERNAL_COEX_ENABLE
     return coex_schm_process_restart();
 #else
     return 0;
@@ -566,7 +564,7 @@ static int coex_schm_process_restart_wrapper(void)
 
 static int coex_schm_register_cb_wrapper(int type, int(*cb)(int))
 {
-#if CONFIG_SW_COEXIST_ENABLE
+#if CONFIG_EXTERNAL_COEX_ENABLE
     return coex_schm_register_callback(type, cb);
 #else
     return 0;
@@ -588,6 +586,15 @@ static uint8_t coex_schm_flexible_period_get_wrapper(void)
     return coex_schm_flexible_period_get();
 #else
     return 1;
+#endif
+}
+
+static void * coex_schm_get_phase_by_idx_wrapper(int phase_idx)
+{
+#if CONFIG_EXTERNAL_COEX_ENABLE
+    return coex_schm_get_phase_by_idx(phase_idx);
+#else
+    return NULL;
 #endif
 }
 
@@ -726,5 +733,6 @@ wifi_osi_funcs_t g_wifi_osi_funcs = {
     ._coex_schm_register_cb = coex_schm_register_cb_wrapper,
     ._coex_schm_flexible_period_set = coex_schm_flexible_period_set_wrapper,
     ._coex_schm_flexible_period_get = coex_schm_flexible_period_get_wrapper,
+    ._coex_schm_get_phase_by_idx = coex_schm_get_phase_by_idx_wrapper,
     ._magic = ESP_WIFI_OS_ADAPTER_MAGIC,
 };

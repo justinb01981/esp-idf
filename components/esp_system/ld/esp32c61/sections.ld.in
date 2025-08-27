@@ -11,141 +11,6 @@ ENTRY(call_start_cpu0);
 
 SECTIONS
 {
-  /**
-   * RTC fast memory holds RTC wake stub code,
-   * including from any source file named rtc_wake_stub*.c
-   */
-  .rtc.text :
-  {
-    ALIGNED_SYMBOL(4, _rtc_fast_start)
-    ALIGNED_SYMBOL(4, _rtc_text_start)
-
-    *(.rtc.entry.text)
-
-    mapping[rtc_text]
-
-    *rtc_wake_stub*.*(.text .text.*)
-    *(.rtc_text_end_test)
-
-    _rtc_text_end = ABSOLUTE(.);
-  } > lp_ram_seg
-
-  /**
-   * This section located in RTC FAST Memory area.
-   * It holds data marked with RTC_FAST_ATTR attribute.
-   * See the file "esp_attr.h" for more information.
-   */
-  .rtc.force_fast :
-  {
-    ALIGNED_SYMBOL(4, _rtc_force_fast_start)
-
-    mapping[rtc_force_fast]
-
-    *(.rtc.force_fast .rtc.force_fast.*)
-
-    ALIGNED_SYMBOL(4, _rtc_force_fast_end)
-  } > lp_ram_seg
-
-  /**
-   * RTC data section holds RTC wake stub
-   * data/rodata, including from any source file
-   * named rtc_wake_stub*.c and the data marked with
-   * RTC_DATA_ATTR, RTC_RODATA_ATTR attributes.
-   */
-  .rtc.data :
-  {
-    _rtc_data_start = ABSOLUTE(.);
-
-    mapping[rtc_data]
-
-    *rtc_wake_stub*.*(.data .rodata .data.* .rodata.* .srodata.*)
-
-    _rtc_data_end = ABSOLUTE(.);
-  } > lp_ram_seg
-
-  /* RTC bss, from any source file named rtc_wake_stub*.c */
-  .rtc.bss (NOLOAD) :
-  {
-    _rtc_bss_start = ABSOLUTE(.);
-
-    *rtc_wake_stub*.*(.bss .bss.* .sbss .sbss.*)
-    *rtc_wake_stub*.*(COMMON)
-
-    mapping[rtc_bss]
-
-    _rtc_bss_end = ABSOLUTE(.);
-  } > lp_ram_seg
-
-  /**
-   * This section holds data that should not be initialized at power up
-   * and will be retained during deep sleep.
-   * User data marked with RTC_NOINIT_ATTR will be placed
-   * into this section. See the file "esp_attr.h" for more information.
-   */
-  .rtc_noinit (NOLOAD):
-  {
-    ALIGNED_SYMBOL(4, _rtc_noinit_start)
-
-    *(.rtc_noinit .rtc_noinit.*)
-
-    ALIGNED_SYMBOL(4, _rtc_noinit_end)
-  } > lp_ram_seg
-
-  /**
-   * This section located in RTC SLOW Memory area.
-   * It holds data marked with RTC_SLOW_ATTR attribute.
-   * See the file "esp_attr.h" for more information.
-   */
-  .rtc.force_slow :
-  {
-    ALIGNED_SYMBOL(4, _rtc_force_slow_start)
-
-    *(.rtc.force_slow .rtc.force_slow.*)
-
-    ALIGNED_SYMBOL(4, _rtc_force_slow_end)
-  } > lp_ram_seg
-
-  /**
-   * This section holds RTC data that should have fixed addresses.
-   * The data are not initialized at power-up and are retained during deep
-   * sleep.
-   */
-  .rtc_reserved (NOLOAD):
-  {
-    ALIGNED_SYMBOL(4, _rtc_reserved_start)
-
-    /**
-     * New data can only be added here to ensure existing data are not moved.
-     * Because data have adhered to the end of the segment and code is relied
-     * on it.
-     * >> put new data here <<
-     */
-
-    *(.rtc_timer_data_in_rtc_mem .rtc_timer_data_in_rtc_mem.*)
-    KEEP(*(.bootloader_data_rtc_mem .bootloader_data_rtc_mem.*))
-
-    _rtc_reserved_end = ABSOLUTE(.);
-  } > rtc_reserved_seg
-
-  _rtc_reserved_length = _rtc_reserved_end - _rtc_reserved_start;
-  ASSERT((_rtc_reserved_length <= LENGTH(rtc_reserved_seg)),
-          "RTC reserved segment data does not fit.")
-
-  /* Get size of rtc slow data based on rtc_data_location alias */
-  _rtc_slow_length = (ORIGIN(rtc_slow_seg) == ORIGIN(rtc_data_location))
-                        ? (_rtc_force_slow_end - _rtc_data_start)
-                        : (_rtc_force_slow_end - _rtc_force_slow_start);
-
-  _rtc_fast_length = (ORIGIN(rtc_slow_seg) == ORIGIN(rtc_data_location))
-                        ? (_rtc_force_fast_end - _rtc_fast_start)
-                        : (_rtc_noinit_end - _rtc_fast_start);
-
-  ASSERT((_rtc_slow_length <= LENGTH(rtc_slow_seg)),
-          "RTC_SLOW segment data does not fit.")
-
-  ASSERT((_rtc_fast_length <= LENGTH(rtc_data_seg)),
-          "RTC_FAST segment data does not fit.")
-
   .iram0.text :
   {
     _iram_start = ABSOLUTE(.);
@@ -153,8 +18,6 @@ SECTIONS
     ASSERT(ABSOLUTE(.) % 0x100 == 0, "vector address must be 256 byte aligned");
     KEEP(*(.exception_vectors_table.text));
     KEEP(*(.exception_vectors.text));
-
-    ALIGNED_SYMBOL(4, _invalid_pc_placeholder)
 
     /* Code marked as running out of IRAM */
     _iram_text_start = ABSOLUTE(.);
@@ -166,6 +29,9 @@ SECTIONS
   /* Marks the end of IRAM code segment */
   .iram0.text_end (NOLOAD) :
   {
+    /* Align the end of code region as per PMP region granularity */
+    . = ALIGN(_esp_pmp_align_size);
+
     ALIGNED_SYMBOL(4, _iram_text_end)
   } > sram_seg
 
@@ -270,6 +136,13 @@ SECTIONS
      */
     . += _esp_flash_mmap_prefetch_pad_size;
 
+#if CONFIG_SPIRAM_FETCH_INSTRUCTIONS && CONFIG_SPIRAM_PRE_CONFIGURE_MEMORY_PROTECTION
+    /* Align the end of flash text region as per PMP granularity to allow using the
+     * page alignment gap created while mapping the flash region into the PSRAM memory.
+     */
+    . = ALIGN(_esp_pmp_align_size);
+#endif // CONFIG_SPIRAM_FETCH_INSTRUCTIONS && CONFIG_SPIRAM_PRE_CONFIGURE_MEMORY_PROTECTION
+
     _text_end = ABSOLUTE(.);
     /**
      * Mark the flash.text end.
@@ -340,20 +213,13 @@ SECTIONS
      * C++ constructor tables.
      *
      * Excluding crtbegin.o/crtend.o since IDF doesn't use the toolchain crt.
-     *
-     * RISC-V gcc is configured with --enable-initfini-array so it emits
-     * .init_array section instead. But the init_priority sections will be
-     * sorted for iteration in ascending order during startup.
-     * The rest of the init_array sections is sorted for iteration in descending
-     * order during startup, however. Hence a different section is generated for
-     * the init_priority functions which is iterated in ascending order during
-     * startup. The corresponding code can be found in startup.c.
      */
-    ALIGNED_SYMBOL(4, __init_priority_array_start)
-    KEEP (*(EXCLUDE_FILE (*crtend.* *crtbegin.*) .init_array.*))
-    __init_priority_array_end = ABSOLUTE(.);
+    ALIGNED_SYMBOL(4, __preinit_array_start)
+    KEEP (*(.preinit_array))
+    __preinit_array_end = ABSOLUTE(.);
 
     ALIGNED_SYMBOL(4, __init_array_start)
+    KEEP (*(SORT_BY_INIT_PRIORITY(EXCLUDE_FILE (*crtend.* *crtbegin.*) .init_array.*)))
     KEEP (*(EXCLUDE_FILE (*crtend.* *crtbegin.*) .init_array))
     __init_array_end = ABSOLUTE(.);
 
@@ -368,19 +234,18 @@ SECTIONS
     _esp_system_init_fn_array_end = ABSOLUTE(.);
 
     _rodata_end = ABSOLUTE(.);
-    . = ALIGN(ALIGNOF(.eh_frame_hdr));
+    . = ALIGN(ALIGNOF(SECTION_AFTER_FLASH_RODATA));
   } > default_rodata_seg
-  ASSERT_SECTIONS_GAP(.flash.rodata, .eh_frame_hdr)
+  ASSERT_SECTIONS_GAP(.flash.rodata, SECTION_AFTER_FLASH_RODATA)
 
+#if EH_FRAME_LINKING_ENABLED
   .eh_frame_hdr :
   {
-#if CONFIG_COMPILER_CXX_EXCEPTIONS || CONFIG_ESP_SYSTEM_USE_EH_FRAME
     ALIGNED_SYMBOL(4, __eh_frame_hdr)
 
     KEEP (*(.eh_frame_hdr))
 
     __eh_frame_hdr_end = ABSOLUTE(.);
-#endif // CONFIG_COMPILER_CXX_EXCEPTIONS || CONFIG_ESP_SYSTEM_USE_EH_FRAME
 
     . = ALIGN(ALIGNOF(.eh_frame));
   } > default_rodata_seg
@@ -388,7 +253,6 @@ SECTIONS
 
   .eh_frame :
   {
-#if CONFIG_COMPILER_CXX_EXCEPTIONS || CONFIG_ESP_SYSTEM_USE_EH_FRAME
     ALIGNED_SYMBOL(4, __eh_frame)
 
     KEEP (*(.eh_frame))
@@ -399,11 +263,11 @@ SECTIONS
     LONG(0);
 
     __eh_frame_end = ABSOLUTE(.);
-#endif // CONFIG_COMPILER_CXX_EXCEPTIONS || CONFIG_ESP_SYSTEM_USE_EH_FRAME
 
     . = ALIGN(ALIGNOF(.flash.tdata));
   } > default_rodata_seg
   ASSERT_SECTIONS_GAP(.eh_frame, .flash.tdata)
+#endif // EH_FRAME_LINKING_ENABLED
 
   .flash.tdata :
   {
@@ -412,6 +276,14 @@ SECTIONS
     *(.tdata .tdata.* .gnu.linkonce.td.*)
 
     . = ALIGN(ALIGNOF(.flash.tbss));
+
+#if CONFIG_SPIRAM_RODATA && CONFIG_SPIRAM_PRE_CONFIGURE_MEMORY_PROTECTION
+    /* Align the end of flash rodata region as per PMP granularity to allow using the
+     * page alignment gap created while mapping the flash region into the PSRAM memory.
+     */
+    . = ALIGN(_esp_pmp_align_size);
+#endif // CONFIG_SPIRAM_RODATA && CONFIG_SPIRAM_PRE_CONFIGURE_MEMORY_PROTECTION
+
     _thread_local_data_end = ABSOLUTE(.);
   } > default_rodata_seg
   ASSERT_SECTIONS_GAP(.flash.tdata, .flash.tbss)
@@ -447,6 +319,45 @@ SECTIONS
   {
     ALIGNED_SYMBOL(16, _heap_start)
   } > sram_seg
+
+  /* External RAM */
+  /**
+   * This section is required to skip flash sections, because `extern_ram_seg`
+   * and `drom_seg` / `irom_seg` are on the same bus when app build use flash sections
+   */
+  .ext_ram.dummy (NOLOAD):
+  {
+    . = ORIGIN(extern_ram_seg);
+    . = . + (_rodata_reserved_end - _flash_rodata_dummy_start);
+    . = ALIGN (_esp_mmu_page_size);
+  } > extern_ram_seg
+
+#if CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY
+  /* This section holds .ext_ram.bss data, and will be put in PSRAM */
+  .ext_ram.bss (NOLOAD) :
+  {
+    _ext_ram_bss_start = ABSOLUTE(.);
+
+    mapping[extern_ram]
+
+    ALIGNED_SYMBOL(4, _ext_ram_bss_end)
+  } > extern_ram_seg
+#endif  //CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY
+
+#if CONFIG_SPIRAM_ALLOW_NOINIT_SEG_EXTERNAL_MEMORY
+  /**
+   * This section holds data that won't be initialized when startup.
+   * This section locates in External RAM region.
+   */
+  .ext_ram_noinit (NOLOAD) :
+  {
+    _ext_ram_noinit_start = ABSOLUTE(.);
+
+    *(.ext_ram_noinit*)
+
+    ALIGNED_SYMBOL(4, _ext_ram_noinit_end)
+  } > extern_ram_seg
+#endif //CONFIG_SPIRAM_ALLOW_NOINIT_SEG_EXTERNAL_MEMORY
 
 #include "elf_misc.ld.in"
 }

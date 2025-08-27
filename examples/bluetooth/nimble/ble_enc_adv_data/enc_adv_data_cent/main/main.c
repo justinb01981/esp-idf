@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2021-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2021-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Unlicense OR CC0-1.0
  */
@@ -22,7 +22,6 @@ static struct km_peer kmp[CONFIG_BT_NIMBLE_MAX_CONNECTIONS + 1] = {0};
 
 static const char *tag = "ENC_ADV_DATA_CENT";
 static int enc_adv_data_cent_gap_event(struct ble_gap_event *event, void *arg);
-static uint8_t peer_addr[6];
 static int mtu_def = 512;
 
 void ble_store_config_init(void);
@@ -184,7 +183,7 @@ static void
 enc_adv_data_cent_scan(void)
 {
     uint8_t own_addr_type;
-    struct ble_gap_disc_params disc_params;
+    struct ble_gap_disc_params disc_params = {0};
     int rc;
 
     /* Figure out address to use while advertising (no privacy for now) */
@@ -261,8 +260,11 @@ enc_adv_data_cent_decrypt(uint8_t length_data, const uint8_t *data, const uint8_
 
             dec_data_len = temp[0];
 
-            MODLOG_DFLT(DEBUG, "Data after decryption:");
-            print_bytes(temp, dec_data_len);
+            MODLOG_DFLT(INFO, "Data after decryption:");
+            for (int i = 0; i < dec_data_len + 1; i++) {
+                MODLOG_DFLT(INFO, "0x%02X ", temp[i]);
+            }
+            MODLOG_DFLT(INFO, "\n");
             return 1;
 
         default:
@@ -279,64 +281,70 @@ enc_adv_data_cent_decrypt(uint8_t length_data, const uint8_t *data, const uint8_
  * advertises connectability and support for the Key Characteristic service.
  */
 static int
-ext_enc_adv_data_cent_should_connect(const struct ble_gap_ext_disc_desc *disc)
+enc_adv_data_cent_should_connect(const struct ble_gap_disc_desc *disc)
 {
-    int offset = 0;
-    int ad_struct_len = 0;
+    struct ble_hs_adv_fields fields;
+    int rc;
+    int i;
+    uint8_t test_addr[6];
+    uint32_t peer_addr[6];
 
-    if (disc->legacy_event_type != BLE_HCI_ADV_RPT_EVTYPE_ADV_IND &&
-            disc->legacy_event_type != BLE_HCI_ADV_RPT_EVTYPE_DIR_IND) {
+    memset(peer_addr, 0x0, sizeof peer_addr);
+
+    if (disc->event_type != BLE_HCI_ADV_RPT_EVTYPE_ADV_IND &&
+            disc->event_type != BLE_HCI_ADV_RPT_EVTYPE_DIR_IND) {
+        return 0;
+    }
+
+    rc = ble_hs_adv_parse_fields(&fields, disc->data, disc->length_data);
+    if (rc != 0) {
         return 0;
     }
 
     if (strlen(CONFIG_EXAMPLE_PEER_ADDR) && (strncmp(CONFIG_EXAMPLE_PEER_ADDR, "ADDR_ANY", strlen    ("ADDR_ANY")) != 0)) {
         MODLOG_DFLT(INFO, "Peer address from menuconfig: %s", CONFIG_EXAMPLE_PEER_ADDR);
         /* Convert string to address */
-        sscanf(CONFIG_EXAMPLE_PEER_ADDR, "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx",
+        sscanf(CONFIG_EXAMPLE_PEER_ADDR, "%lx:%lx:%lx:%lx:%lx:%lx",
                &peer_addr[5], &peer_addr[4], &peer_addr[3],
                &peer_addr[2], &peer_addr[1], &peer_addr[0]);
-        if (memcmp(peer_addr, disc->addr.val, sizeof(disc->addr.val)) != 0) {
+
+	/* Conversion */
+        for (int i=0; i<6; i++) {
+            test_addr[i] = (uint8_t )peer_addr[i];
+	}
+
+        if (memcmp(test_addr, disc->addr.val, sizeof(disc->addr.val)) != 0) {
             return 0;
         }
     }
 
     /* The device has to advertise support for the Key Characteristic
     * service (0x2B88)
+    *
+    * Check if custom UUID 0x2C01 is advertised
     */
-    do {
-        ad_struct_len = disc->data[offset];
+    for (i = 0; i < fields.num_uuids16; i++) {
+        if (ble_uuid_u16(&fields.uuids16[i].u) == 0x2C01) {
+            if (enc_adv_data_find_peer(disc->addr.val) != -1) {
+                MODLOG_DFLT(INFO, "Peer was already added with addr : %s",
+                            addr_str(&disc->addr.val));
+            } else {
+                MODLOG_DFLT(INFO, "Adding peer addr : %s", addr_str(&disc->addr.val));
 
-        if (!ad_struct_len) {
-            break;
-        }
+                memcpy(&kmp[counter].peer_addr, &disc->addr.val, PEER_ADDR_VAL_SIZE);
+                counter++;
 
-        /* Search if custom service UUID (0x2C01) is advertised */
-        if (disc->data[offset] == 0x03 && disc->data[offset + 1] == 0x03) {
-            if ( disc->data[offset + 2] == 0x2C && disc->data[offset + 3] == 0x01 ) {
-                if (enc_adv_data_find_peer(disc->addr.val) != -1) {
-                    MODLOG_DFLT(INFO, "Peer was already added with addr : %s",
-                                addr_str(&disc->addr.val));
-                } else {
-                    MODLOG_DFLT(INFO, "Adding peer addr : %s", addr_str(&disc->addr.val));
-
-                    memcpy(&kmp[counter].peer_addr, &disc->addr.val, PEER_ADDR_VAL_SIZE);
-                    counter++;
-
-                    if (counter > CONFIG_BT_NIMBLE_MAX_CONNECTIONS) {
-                        counter = 0;
-                    }
-                }
-                if (enc_adv_data_check_km_exist(disc->addr.val)) {
-                    return enc_adv_data_cent_decrypt(disc->length_data, disc->data, disc->addr.val);
-                } else {
-                    return 1;
+                if (counter > CONFIG_BT_NIMBLE_MAX_CONNECTIONS) {
+                    counter = 0;
                 }
             }
+            if (enc_adv_data_check_km_exist(disc->addr.val)) {
+                return enc_adv_data_cent_decrypt(disc->length_data, disc->data, disc->addr.val);
+            } else {
+                return 1;
+            }
         }
-
-        offset += ad_struct_len + 1;
-
-    } while ( offset < disc->length_data );
+    }
 
     return 0;
 }
@@ -354,16 +362,18 @@ enc_adv_data_cent_connect_if_interesting(void *disc)
     ble_addr_t *addr;
 
     /* Don't do anything if we don't care about this advertiser. */
-    if (!ext_enc_adv_data_cent_should_connect((struct ble_gap_ext_disc_desc *)disc)) {
+    if (!enc_adv_data_cent_should_connect((struct ble_gap_disc_desc *)disc)) {
         return;
     }
 
+#if !(MYNEWT_VAL(BLE_HOST_ALLOW_CONNECT_WITH_SCAN))
     /* Scanning must be stopped before a connection can be initiated. */
     rc = ble_gap_disc_cancel();
     if (rc != 0) {
         MODLOG_DFLT(DEBUG, "Failed to cancel scan; rc=%d\n", rc);
         return;
     }
+#endif
 
     /* Figure out address to use for connect (no privacy for now) */
     rc = ble_hs_id_infer_auto(0, &own_addr_type);
@@ -375,7 +385,7 @@ enc_adv_data_cent_connect_if_interesting(void *disc)
     /* Try to connect the the advertiser.  Allow 30 seconds (30000 ms) for
      * timeout.
      */
-    addr = &((struct ble_gap_ext_disc_desc *)disc)->addr;
+    addr = &((struct ble_gap_disc_desc *)disc)->addr;
 
     rc = ble_gap_connect(own_addr_type, addr, 30000, NULL,
                          enc_adv_data_cent_gap_event, NULL);
@@ -416,7 +426,7 @@ enc_adv_data_cent_gap_event(struct ble_gap_event *event, void *arg)
             return 0;
         }
 
-        /* An advertisment report was received during GAP discovery. */
+        /* An advertisement report was received during GAP discovery. */
         print_adv_fields(&fields);
 
         /* Try to connect to the advertiser if it looks interesting. */
@@ -457,13 +467,16 @@ enc_adv_data_cent_gap_event(struct ble_gap_event *event, void *arg)
                 return 0;
             }
 
-            /* Perform service discovery */
-            rc = peer_disc_all(event->connect.conn_handle,
-                               enc_adv_data_cent_on_disc_complete, NULL);
+            /** Authorization is required for this characterisitc */
+            rc = ble_gap_security_initiate(event->connect.conn_handle);
             if (rc != 0) {
-                MODLOG_DFLT(ERROR, "Failed to discover services; rc=%d\n", rc);
-                return 0;
+                MODLOG_DFLT(INFO, "Security could not be initiated, rc = %d\n", rc);
+                return ble_gap_terminate(event->connect.conn_handle,
+                                         BLE_ERR_REM_USER_CONN_TERM);
+            } else {
+                MODLOG_DFLT(INFO, "Connection secured\n");
             }
+
         } else {
             /* Connection attempt failed; resume scanning. */
             MODLOG_DFLT(ERROR, "Error: Connection failed; status=%d\n",
@@ -491,6 +504,21 @@ enc_adv_data_cent_gap_event(struct ble_gap_event *event, void *arg)
                     event->disc_complete.reason);
         return 0;
 
+    case BLE_GAP_EVENT_ENC_CHANGE:
+        MODLOG_DFLT(INFO, "encryption change event; status=%d ",
+                    event->enc_change.status);
+        rc = ble_gap_conn_find(event->enc_change.conn_handle, &desc);
+        assert(rc == 0);
+        print_conn_desc(&desc);
+
+        /* Perform service discovery */
+        rc = peer_disc_all(event->enc_change.conn_handle,
+                           enc_adv_data_cent_on_disc_complete, NULL);
+        if (rc != 0) {
+            MODLOG_DFLT(ERROR, "Failed to discover services; rc=%d\n", rc);
+        }
+        return 0;
+
     case BLE_GAP_EVENT_NOTIFY_RX:
         /* Peer sent us a notification or indication. */
         MODLOG_DFLT(INFO, "received %s; conn_handle=%d attr_handle=%d "
@@ -513,11 +541,25 @@ enc_adv_data_cent_gap_event(struct ble_gap_event *event, void *arg)
                     event->mtu.value);
         return 0;
 
+#if MYNEWT_VAL(BLE_EXT_ADV)
     case BLE_GAP_EVENT_EXT_DISC:
-        /* An advertisment report was received during GAP discovery. */
-        ext_print_adv_report(&event->disc);
+        /* An advertisement report was received during GAP discovery. */
+        ext_print_adv_report(&event->ext_disc);
+        return 0;
+#endif
 
-        enc_adv_data_cent_connect_if_interesting(&event->disc);
+    case BLE_GAP_EVENT_PASSKEY_ACTION:
+        ESP_LOGI(tag, "PASSKEY_ACTION_EVENT started %d", event->passkey.params.action);
+        struct ble_sm_io pkey = {0};
+
+        if (event->passkey.params.action == BLE_SM_IOACT_INPUT) {
+            pkey.action = event->passkey.params.action;
+            pkey.passkey = 123456;
+            ESP_LOGI(tag, "Entering passkey %" PRIu32, pkey.passkey);
+            rc = ble_sm_inject_io(event->passkey.conn_handle, &pkey);
+            ESP_LOGI(tag, "ble_sm_inject_io result: %d", rc);
+        }
+
         return 0;
 
     default:
@@ -575,13 +617,24 @@ app_main(void)
     ble_hs_cfg.sync_cb = enc_adv_data_cent_on_sync;
     ble_hs_cfg.store_status_cb = ble_store_util_status_rr;
 
+    /** This feature requires authentication */
+    ble_hs_cfg.sm_mitm = 1;
+    ble_hs_cfg.sm_io_cap = BLE_SM_IO_CAP_KEYBOARD_ONLY;
+
     /* Initialize data structures to track connected peers. */
+#if MYNEWT_VAL(BLE_INCL_SVC_DISCOVERY) || MYNEWT_VAL(BLE_GATT_CACHING_INCLUDE_SERVICES)
+    rc = peer_init(MYNEWT_VAL(BLE_MAX_CONNECTIONS), 64, 64, 64, 64);
+    assert(rc == 0);
+#else
     rc = peer_init(MYNEWT_VAL(BLE_MAX_CONNECTIONS), 64, 64, 64);
     assert(rc == 0);
+#endif
 
+#if CONFIG_BT_NIMBLE_GAP_SERVICE
     /* Set the default device name. */
-    rc = ble_svc_gap_device_name_set("nimble-enc_adv_data_cent");
+    rc = ble_svc_gap_device_name_set("enc_adv_data_cent");
     assert(rc == 0);
+#endif
 
     /* XXX Need to have template for store */
     ble_store_config_init();

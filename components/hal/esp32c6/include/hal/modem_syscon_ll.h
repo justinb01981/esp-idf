@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2022-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2022-2024 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -78,13 +78,13 @@ static inline void modem_syscon_ll_enable_etm_force_clock(modem_syscon_dev_t *hw
 }
 
 __attribute__((always_inline))
-static inline void modem_syscon_ll_enable_ieee802154_apb_clock_force(modem_syscon_dev_t *hw)
+static inline void modem_syscon_ll_enable_ieee802154_apb_force_clock(modem_syscon_dev_t *hw)
 {
     hw->clk_conf_force_on.clk_zb_apb_fo = 1;
 }
 
 __attribute__((always_inline))
-static inline void modem_syscon_ll_enable_ieee802154_mac_clock_force(modem_syscon_dev_t *hw)
+static inline void modem_syscon_ll_enable_ieee802154_mac_force_clock(modem_syscon_dev_t *hw)
 {
     hw->clk_conf_force_on.clk_zb_mac_fo = 1;
 }
@@ -240,6 +240,12 @@ static inline void modem_syscon_ll_reset_zbmac(modem_syscon_dev_t *hw)
 {
     hw->modem_rst_conf.rst_zbmac = 1;
     hw->modem_rst_conf.rst_zbmac = 0;
+}
+
+__attribute__((always_inline))
+static inline void modem_syscon_ll_reset_zbmac_apb(modem_syscon_dev_t *hw)
+{
+    // ESP32C6 Not Support
 }
 
 __attribute__((always_inline))

@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2021-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2021-2025 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -11,6 +11,10 @@
 #include "sdkconfig.h"
 #include "esp_err.h"
 #include "esp_ieee802154_types.h"
+
+#if !CONFIG_IEEE802154_TEST && (CONFIG_ESP_COEX_SW_COEXIST_ENABLE || CONFIG_EXTERNAL_COEX_ENABLE)
+#include "esp_coex_i154.h"
+#endif
 
 #ifdef __cplusplus
 extern "C" {
@@ -55,23 +59,69 @@ uint8_t esp_ieee802154_get_channel(void);
 esp_err_t esp_ieee802154_set_channel(uint8_t channel);
 
 /**
- * @brief  Get the transmit power.
+ * @brief  Get the transmission power for the current channel.
  *
- * @return The transmit power in dBm.
+ * @return The transmission power in dBm.
  *
  */
 int8_t esp_ieee802154_get_txpower(void);
 
 /**
- * @brief  Set the transmit power.
+ * @brief  Set the transmission power for all channels.
  *
- * @param[in]  power  The transmit power in dBm.
+ * @param[in]  power  The transmission power in dBm.
  *
  * @return
  *      - ESP_OK on success.
  *      - ESP_FAIL on failure.
  */
 esp_err_t esp_ieee802154_set_txpower(int8_t power);
+
+/**
+ * @brief  Set the transmission power table.
+ *
+ * @param[in]  power_table  The power table.
+ *
+ * @return
+ *        - ESP_OK   Set the transmission power table to successfully.
+ */
+esp_err_t esp_ieee802154_set_power_table(esp_ieee802154_txpower_table_t power_table);
+
+/**
+ * @brief  Get the transmission power table.
+ *
+ * @param[out]  out_power_table  The power table.
+ *
+ * @return
+ *        - ESP_OK                  Get the transmission power table successfully.
+ *        - ESP_ERR_INVALID_ARG     Invalid arguments.
+ *
+ */
+esp_err_t esp_ieee802154_get_power_table(esp_ieee802154_txpower_table_t *out_power_table);
+
+/**
+ * @brief  Set the transmission power for a specific channel.
+ *
+ * @param[in]  channel  The channel.
+ * @param[in]  power    The power.
+ *
+ * @return
+ *        - ESP_OK                  Set the transmission power for a specific channel successfully.
+ *        - ESP_ERR_INVALID_ARG     Invalid arguments.
+ */
+esp_err_t esp_ieee802154_set_power_with_channel(uint8_t channel, int8_t power);
+
+/**
+ * @brief  Get the transmission power for a specific channel.
+ *
+ * @param[in]  channel    The channel.
+ * @param[out] out_power  The power.
+ *
+ * @return
+ *        - ESP_OK                  Get the transmission power for a specific channel successfully.
+ *        - ESP_ERR_INVALID_ARG     Invalid arguments.
+ */
+esp_err_t esp_ieee802154_get_power_with_channel(uint8_t channel, int8_t *out_power);
 
 /**
  * @brief  Get the promiscuous mode.
@@ -136,8 +186,12 @@ esp_err_t esp_ieee802154_receive(void);
  *                    |-----------------------------------------------------------------------|
  * @param[in]  cca    Perform CCA before transmission if it's true, otherwise transmit the frame directly.
  *
+ * @note During transmission, the hardware calculates the FCS, and send it over the air right after the MAC payload,
+ *       so you just need to prepare the length, mac header and mac payload content.
+ *
  * @return
  *      - ESP_OK on success.
+ *      - ESP_ERR_INVALID_ARG on an invalid frame.
  *      - ESP_FAIL on failure due to invalid state.
  *
  */
@@ -146,14 +200,21 @@ esp_err_t esp_ieee802154_transmit(const uint8_t *frame, bool cca);
 /**
  * @brief  Set the time to wait for the ack frame.
  *
- * @param[in]  timeout  The time to wait for the ack frame, in symbol unit (16 us).
- *                      Default: 0x006C, Range: 0x0000 - 0xFFFF.
+ * @param[in]  timeout  The time to wait for the ack frame, in us.
+ *                      It Should be a multiple of 16. The default value is 1728 us (108 * 16).
  *
  * @return
  *      - ESP_OK on success.
  *      - ESP_FAIL on failure.
  */
 esp_err_t esp_ieee802154_set_ack_timeout(uint32_t timeout);
+
+/**
+ * @brief  Get the time to wait for the ack frame.
+ *
+ * @return  The time to wait for the ack frame, in us.
+ */
+uint32_t esp_ieee802154_get_ack_timeout(void);
 
 /**
  * @brief  Get the device PAN ID.
@@ -477,6 +538,10 @@ esp_err_t esp_ieee802154_receive_handle_done(const uint8_t *frame);
  *                    |-----------------------------------------------------------------------|
  * @param[in]  frame_info  More information of the received frame, refer to esp_ieee802154_frame_info_t.
  *
+ * @note  During receiving, the hardware calculates the FCS of the received frame, and may drop it if the FCS doesn't match, only the valid
+ *        frames will be received and notified by esp_ieee802154_receive_done(). Please note that the FCS field is replaced by RSSI and LQI
+ *        value of the received frame.
+ *
  */
 extern void esp_ieee802154_receive_done(uint8_t *frame, esp_ieee802154_frame_info_t *frame_info);
 
@@ -523,18 +588,24 @@ extern void esp_ieee802154_transmit_sfd_done(uint8_t *frame);
 extern void esp_ieee802154_energy_detect_done(int8_t power);
 
 /**
- * @brief  Set the IEEE 802.15.4 Radio to receive state at a specific time.
+ * @brief  The receive window for receive_at has finished.
  *
- * @note   Radio will start receiving after the timestamp, and continue receiving until it receives a valid frame.
- *         Refer to `esp_ieee802154_receive_done()`.
+ */
+extern void esp_ieee802154_receive_at_done(void);
+
+/**
+ * @brief  Set the IEEE 802.15.4 Radio to receive state at a specific time, for a specific duration.
  *
- * @param[in]  time  A specific timestamp for starting receiving.
+ * @note   Radio will start receiving after the timestamp, and continue receiving for the specific duration.
+ *
+ * @param[in]  time      A specific timestamp for starting receiving.
+ * @param[in]  duration  A specific duration after which to stop receiving. Set duration = 0 to rx indefinitely.
  * @return
  *      - ESP_OK on success
  *      - ESP_FAIL on failure due to invalid state.
  *
  */
-esp_err_t esp_ieee802154_receive_at(uint32_t time);
+esp_err_t esp_ieee802154_receive_at(uint32_t time, uint32_t duration);
 
 /**
  * @brief  Transmit the given frame at a specific time.
@@ -547,6 +618,7 @@ esp_err_t esp_ieee802154_receive_at(uint32_t time);
  *
  * @return
  *      - ESP_OK on success.
+ *      - ESP_ERR_INVALID_ARG on an invalid frame.
  *      - ESP_FAIL on failure due to invalid state.
  *
  */
@@ -613,6 +685,76 @@ void esp_ieee802154_txrx_statistic_clear(void);
  */
 void esp_ieee802154_txrx_statistic_print(void);
 #endif // CONFIG_IEEE802154_TXRX_STATISTIC
+
+#if CONFIG_IEEE802154_RX_BUFFER_STATISTIC
+
+/**
+ * @brief  Print the current IEEE802.15.4 rx buffer statistic.
+ *
+ */
+void esp_ieee802154_rx_buffer_statistic_clear(void);
+
+/**
+ * @brief  Clear the current IEEE802.15.4 rx buffer statistic.
+ *
+ */
+void esp_ieee802154_rx_buffer_statistic_print(void);
+#endif // CONFIG_IEEE802154_RX_BUFFER_STATISTIC
+
+#if CONFIG_IEEE802154_RECORD
+
+/**
+ * @brief  Print the current IEEE802.15.4 event/command/state record.
+ *
+ */
+void esp_ieee802154_record_print(void);
+#endif // CONFIG_IEEE802154_RECORD
+
+#if !CONFIG_IEEE802154_TEST && (CONFIG_ESP_COEX_SW_COEXIST_ENABLE || CONFIG_EXTERNAL_COEX_ENABLE)
+
+/**
+ * @brief  Set the IEEE802.15.4 coexist config.
+ *
+ * @param[in]  config     The config of IEEE802.15.4 coexist.
+ *
+ */
+void esp_ieee802154_set_coex_config(esp_ieee802154_coex_config_t config);
+
+/**
+ * @brief  Get the IEEE802.15.4 coexist config.
+ *
+ * @return
+ *        - The config of IEEE802.15.4 coexist.
+ *
+ */
+esp_ieee802154_coex_config_t esp_ieee802154_get_coex_config(void);
+#endif
+
+/**
+ * @brief  Register process callbacks for events generated by the IEEE 802.15.4 subsystem.
+ *
+ * @param[in]  cb_list The event process callback list, please refer to `esp_ieee802154_event_cb_list_t`.
+ *
+ * @note  This API should be called only when IEEE 802.15.4 subsystem is not enabled
+ *        or after IEEE 802.15.4 subsystem is disabled (refer to `esp_ieee802154_disable`).
+ *
+ * @return
+ *      - ESP_OK on success.
+ *      - ESP_FAIL on failure.
+ */
+esp_err_t esp_ieee802154_event_callback_list_register(esp_ieee802154_event_cb_list_t cb_list);
+
+/**
+ * @brief  Unregister process callbacks for events generated by the IEEE 802.15.4 subsystem.
+ *
+ * @note  This API should be called only when IEEE 802.15.4 subsystem is not enabled
+ *        or after IEEE 802.15.4 subsystem is disabled (refer to `esp_ieee802154_disable`).
+ *
+ * @return
+ *      - ESP_OK on success.
+ *      - ESP_FAIL on failure.
+ */
+esp_err_t esp_ieee802154_event_callback_list_unregister(void);
 
 #ifdef __cplusplus
 }

@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2015-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2015-2024 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -10,6 +10,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <sys/queue.h>
+#include "esp_assert.h"
 #include "usb/usb_types_ch9.h"
 #include "usb/usb_types_stack.h"
 
@@ -34,7 +35,7 @@ typedef struct {
     int num_isoc_packets;
     usb_isoc_packet_desc_t isoc_packet_desc[0];
 } usb_transfer_dummy_t;
-_Static_assert(sizeof(usb_transfer_dummy_t) == sizeof(usb_transfer_t), "usb_transfer_dummy_t does not match usb_transfer_t");
+ESP_STATIC_ASSERT(sizeof(usb_transfer_dummy_t) == sizeof(usb_transfer_t), "usb_transfer_dummy_t does not match usb_transfer_t");
 
 struct urb_s {
     TAILQ_ENTRY(urb_s) tailq_entry;
@@ -58,6 +59,7 @@ typedef struct urb_s urb_t;
 typedef enum {
     USB_PROC_REQ_SOURCE_USBH = 0x01,
     USB_PROC_REQ_SOURCE_HUB = 0x02,
+    USB_PROC_REQ_SOURCE_ENUM = 0x03
 } usb_proc_req_source_t;
 
 /**
@@ -75,18 +77,21 @@ typedef bool (*usb_proc_req_cb_t)(usb_proc_req_source_t source, bool in_isr, voi
  *
  * - Data buffer is allocated in DMA capable memory
  * - The constant fields of the URB are also set
- * - The data_buffer field of the URB is set to point to start of the allocated data buffer.
+ * - The data_buffer field of the URB is set to point to start of the allocated data buffer
+ * - The resulting data_buffer_size can be bigger that the requested size. This is to ensure that the data buffer is cache aligned
  *
- * @param data_buffer_size Size of the URB's data buffer
- * @param num_isoc_packets Number of isochronous packet descriptors
- * @return urb_t* URB object
+ * @param[in] data_buffer_size Size of the URB's data buffer
+ * @param[in] num_isoc_packets Number of isochronous packet descriptors
+ *
+ * @return
+ *    - urb_t* URB object
  */
 urb_t *urb_alloc(size_t data_buffer_size, int num_isoc_packets);
 
 /**
  * @brief Free a URB
  *
- * @param urb URB object
+ * @param[in] urb URB object
  */
 void urb_free(urb_t *urb);
 

@@ -358,22 +358,34 @@ static void handle_ble_device_result(struct ble_scan_result_evt_param *scan_rst)
     char name[64] = {0};
 
     uint8_t uuid_len = 0;
-    uint8_t *uuid_d = esp_ble_resolve_adv_data(scan_rst->ble_adv, ESP_BLE_AD_TYPE_16SRV_CMPL, &uuid_len);
+    uint8_t *uuid_d = esp_ble_resolve_adv_data_by_type(scan_rst->ble_adv,
+                      scan_rst->adv_data_len + scan_rst->scan_rsp_len,
+                      ESP_BLE_AD_TYPE_16SRV_CMPL,
+                      &uuid_len);
     if (uuid_d != NULL && uuid_len) {
         uuid = uuid_d[0] + (uuid_d[1] << 8);
     }
 
     uint8_t appearance_len = 0;
-    uint8_t *appearance_d = esp_ble_resolve_adv_data(scan_rst->ble_adv, ESP_BLE_AD_TYPE_APPEARANCE, &appearance_len);
+    uint8_t *appearance_d = esp_ble_resolve_adv_data_by_type(scan_rst->ble_adv,
+                                                    scan_rst->adv_data_len + scan_rst->scan_rsp_len,
+                                                    ESP_BLE_AD_TYPE_APPEARANCE,
+                                                    &appearance_len);
     if (appearance_d != NULL && appearance_len) {
         appearance = appearance_d[0] + (appearance_d[1] << 8);
     }
 
     uint8_t adv_name_len = 0;
-    uint8_t *adv_name = esp_ble_resolve_adv_data(scan_rst->ble_adv, ESP_BLE_AD_TYPE_NAME_CMPL, &adv_name_len);
+    uint8_t *adv_name = esp_ble_resolve_adv_data_by_type(scan_rst->ble_adv,
+                                                 scan_rst->adv_data_len + scan_rst->scan_rsp_len,
+                                                 ESP_BLE_AD_TYPE_NAME_CMPL,
+                                                 &adv_name_len);
 
     if (adv_name == NULL) {
-        adv_name = esp_ble_resolve_adv_data(scan_rst->ble_adv, ESP_BLE_AD_TYPE_NAME_SHORT, &adv_name_len);
+        adv_name = esp_ble_resolve_adv_data_by_type(scan_rst->ble_adv,
+                                            scan_rst->adv_data_len + scan_rst->scan_rsp_len,
+                                            ESP_BLE_AD_TYPE_NAME_SHORT,
+                                            &adv_name_len);
     }
 
     if (adv_name != NULL && adv_name_len) {
@@ -436,12 +448,12 @@ static void bt_gap_event_handler(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_para
 
 #if (CONFIG_EXAMPLE_SSP_ENABLED == true)
     case ESP_BT_GAP_CFM_REQ_EVT:
-        ESP_LOGI(TAG, "BT GAP CFM_REQ_EVT Please compare the numeric value: %" PRIu32,
+        ESP_LOGI(TAG, "BT GAP CFM_REQ_EVT Please compare the numeric value: %06" PRIu32,
                  param->cfm_req.num_val);
         esp_bt_gap_ssp_confirm_reply(param->cfm_req.bda, true);
         break;
     case ESP_BT_GAP_KEY_NOTIF_EVT:
-        ESP_LOGI(TAG, "BT GAP KEY_NOTIF_EVT passkey:%" PRIu32, param->key_notif.passkey);
+        ESP_LOGI(TAG, "BT GAP KEY_NOTIF_EVT passkey:%06" PRIu32, param->key_notif.passkey);
         break;
     case ESP_BT_GAP_KEY_REQ_EVT:
         ESP_LOGI(TAG, "BT GAP KEY_REQ_EVT Please enter passkey!");
@@ -753,6 +765,9 @@ esp_err_t esp_hid_ble_gap_adv_init(uint16_t appearance, const char *device_name)
      */
     fields.flags = BLE_HS_ADV_F_DISC_GEN |
                    BLE_HS_ADV_F_BREDR_UNSUP;
+
+    fields.appearance = ESP_HID_APPEARANCE_GENERIC;
+    fields.appearance_is_present = 1;
 
     /* Indicate that the TX power level field should be included; have the
      * stack fill this value automatically.  This is done by assigning the

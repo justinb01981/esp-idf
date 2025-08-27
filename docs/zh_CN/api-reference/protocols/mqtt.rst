@@ -21,14 +21,23 @@ ESP-MQTT 是 `MQTT <https://mqtt.org/>`__ 协议客户端的实现，MQTT 是一
 应用示例
 -------------------
 
-   * :example:`protocols/mqtt/tcp`：基于 TCP 的 MQTT，默认端口 1883
-   * :example:`protocols/mqtt/ssl`：基于 TLS 的 MQTT，默认端口 8883
-   * :example:`protocols/mqtt/ssl_ds`：基于 TLS 的 MQTT，使用数字签名外设进行身份验证，默认端口 8883
-   * :example:`protocols/mqtt/ssl_mutual_auth`：基于 TLS 的 MQTT，使用证书进行身份验证，默认端口 8883
-   * :example:`protocols/mqtt/ssl_psk`：基于 TLS 的 MQTT，使用预共享密钥进行身份验证，默认端口 8883
-   * :example:`protocols/mqtt/ws`：基于 WebSocket 的 MQTT，默认端口 80
-   * :example:`protocols/mqtt/wss`：基于 WebSocket Secure 的 MQTT，默认端口 443
-   * :example:`protocols/mqtt5`: 使用 ESP-MQTT 库连接 MQTT v5.0 的服务器
+   - :example:`protocols/mqtt/tcp` 演示了如何通过 TCP 实现 MQTT 通信（默认端口 1883）。
+
+   - :example:`protocols/mqtt/ssl` 演示了如何使用 SSL 传输来实现基于 TLS 的 MQTT 通信（默认端口 8883）。
+
+   - :example:`protocols/mqtt/ssl_ds` 演示了如何使用数字签名外设进行身份验证，以实现基于 TLS 的 MQTT 通信（默认端口 8883）。
+
+   - :example:`protocols/mqtt/ssl_mutual_auth` 演示了如何使用证书进行身份验证实现 MQTT 通信（默认端口 8883）。
+
+   - :example:`protocols/mqtt/ssl_psk` 演示了如何使用预共享密钥进行身份验证，以实现基于 TLS 的 MQTT 通信（默认端口 8883）。
+
+   - :example:`protocols/mqtt/ws` 演示了如何通过 WebSocket 实现 MQTT 通信（默认端口 80）。
+
+   - :example:`protocols/mqtt/wss` 演示了如何通过 WebSocket Secure 实现 MQTT 通信（默认端口 443）。
+
+   - :example:`protocols/mqtt5` 演示了如何使用 ESP-MQTT 库通过 MQTT v5.0 连接到代理。
+
+   - :example:`protocols/mqtt/custom_outbox` 演示了如何自定义 ESP-MQTT 库中的 outbox。
 
 MQTT 消息重传
 --------------------------
@@ -145,7 +154,7 @@ ESP-MQTT 库将始终重新传输未确认的 QoS 1 和 2 发布消息，以避�
 
  * :cpp:member:`password <esp_mqtt_client_config_t::credentials_t::authentication_t::password>`：使用密码
  * * :cpp:member:`certificate <esp_mqtt_client_config_t::credentials_t::authentication_t::certificate>` 和 :cpp:member:`key <esp_mqtt_client_config_t::credentials_t::authentication_t::key>`：进行双向 TLS 身份验证，PEM 或 DER 格式均可
- * :cpp:member:`use_secure_element <esp_mqtt_client_config_t::credentials_t::authentication_t::use_secure_element>`：使用 ESP32 中的安全元素 (ATECC608A)
+ * :cpp:member:`use_secure_element <esp_mqtt_client_config_t::credentials_t::authentication_t::use_secure_element>`：使用 ESP32 系列中的安全元素 (ATECC608A)
  * :cpp:member:`ds_data <esp_mqtt_client_config_t::credentials_t::authentication_t::ds_data>`：使用某些乐鑫设备的数字签名外设
 
 会话
@@ -196,3 +205,4 @@ API 参考
 -------------
 
 .. include-build-file:: inc/mqtt_client.inc
+.. include-build-file:: inc/mqtt5_client.inc

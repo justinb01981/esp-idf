@@ -19,25 +19,34 @@ Features
 
 
 Application Examples
----------------------
+--------------------
 
-   * :example:`protocols/mqtt/tcp`: MQTT over TCP, default port 1883
-   * :example:`protocols/mqtt/ssl`: MQTT over TLS, default port 8883
-   * :example:`protocols/mqtt/ssl_ds`: MQTT over TLS using digital signature peripheral for authentication, default port 8883
-   * :example:`protocols/mqtt/ssl_mutual_auth`: MQTT over TLS using certificates for authentication, default port 8883
-   * :example:`protocols/mqtt/ssl_psk`: MQTT over TLS using pre-shared keys for authentication, default port 8883
-   * :example:`protocols/mqtt/ws`: MQTT over WebSocket, default port 80
-   * :example:`protocols/mqtt/wss`: MQTT over WebSocket Secure, default port 443
-   * :example:`protocols/mqtt5`: Uses ESP-MQTT library to connect to broker with MQTT v5.0
+   - :example:`protocols/mqtt/tcp` demonstrates how to implement MQTT communication over TCP (default port 1883).
+
+   - :example:`protocols/mqtt/ssl` demonstrates how to use SSL transport to implement MQTT communication over TLS (default port 8883).
+
+   - :example:`protocols/mqtt/ssl_ds` demonstrates how to use digital signature peripheral for authentication to implement MQTT communication over TLS (default port 8883).
+
+   - :example:`protocols/mqtt/ssl_mutual_auth` demonstrates how to use certificates for authentication to implement MQTT communication (default port 8883).
+
+   - :example:`protocols/mqtt/ssl_psk` demonstrates how to use pre-shared keys for authentication to implement MQTT communication over TLS (default port 8883).
+
+   - :example:`protocols/mqtt/ws` demonstrates how to implement MQTT communication over WebSocket (default port 80).
+
+   - :example:`protocols/mqtt/wss` demonstrates how to implement MQTT communication over WebSocket Secure (default port 443).
+
+   - :example:`protocols/mqtt5` demonstrates how to use ESP-MQTT library to connect to broker with MQTT v5.0.
+
+   - :example:`protocols/mqtt/custom_outbox` demonstrates how to customize the outbox in the ESP-MQTT library.
 
 MQTT Message Retransmission
 ---------------------------
 
-A new MQTT message is created by calling :cpp:func:`esp_mqtt_client_publish <esp_mqtt_client_publish()>` or its non blocking counterpart :cpp:func:`esp_mqtt_client_enqueue <esp_mqtt_client_enqueue()>`.
+A new MQTT message can be created by calling :cpp:func:`esp_mqtt_client_publish <esp_mqtt_client_publish()>` or its non-blocking counterpart :cpp:func:`esp_mqtt_client_enqueue <esp_mqtt_client_enqueue()>`.
 
-Messages with QoS 0 is sent only once. QoS 1 and 2 have different behaviors since the protocol requires extra steps to complete the process.
+Messages with QoS 0 are sent only once. QoS 1 and 2 behave differently since the protocol requires additional steps to complete the process.
 
-The ESP-MQTT library opts to always retransmit unacknowledged QoS 1 and 2 publish messages to avoid losses in faulty connections, even though the MQTT specification requires the re-transmission only on reconnect with Clean Session flag been set to 0 (set :cpp:member:`disable_clean_session <esp_mqtt_client_config_t::session_t::disable_clean_session>` to true for this behavior).
+The ESP-MQTT library opts to always retransmit unacknowledged QoS 1 and 2 publish messages to prevent data loss in faulty connections, even though the MQTT specification requires the re-transmission only on reconnect with Clean Session flag been set to 0 (set :cpp:member:`disable_clean_session <esp_mqtt_client_config_t::session_t::disable_clean_session>` to true for this behavior).
 
 QoS 1 and 2 messages that may need retransmission are always enqueued, but first transmission try occurs immediately if :cpp:func:`esp_mqtt_client_publish <esp_mqtt_client_publish>` is used. A transmission retry for unacknowledged messages will occur after :cpp:member:`message_retransmit_timeout <esp_mqtt_client_config_t::session_t::message_retransmit_timeout>`. After :ref:`CONFIG_MQTT_OUTBOX_EXPIRED_TIMEOUT_MS` messages will expire and be deleted. If :ref:`CONFIG_MQTT_REPORT_DELETED_MESSAGES` is set, an event will be sent to notify the user.
 
@@ -145,7 +154,7 @@ It is possible to set authentication parameters through the :cpp:class:`authenti
 
  * :cpp:member:`password <esp_mqtt_client_config_t::credentials_t::authentication_t::password>`: use a password by setting
  * :cpp:member:`certificate <esp_mqtt_client_config_t::credentials_t::authentication_t::certificate>` and :cpp:member:`key <esp_mqtt_client_config_t::credentials_t::authentication_t::key>`: mutual authentication with TLS, and both can be provided in PEM or DER format
- * :cpp:member:`use_secure_element <esp_mqtt_client_config_t::credentials_t::authentication_t::use_secure_element>`: use secure element (ATECC608A) interfaced to ESP32
+ * :cpp:member:`use_secure_element <esp_mqtt_client_config_t::credentials_t::authentication_t::use_secure_element>`: use secure element (ATECC608A) interfaced to ESP32 series
  * :cpp:member:`ds_data <esp_mqtt_client_config_t::credentials_t::authentication_t::ds_data>`: use Digital Signature Peripheral available in some Espressif devices
 
 Session
@@ -196,3 +205,4 @@ API Reference
 -------------
 
 .. include-build-file:: inc/mqtt_client.inc
+.. include-build-file:: inc/mqtt5_client.inc

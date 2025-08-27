@@ -595,12 +595,16 @@ esp_err_t esp_netif_napt_disable(esp_netif_t *esp_netif);
  * @brief  Set or Get DHCP server option
  *
  * @note Please note that not all combinations of identifiers and options are supported.
+ *
  * Get operations:
+ *
  *  * IP_ADDRESS_LEASE_TIME
  *  * ESP_NETIF_SUBNET_MASK/REQUESTED_IP_ADDRESS (both options do the same, they reflect dhcps_lease_t)
  *  * ROUTER_SOLICITATION_ADDRESS
  *  * DOMAIN_NAME_SERVER
+ *
  * Set operations:
+ *
  *  * IP_ADDRESS_LEASE_TIME
  *  * ESP_NETIF_SUBNET_MASK -- set operation is allowed only if the configured mask corresponds to the settings,
  *                             if not, please use esp_netif_set_ip_info() to prevent misconfiguration of DHCPS.
@@ -631,10 +635,14 @@ esp_netif_dhcps_option(esp_netif_t *esp_netif, esp_netif_dhcp_option_mode_t opt_
  * @brief  Set or Get DHCP client option
  *
  * @note Please note that not all combinations of identifiers and options are supported.
+ *
  * Get operations:
+ *
  *  * ESP_NETIF_IP_REQUEST_RETRY_TIME
  *  * ESP_NETIF_VENDOR_SPECIFIC_INFO -- only available if ESP_DHCP_DISABLE_VENDOR_CLASS_IDENTIFIER=n
+ *
  * Set operations:
+ *
  *  * ESP_NETIF_IP_REQUEST_RETRY_TIME
  *  * ESP_NETIF_VENDOR_SPECIFIC_INFO -- only available if ESP_DHCP_DISABLE_VENDOR_CLASS_IDENTIFIER=n
  *                                      lwip layer creates its own copy of the supplied identifier.
@@ -769,6 +777,11 @@ esp_err_t esp_netif_dhcps_get_clients_by_mac(esp_netif_t *esp_netif, int num, es
  *   and is designed to be set via this API.
  *   If DHCP client is disabled, all DNS server types can be set via this API only.
  *
+ *   Note that LWIP stores DNS server information globally, not per interface, so the first parameter is unused
+ *   in the default LWIP configuration.
+ *   If CONFIG_ESP_NETIF_SET_DNS_PER_DEFAULT_NETIF=1 this API sets internal DNS server information per
+ *   netif. It's also possible to set the global DNS server info by supplying esp_netif=NULL
+ *
  *   If DHCP server is enabled, the Main DNS Server setting is used by the DHCP server to provide a DNS Server option
  *   to DHCP clients (Wi-Fi stations).
  *   - The default Main DNS server is typically the IP of the DHCP server itself.
@@ -793,6 +806,11 @@ esp_err_t esp_netif_set_dns_info(esp_netif_t *esp_netif, esp_netif_dns_type_t ty
  *
  * This may be result of a previous call to esp_netif_set_dns_info(). If the interface's DHCP client is enabled,
  * the Main or Backup DNS Server may be set by the current DHCP lease.
+ *
+ * Note that LWIP stores DNS server information globally, not per interface, so the first parameter is unused
+ * in the default LWIP configuration.
+ * If CONFIG_ESP_NETIF_SET_DNS_PER_DEFAULT_NETIF=1 this API returns internally saved DNS server information per
+ * netif. It's also possible to ask for the global DNS server info by supplying esp_netif=NULL
  *
  * @param[in]  esp_netif Handle to esp-netif instance
  * @param[in]  type Type of DNS Server to get: ESP_NETIF_DNS_MAIN, ESP_NETIF_DNS_BACKUP, ESP_NETIF_DNS_FALLBACK
@@ -875,6 +893,17 @@ esp_err_t esp_netif_get_ip6_global(esp_netif_t *esp_netif, esp_ip6_addr_t *if_ip
  *      number of returned IPv6 addresses
  */
 int esp_netif_get_all_ip6(esp_netif_t *esp_netif, esp_ip6_addr_t if_ip6[]);
+
+/**
+ * @brief  Get all preferred IPv6 addresses of the specified interface
+ *
+ * @param[in]  esp_netif Handle to esp-netif instance
+ * @param[out] if_ip6 Array of IPv6 addresses will be copied to the argument
+ *
+ * @return
+ *      number of returned IPv6 addresses
+ */
+int esp_netif_get_all_preferred_ip6(esp_netif_t *esp_netif, esp_ip6_addr_t if_ip6[]);
 
 /**
  * @brief  Cause the TCP/IP stack to add an IPv6 address to the interface
@@ -1029,6 +1058,16 @@ const char *esp_netif_get_desc(esp_netif_t *esp_netif);
  * @return Integer representing the instance's route-prio, or -1 if invalid parameters
  */
 int esp_netif_get_route_prio(esp_netif_t *esp_netif);
+
+/**
+ * @brief Configures routing priority
+ *
+ * @param[in]  esp_netif Handle to esp-netif instance
+ * @param[in]  route_prio Required route priority for esp-netif instance
+ *
+ * @return Integer representing the instance's route-prio, or -1 if invalid parameters
+ */
+int esp_netif_set_route_prio(esp_netif_t *esp_netif, int route_prio);
 
 /**
  * @brief Returns configured event for this esp-netif instance and supplied event type

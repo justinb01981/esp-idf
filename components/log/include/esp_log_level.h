@@ -7,6 +7,7 @@
 #pragma once
 
 #include <stdint.h>
+#include "esp_assert.h"
 #include "sdkconfig.h"
 
 #ifdef __cplusplus
@@ -26,35 +27,70 @@ typedef enum {
     ESP_LOG_MAX     = 6,    /*!< Number of levels supported */
 } esp_log_level_t;
 
-/** @cond */
+#define ESP_LOG_LEVEL_LEN   (3) /*!< Number of bits used to represent the log level */
+#define ESP_LOG_LEVEL_MASK  ((1 << ESP_LOG_LEVEL_LEN) - 1) /*!< Mask for log level */
+/// Returns level from config
+#define ESP_LOG_GET_LEVEL(config)  ((config) & ESP_LOG_LEVEL_MASK)
 
-// LOG_LOCAL_LEVEL controls what log levels are included in the binary.
+/** @cond */
+ESP_STATIC_ASSERT(ESP_LOG_MAX <= ESP_LOG_LEVEL_MASK, "Log level items of esp_log_level_t must fit ESP_LOG_LEVEL_MASK");
+
+/**
+ * @brief Controls the log levels included in the binary.
+ *
+ * This define determines the maximum log level that will be compiled into the binary for the current build configuration.
+ * It adjusts the verbosity of logging by specifying which log levels are included or excluded.
+ *
+ * If this define is not explicitly set in the user namespace, its value is derived from Kconfig options:
+ * - `CONFIG_BOOTLOADER_LOG_LEVEL` for bootloader builds.
+ * - `CONFIG_SECURE_TEE_LOG_LEVEL` for Secure TEE builds.
+ * - `CONFIG_LOG_MAXIMUM_LEVEL` for all other builds.
+ *
+ * If explicitly defined in the user's code, it overrides these default values, allowing fine-grained control over log verbosity.
+ */
 #ifndef LOG_LOCAL_LEVEL
 #if BOOTLOADER_BUILD
 #define LOG_LOCAL_LEVEL  CONFIG_BOOTLOADER_LOG_LEVEL
-#else // !BOOTLOADER_BUILD
+#elif ESP_TEE_BUILD
+#define LOG_LOCAL_LEVEL  CONFIG_SECURE_TEE_LOG_LEVEL
+#else
 #define LOG_LOCAL_LEVEL  CONFIG_LOG_MAXIMUM_LEVEL
-#endif // !BOOTLOADER_BUILD
+#endif
 #endif // LOG_LOCAL_LEVEL
+/** @endcond */
 
-#if BOOTLOADER_BUILD
+/**
+ * @brief Check if a specific log level is enabled at compile-time.
+ *
+ * This macro checks whether logging for the specified log level is enabled based on the
+ * current local log level setting (`LOG_LOCAL_LEVEL`). It uses a compile-time check to
+ * determine if logging for the specified level should be included in the binary,
+ * helping to exclude logs that are not configured.
+ *
+ * @param configs it includes log configs and level.
+ * @return true if the specified log level is enabled, false otherwise.
+ */
+#define ESP_LOG_ENABLED(configs) (LOG_LOCAL_LEVEL >= ESP_LOG_GET_LEVEL(configs))
 
-#define _ESP_LOG_ENABLED(log_level) (LOG_LOCAL_LEVEL >= (log_level))
-#define _ESP_LOG_EARLY_ENABLED(log_level) _ESP_LOG_ENABLED(log_level)
+/** @cond */
+#if NON_OS_BUILD
 
-#else // !BOOTLOADER_BUILD
+#define _ESP_LOG_ENABLED(log_level) ESP_LOG_ENABLED(log_level)
+#define _ESP_LOG_EARLY_ENABLED(log_level) ESP_LOG_ENABLED(log_level)
+
+#else // !NON_OS_BUILD
 
 #if CONFIG_LOG_MASTER_LEVEL
-#define _ESP_LOG_ENABLED(log_level) (esp_log_get_level_master() >= (log_level) && LOG_LOCAL_LEVEL >= (log_level))
+#define _ESP_LOG_ENABLED(log_level) (esp_log_get_level_master() >= ESP_LOG_GET_LEVEL(log_level) && ESP_LOG_ENABLED(log_level))
 #else // !CONFIG_LOG_MASTER_LEVEL
-#define _ESP_LOG_ENABLED(log_level) (LOG_LOCAL_LEVEL >= (log_level))
+#define _ESP_LOG_ENABLED(log_level) ESP_LOG_ENABLED(log_level)
 #endif // !CONFIG_LOG_MASTER_LEVEL
 
 /* For early log, there is no log tag filtering. So we want to log only if both the LOG_LOCAL_LEVEL and the
 currently configured min log level are higher than the log level */
-#define _ESP_LOG_EARLY_ENABLED(log_level) (LOG_LOCAL_LEVEL >= (log_level) && esp_log_get_default_level() >= (log_level))
+#define _ESP_LOG_EARLY_ENABLED(log_level) (ESP_LOG_ENABLED(log_level) && esp_log_get_default_level() >= ESP_LOG_GET_LEVEL(log_level))
 
-#endif // !BOOTLOADER_BUILD
+#endif // !NON_OS_BUILD
 
 /** @endcond */
 
@@ -71,7 +107,11 @@ currently configured min log level are higher than the log level */
 __attribute__((always_inline))
 static inline esp_log_level_t esp_log_get_default_level(void)
 {
-#if CONFIG_LOG_DYNAMIC_LEVEL_CONTROL
+#if BOOTLOADER_BUILD
+    return (esp_log_level_t) CONFIG_BOOTLOADER_LOG_LEVEL;
+#elif ESP_TEE_BUILD
+    return (esp_log_level_t) CONFIG_SECURE_TEE_LOG_LEVEL;
+#elif CONFIG_LOG_DYNAMIC_LEVEL_CONTROL
     extern esp_log_level_t esp_log_default_level;
     return esp_log_default_level;
 #else
@@ -84,14 +124,13 @@ static inline esp_log_level_t esp_log_get_default_level(void)
 /**
  * @brief Master log level.
  *
- * Optional master log level to check against for ESP_LOGx macros before calling
- * esp_log_write. Allows one to set a higher CONFIG_LOG_MAXIMUM_LEVEL but not
+ * Allows one to set a higher CONFIG_LOG_MAXIMUM_LEVEL but not
  * impose a performance hit during normal operation (only when instructed). An
  * application may set esp_log_set_level_master(level) to globally enforce a
- * maximum log level. ESP_LOGx macros above this level will be skipped immediately,
- * rather than calling esp_log or esp_log_write and doing a cache hit.
+ * maximum log level. ESP_LOG macros above this level will be skipped,
+ * rather than doing a tag lookup.
  *
- * @note The tradeoff is increased application size.
+ * The Master log level is not applicable for the bootloader.
  *
  * @param level  Master log level
  */
@@ -99,6 +138,7 @@ void esp_log_set_level_master(esp_log_level_t level);
 
 /**
  * @brief Returns master log level.
+ * The Master log level is not applicable for the bootloader.
  * @return Master log level
  */
 esp_log_level_t esp_log_get_level_master(void);

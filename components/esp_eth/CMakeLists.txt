@@ -30,6 +30,7 @@ if(CONFIG_ETH_ENABLED)
         list(APPEND srcs "src/mac/esp_eth_mac_esp.c"
                          "src/mac/esp_eth_mac_esp_dma.c"
                          "src/mac/esp_eth_mac_esp_gpio.c"
+                         "src/phy/esp_eth_phy_generic.c"
                          "src/phy/esp_eth_phy_dp83848.c"
                          "src/phy/esp_eth_phy_ip101.c"
                          "src/phy/esp_eth_phy_ksz80xx.c"
@@ -68,8 +69,5 @@ if(CONFIG_ETH_ENABLED)
     if(CONFIG_ETH_USE_SPI_ETHERNET)
         idf_component_optional_requires(PUBLIC esp_driver_spi)
     endif()
-    idf_component_optional_requires(PRIVATE esp_netif esp_pm)
-    if(CONFIG_SOC_CACHE_INTERNAL_MEM_VIA_L1CACHE)
-        idf_component_optional_requires(PRIVATE esp_mm)
-    endif()
+    idf_component_optional_requires(PRIVATE esp_netif esp_pm esp_mm)
 endif()
