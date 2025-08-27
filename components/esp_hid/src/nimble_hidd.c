@@ -353,6 +353,7 @@ static int nimble_hidd_dev_input_set(void *devp, size_t index, size_t id, uint8_
     esp_ble_hidd_dev_t *dev = (esp_ble_hidd_dev_t *)devp;
     int rc;
     struct os_mbuf *om;
+
     if (!dev || s_dev != dev) {
         return ESP_FAIL;
     }
@@ -657,7 +658,7 @@ esp_err_t esp_ble_hidd_dev_init(esp_hidd_dev_t *dev_p, const esp_hid_device_conf
         .queue_size = 5,
         .task_name = "ble_hidd_events",
         .task_priority = uxTaskPriorityGet(NULL),
-        .task_stack_size = 2048,
+        .task_stack_size = /*2048*/ 4096,
         .task_core_id = tskNO_AFFINITY
     };
     rc = esp_event_loop_create(&event_task_args, &s_dev->event_loop_handle);

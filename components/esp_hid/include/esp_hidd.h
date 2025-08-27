@@ -63,7 +63,7 @@ typedef union {
 
     /**
      * @brief ESP_HIDD_STOP_EVENT
-     * @note Used only for Classic Bluetooth.
+     * @note Used only for Classic Bluetooth. 
      */
     struct {
         esp_err_t status;                       /*!< HID device operation status */

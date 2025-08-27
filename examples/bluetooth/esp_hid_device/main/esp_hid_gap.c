@@ -706,7 +706,7 @@ esp_err_t esp_hid_ble_gap_adv_init(uint16_t appearance, const char *device_name)
         return ret;
     }
 
-    if ((ret = esp_ble_gap_config_adv_data(&ble_adv_data)) != ESP_OK) {
+    if((ret = esp_ble_gap_config_adv_data(&ble_adv_data)) != ESP_OK) {
         ESP_LOGE(TAG, "GAP config_adv_data failed: %d", ret);
         return ret;
     }
