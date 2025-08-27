@@ -49,6 +49,7 @@ extern POSE_t pose;
 
 void lsm6ds3(void *pvParameters);
 
+#include "driver/gpio.h"
 #include "driver/i2c.h"
 
 void start_i2c(void) {

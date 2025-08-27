@@ -114,7 +114,7 @@ void lsm6ds3(void *pvParameters){
 
     bool initialized = false;
 
-    while(1){
+    while(1) {
 
         _getMotion6(&accX, &accY, &accZ, &grvX, &grvY, &grvZ);
 
@@ -136,18 +136,18 @@ void lsm6ds3(void *pvParameters){
         double dt = (double)(micros() - timer) / 1000000; // Calculate delta time
         timer = micros();
 
-        accX *= dt; accY *= dt; accZ *= dt;
+        accX /= dt; accY /= dt; accZ /= dt;
 
-        const double M = accX*accX + accY*accY + accZ*accZ;
+        const double M = sqrt(accX*accX + accY*accY + accZ*accZ);
 
         // offset and scale by 1/T
-        accX = (accX - accXl) / M;
-        accY = (accY - accYl) / M;
-        accZ = (accZ - accZl) / M;
+        accX = (accX) / M;
+        accY = (accY) / M;
+        accZ = (accZ) / M;
 
-        const double orientX = grvXl - grvX;
-        const double orientY = grvYl - grvY;
-        const double orientZ = grvZl - grvZ;
+        const double orientX = grvX - grvXl;
+        const double orientY = grvY - grvYl;
+        const double orientZ = grvZ - grvZl;
 
         double Xv = (accX)*orientX + accY*orientX + accZ*orientX;
         double Yv = (-accX)*orientY + accY*orientY + accZ*orientY;
@@ -158,8 +158,8 @@ void lsm6ds3(void *pvParameters){
         worldZ += Zv;
 #define COORDFMT "%0.02f"
 
-        printf("Position: "COORDFMT"(X) "COORDFMT"(Y) "COORDFMT"(Z))\n", worldX, worldY, worldZ);
-        //printf("Delt: "COORDFMT"(dx)" COORDFMT"(dy) "COORDFMT"(dz)\n",  Xv, Yv, Zv);
+        printf("Position:\t"COORDFMT"(X)\t"COORDFMT"(Y)\t"COORDFMT"(Z))\n", worldX, worldY, worldZ);
+        printf("Delt:\t"COORDFMT"(dx)\t"COORDFMT"(dy)\t"COORDFMT"(dz)\n",  Xv, Yv, Zv);
 
         /* Roll and pitch estimation */
         double gyroXrate = grvX;
