@@ -45,7 +45,7 @@
 static const char *TAG = "HID_DEV_DEMO";
 
 //QueueHandle_t xQueueTrans;
-extern POSE_t pose;
+volatile extern POSE_t pose;
 
 void lsm6ds3(void *pvParameters);
 
@@ -90,7 +90,7 @@ void send_mouse(uint8_t buttons, char dx, char dy, char wheel)
     buffer[2] = dy;
     buffer[3] = wheel;
     esp_hidd_dev_input_set(s_ble_hid_param.hid_dev, 0, 0, buffer, 4);
-    vTaskDelay(5 / portTICK_PERIOD_MS);
+    //vTaskDelay(5 / portTICK_PERIOD_MS);
 }
 
 const unsigned char mediaReportMap[] = {
@@ -556,9 +556,9 @@ void ble_hid_demo_task(void *pvParameters)
         void io_poll(void);
         io_poll();
 
-        //memset(&pose, 0, sizeof(pose));
+        //memset(&pose, 0, sizeof(pose));   // NO bad!
 
-        vTaskDelay(1);
+        vTaskDelay(1);  // must deschedule this thread
     }
 }
 #endif

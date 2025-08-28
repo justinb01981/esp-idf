@@ -138,12 +138,12 @@ void lsm6ds3(void *pvParameters){
 
         accX /= dt; accY /= dt; accZ /= dt;
 
-        const double M = sqrt(accX*accX + accY*accY + accZ*accZ);
+        const double M = sqrt(accX*accX + accY*accY + accZ*accZ) / IMU_ROTATE_MULTIPLIER;
 
         // offset and scale by 1/T
-        accX = (accX) / M;
-        accY = (accY) / M;
-        accZ = (accZ) / M;
+        accX = (accX - accXl) / M;
+        accY = (accY - accYl) / M;
+        accZ = (accZ - accZl) / M;
 
         const double orientX = grvX - grvXl;
         const double orientY = grvY - grvYl;
@@ -169,7 +169,7 @@ void lsm6ds3(void *pvParameters){
         pose.aY = Yv; // flip Y?
         pose.aZ = Zv;
 
-        vTaskDelay(10);
+        vTaskDelay(IMU_POLL_INTERVAL_MS);
     }
 
     // Never reach here
