@@ -158,8 +158,8 @@ void lsm6ds3(void *pvParameters){
         worldZ += Zv;
 #define COORDFMT "%0.02f"
 
-        printf("Position:\t"COORDFMT"(X)\t"COORDFMT"(Y)\t"COORDFMT"(Z))\n", worldX, worldY, worldZ);
-        printf("Delt:\t"COORDFMT"(dx)\t"COORDFMT"(dy)\t"COORDFMT"(dz)\n",  Xv, Yv, Zv);
+        //printf("Position:\t"COORDFMT"(X)\t"COORDFMT"(Y)\t"COORDFMT"(Z))\n", worldX, worldY, worldZ);
+        //printf("Delt:\t"COORDFMT"(dx)\t"COORDFMT"(dy)\t"COORDFMT"(dz)\n",  Xv, Yv, Zv);
 
         /* Roll and pitch estimation */
         double gyroXrate = grvX;
@@ -169,7 +169,7 @@ void lsm6ds3(void *pvParameters){
         pose.aY = Yv; // flip Y?
         pose.aZ = Zv;
 
-        vTaskDelay(1);
+        //vTaskDelay(1);
     }
 
     // Never reach here
