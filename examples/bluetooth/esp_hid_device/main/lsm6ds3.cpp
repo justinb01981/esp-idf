@@ -169,7 +169,7 @@ void lsm6ds3(void *pvParameters){
         pose.aY = Yv; // flip Y?
         pose.aZ = Zv;
 
-        //vTaskDelay(1);
+        vTaskDelay(10);
     }
 
     // Never reach here
