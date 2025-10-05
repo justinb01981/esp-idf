@@ -44,8 +44,11 @@
 
 static const char *TAG = "HID_DEV_DEMO";
 
+const double POSE_SCREEN_DIV = 1;
+
 //QueueHandle_t xQueueTrans;
 volatile extern POSE_t pose;
+volatile char imu_paused = 0;
 
 void lsm6ds3(void *pvParameters);
 
@@ -548,17 +551,16 @@ void esp_hidd_send_consumer_value(uint8_t key_cmd, bool key_pressed)
 void ble_hid_demo_task(void *pvParameters)
 {
     while (1) {
-//        ESP_LOGI(TAG, "ble_hid_demo_task: move mouse ");
+        ESP_LOGI(TAG, "ble_hid_demo_task: move mouse ");
 
         // using Z,Y axes for screen xy
-        send_mouse(0, pose.aZ, pose.aY, 0);
+        send_mouse(0, pose.aZ / POSE_SCREEN_DIV, pose.aY / POSE_SCREEN_DIV, 0);
 
         void io_poll(void);
         io_poll();
 
-        //memset(&pose, 0, sizeof(pose));   // NO bad!
-
-        vTaskDelay(1);  // must deschedule this thread
+        vTaskDelay(1);  // must deschedule this thread but return asap
+        // reminder: do not zero pose after send
     }
 }
 #endif
@@ -824,20 +826,28 @@ void io_init(void)
  //   onPin(PIN_RIGHTMOUSE, rightClick);
     gpio_set_direction(PIN_LEFTMOUSE, GPIO_MODE_INPUT);
     gpio_set_direction(PIN_RIGHTMOUSE, GPIO_MODE_INPUT);
+    gpio_set_direction(PIN_RESET, GPIO_MODE_INPUT);
 }
+
+extern void resetIMUBasis(void);
 
 void io_poll(void)
 {
-    static long pv_l = 0, pv_r = 0;
+    static long pv_l = 0, pv_r = 0, rst_l = 0;
 
     long lev_l = gpio_get_level(PIN_LEFTMOUSE);
     long lev_r = gpio_get_level(PIN_RIGHTMOUSE);
+    //long rst_imu = gpio_get_level(PIN_RESET);
+
+    imu_paused = gpio_get_level(PIN_RESET);
 
     if(lev_l != pv_l) { leftClick(); }
     if(lev_r != pv_r) { rightClick(); }
+//    if(rst_l != rst_imu) { resetIMUBasis(); }
 
     pv_l = lev_l;
     pv_r = lev_r;
+//    rst_l = rst_imu;
 }
 
 void app_main(void)

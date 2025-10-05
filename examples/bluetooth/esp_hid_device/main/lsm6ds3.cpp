@@ -37,10 +37,30 @@ LSM6DS3 imu(CONFIG_I2C_ADDR);
 #define micros() (unsigned long) (esp_timer_get_time())
 #define delay(ms) esp_rom_delay_us(ms*1000)
 
+// globals, statics
 Kalman kalmanX; // Create the Kalman instances
 Kalman kalmanY;
 
 POSE_t pose; // exposed via .h
+extern volatile char imu_paused;
+
+double accXl = 0, accYl = 0, accZl = 0; // initial gravity vector
+double grvXl = 0, grvYl = 0, grvZl = 0;
+
+double worldX = 0, worldY = 0, worldZ = 0;  // accumulated world position
+
+bool initialized = false;
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+void resetIMUBasis(void)
+{
+    accXl = accYl = accZl = 0; // initial gravity vector
+    grvXl =  grvYl = grvZl = 0;
+    initialized = false;
+}
 
 void _getMotion6(double *_ax, double *_ay, double *_az, double *_gx, double *_gy, double *_gz) {
 	float ax=0.0, ay=0.0, az=0.0;
@@ -84,9 +104,6 @@ void getRollPitch(double accX, double accY, double accZ, double *roll, double *p
 #endif
 }
 
-extern "C" {
-
-extern void send_mouse(uint8_t buttons, char dx, char dy, char wheel);
 
 void lsm6ds3(void *pvParameters){
 
@@ -95,10 +112,6 @@ void lsm6ds3(void *pvParameters){
         ESP_LOGE(TAG, "Connection fail");
         vTaskDelete(NULL);
     }
-
-    double accXl = 0, accYl = 0, accZl = 0; // initial gravity vector
-    double grvXl = 0, grvYl = 0, grvZl = 0;
-    double worldX = 0, worldY = 0, worldZ = 0;  // accumulated world position
 
     double accX, accY, accZ;
     double grvX, grvY, grvZ;
@@ -112,13 +125,11 @@ void lsm6ds3(void *pvParameters){
 
     uint32_t timer = micros();
 
-    bool initialized = false;
+    initialized = false;
 
     while(1) {
 
         _getMotion6(&accX, &accY, &accZ, &grvX, &grvY, &grvZ);
-
-//      double mX = (accX-accXl)*MOUSE_SCALE, mY = (accY-accYl)*MOUSE_SCALE;
 
         getRollPitch(accX, accY, accZ, &roll, &pitch);
 
@@ -141,9 +152,9 @@ void lsm6ds3(void *pvParameters){
         const double M = sqrt(accX*accX + accY*accY + accZ*accZ) / IMU_ROTATE_MULTIPLIER;
 
         // offset and scale by 1/T
-        accX = (accX - accXl) / M;
-        accY = (accY - accYl) / M;
-        accZ = (accZ - accZl) / M;
+        accX = (accX - 0) / M;
+        accY = (accY - 0) / M;
+        accZ = (accZ - 0) / M;
 
         const double orientX = grvX - grvXl;
         const double orientY = grvY - grvYl;
@@ -165,9 +176,14 @@ void lsm6ds3(void *pvParameters){
         double gyroXrate = grvX;
         double gyroYrate = grvY;
 
-        pose.aX = Xv;
-        pose.aY = Yv; // flip Y?
-        pose.aZ = Zv;
+        if(!imu_paused) {
+            pose.aX = Xv;
+            pose.aY = Yv; // flip Y?
+            pose.aZ = Zv;
+        }
+        else {
+            pose.aX = pose.aY = pose.aZ = 0;
+        }
 
         vTaskDelay(IMU_POLL_INTERVAL_MS);
     }
@@ -176,4 +192,6 @@ void lsm6ds3(void *pvParameters){
     vTaskDelete(NULL);
 }
 
+#ifdef __cplusplus
 }
+#endif
