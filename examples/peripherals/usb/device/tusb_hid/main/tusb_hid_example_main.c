@@ -12,6 +12,7 @@
 #include "class/hid/hid_device.h"
 #include "driver/gpio.h"
 
+#define INTERVAL_MS 30000 
 #define APP_BUTTON (GPIO_NUM_0) // Use BOOT signal by default
 static const char *TAG = "example";
 
@@ -133,21 +134,35 @@ static void mouse_draw_square_next_delta(int8_t *delta_x_ret, int8_t *delta_y_re
 static void app_send_hid_demo(void)
 {
     // Keyboard output: Send key 'a/A' pressed and released
+    /*
     ESP_LOGI(TAG, "Sending Keyboard report");
     uint8_t keycode[6] = {HID_KEY_A};
     tud_hid_keyboard_report(HID_ITF_PROTOCOL_KEYBOARD, 0, keycode);
     vTaskDelay(pdMS_TO_TICKS(50));
     tud_hid_keyboard_report(HID_ITF_PROTOCOL_KEYBOARD, 0, NULL);
+    */
 
     // Mouse output: Move mouse cursor in square trajectory
     ESP_LOGI(TAG, "Sending Mouse report");
-    int8_t delta_x;
-    int8_t delta_y;
+    static int8_t delta_x = -10;
+    static int8_t delta_y = -10;
+    /*
     for (int i = 0; i < (DISTANCE_MAX / DELTA_SCALAR) * 4; i++) {
         // Get the next x and y delta in the draw square pattern
         mouse_draw_square_next_delta(&delta_x, &delta_y);
         tud_hid_mouse_report(HID_ITF_PROTOCOL_MOUSE, 0x00, delta_x, delta_y, 0, 0);
         vTaskDelay(pdMS_TO_TICKS(20));
+    }
+    */
+
+    int bounce = 2;
+    while(bounce > 0) {
+        ESP_LOGI(TAG, "bouncing mouse...");
+        tud_hid_mouse_report(HID_ITF_PROTOCOL_MOUSE, 0x00, delta_x, delta_y, 0, 0);
+        delta_x = -1 * delta_x;
+        delta_y = -1 * delta_y;
+        vTaskDelay(pdMS_TO_TICKS(50));
+        bounce--;
     }
 }
 
@@ -183,12 +198,12 @@ void app_main(void)
 
     while (1) {
         if (tud_mounted()) {
-            static bool send_hid_data = true;
-            if (send_hid_data) {
+            //static bool send_hid_data = true;
+            //if (send_hid_data) {
                 app_send_hid_demo();
-            }
-            send_hid_data = !gpio_get_level(APP_BUTTON);
+            //}
+            //send_hid_data = !gpio_get_level(APP_BUTTON);
         }
-        vTaskDelay(pdMS_TO_TICKS(100));
+        vTaskDelay(pdMS_TO_TICKS(INTERVAL_MS));
     }
 }
