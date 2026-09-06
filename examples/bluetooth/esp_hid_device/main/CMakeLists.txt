@@ -9,4 +9,4 @@ set(EXTRA_COMPONENT_DIRS ../components/)
 idf_component_register(SRCS "${srcs}"
                        INCLUDE_DIRS "${include_dirs}"
                        REQUIRES esp_hid
-                       PRIV_REQUIRES nvs_flash driver I2Cdev LSM6DS3)
+                       PRIV_REQUIRES nvs_flash driver I2Cdev LSM6DS3 esp_adc)

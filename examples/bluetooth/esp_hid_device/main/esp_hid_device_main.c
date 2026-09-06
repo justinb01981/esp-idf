@@ -39,7 +39,7 @@
 
 #include "esp_hidd.h"
 #include "esp_hid_gap.h"
-
+#include "analjoy.h"
 #include "parameter.h"
 
 static const char *TAG = "HID_DEV_DEMO";
@@ -57,6 +57,7 @@ void lsm6ds3(void *pvParameters);
 
 void start_i2c(void) {
 
+#if CONFIG_READ_IMU
     i2c_config_t conf;
     conf.mode = I2C_MODE_MASTER;
     conf.sda_io_num = (gpio_num_t)CONFIG_GPIO_SDA;
@@ -67,6 +68,7 @@ void start_i2c(void) {
     conf.clk_flags = 0;
     ESP_ERROR_CHECK(i2c_param_config(I2C_NUM_0, &conf));
     ESP_ERROR_CHECK(i2c_driver_install(I2C_NUM_0, I2C_MODE_MASTER, 0, 0, 0));
+#endif
 }
 
 typedef struct
@@ -548,7 +550,7 @@ void esp_hidd_send_consumer_value(uint8_t key_cmd, bool key_pressed)
 }
 
 #if !CONFIG_BT_NIMBLE_ENABLED || CONFIG_EXAMPLE_HID_DEVICE_ROLE == 1
-void ble_hid_demo_task(void *pvParameters)
+void taskPerformIO(void *pvParameters)
 {
     while (1) {
         ESP_LOGI(TAG, "ble_hid_demo_task: move mouse ");
@@ -559,7 +561,7 @@ void ble_hid_demo_task(void *pvParameters)
         void io_poll(void);
         io_poll();
 
-        vTaskDelay(1);  // must deschedule this thread but return asap
+        vTaskDelay(1000 / portTICK_PERIOD_MS);  // must deschedule this thread but return asap
         // reminder: do not zero pose after send
     }
 }
@@ -582,10 +584,10 @@ void ble_hid_task_start_up(void)
 
 #if !CONFIG_BT_NIMBLE_ENABLED
     /* Executed for bluedroid */
-    xTaskCreate(ble_hid_demo_task, "ble_hid_demo_task", 4 * 1024, NULL, configMAX_PRIORITIES - 3,
+    xTaskCreate(taskPerformIO, "ble_hid_demo_task", 4 * 1024, NULL, configMAX_PRIORITIES - 3,
                 &s_ble_hid_param.task_hdl);
 #elif CONFIG_EXAMPLE_HID_DEVICE_ROLE == 1
-    xTaskCreate(ble_hid_demo_task, "ble_hid_demo_task", 4 * 1024, NULL, configMAX_PRIORITIES - 3,
+    xTaskCreate(taskPerformIO, "ble_hid_demo_task", 4 * 1024, NULL, configMAX_PRIORITIES - 3,
                 &s_ble_hid_param.task_hdl);
 
 #elif CONFIG_EXAMPLE_HID_DEVICE_ROLE == 2
@@ -822,11 +824,13 @@ void rightClick(void) {
 
 void io_init(void)
 {
- //   onPin(PIN_LEFTMOUSE, leftClick);
- //   onPin(PIN_RIGHTMOUSE, rightClick);
     gpio_set_direction(PIN_LEFTMOUSE, GPIO_MODE_INPUT);
     gpio_set_direction(PIN_RIGHTMOUSE, GPIO_MODE_INPUT);
     gpio_set_direction(PIN_RESET, GPIO_MODE_INPUT);
+
+    #if CONFIG_READ_ANALJOY
+    init_anal_joy();
+    #endif
 }
 
 extern void resetIMUBasis(void);
@@ -848,6 +852,11 @@ void io_poll(void)
     pv_l = lev_l;
     pv_r = lev_r;
 //    rst_l = rst_imu;
+#if CONFIG_READ_ANALJOY
+    unsigned int aX = read_anal(JOY_X_AXIS);
+    unsigned int aY = read_anal(JOY_Y_AXIS);
+#endif
+
 }
 
 void app_main(void)
@@ -874,8 +883,10 @@ void app_main(void)
     ret = esp_hid_gap_init(HID_DEV_MODE);
     ESP_ERROR_CHECK( ret );
 
+#if CONFIG_READ_IMU
     // Start imu task
     xTaskCreate(&lsm6ds3, "IMU", 1024*4, NULL, 5, NULL);
+#endif
 
 #if CONFIG_BT_BLE_ENABLED || CONFIG_BT_NIMBLE_ENABLED
 #if CONFIG_EXAMPLE_HID_DEVICE_ROLE == 2

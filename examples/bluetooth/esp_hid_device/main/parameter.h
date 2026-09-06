@@ -1,6 +1,26 @@
 
+// #define CONFIG_READ_IMU 1
+// #define CONFIG_READ_TRACKBALL
+
+/* if no imu configure analog joystick */
+#if !CONFIG_READ_IMU
+
+#if !CONFIG_READ_TRACKBALL
+#define CONFIG_READ_ANALJOY 1
+
+#else
+/* trackball */
+
+#endif
+
+#endif
+
 #define CONFIG_GPIO_SDA 17
 #define CONFIG_GPIO_SCL 18
+#define CONFIG_GPIO_TRACKBALLX 21
+#define CONFIG_GPIO_TRACKBALLY 22
+#define CONFIG_ANAL_X 33
+#define CONFIG_ANAL_Y 34
 #define PIN_LEFTMOUSE 7 /*d4*/
 #define PIN_RIGHTMOUSE 5 /*d2*/
 #define PIN_RESET 9
